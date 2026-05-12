@@ -16,13 +16,17 @@ import (
 
 func generateBoundary() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
 	return fmt.Sprintf("===============%x==", b)
 }
 
 func generateMessageID(from string) string {
 	b := make([]byte, 8)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
 	domain := "localhost"
 	if addr, err := mail.ParseAddress(from); err == nil && strings.Contains(addr.Address, "@") {
 		domain = strings.Split(addr.Address, "@")[1]
@@ -45,7 +49,7 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from string) strin
 
 	b.WriteString(fmt.Sprintf("From: LFX One <%s>\r\n", sanitizeHeaderValue(from)))
 	b.WriteString(fmt.Sprintf("To: %s\r\n", sanitizeHeaderValue(to)))
-	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject)))
+	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(subject))))
 	b.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
 	b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
 	b.WriteString("MIME-Version: 1.0\r\n")

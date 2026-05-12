@@ -6,8 +6,6 @@
 
 FROM cgr.dev/chainguard/go:latest AS builder
 
-EXPOSE 8080
-
 ARG TARGETARCH
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH
 
@@ -21,6 +19,8 @@ COPY . .
 RUN go build -o /go/bin/email-service -trimpath -ldflags="-w -s" github.com/linuxfoundation/lfx-v2-email-service/cmd/email-service
 
 FROM cgr.dev/chainguard/static:latest
+
+EXPOSE 8080
 
 USER nonroot
 

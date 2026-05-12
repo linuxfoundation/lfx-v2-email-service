@@ -40,7 +40,7 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	var req api.SendEmailRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		slog.WarnContext(ctx, "failed to unmarshal send email request", logging.ErrKey, err)
-		replyError(respond, "invalid request payload")
+		replyError(ctx, respond, "invalid request payload")
 		return
 	}
 
@@ -49,7 +49,7 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 			"has_to", req.To != "",
 			"has_subject", req.Subject != "",
 		)
-		replyError(respond, "to and subject are required")
+		replyError(ctx, respond, "to and subject are required")
 		return
 	}
 
@@ -58,14 +58,18 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 
 	if err := h.sender.Send(ctx, req); err != nil {
 		slog.ErrorContext(ctx, "email send failed", logging.ErrKey, err)
-		replyError(respond, "email delivery failed")
+		replyError(ctx, respond, "email delivery failed")
 		return
 	}
 
-	_ = respond(nil)
+	if err := respond(nil); err != nil {
+		slog.WarnContext(ctx, "failed to respond to NATS request", logging.ErrKey, err)
+	}
 }
 
-func replyError(respond func([]byte) error, reason string) {
+func replyError(ctx context.Context, respond func([]byte) error, reason string) {
 	body, _ := json.Marshal(api.SendEmailErrorResponse{Error: reason})
-	_ = respond(body)
+	if err := respond(body); err != nil {
+		slog.WarnContext(ctx, "failed to respond with error to NATS request", logging.ErrKey, err)
+	}
 }

@@ -44,8 +44,8 @@ func AppendCtx(parent context.Context, attr slog.Attr) context.Context {
 	return context.WithValue(parent, slogFields, []slog.Attr{attr})
 }
 
-// InitStructureLogConfig configures the global slog logger from environment variables.
-func InitStructureLogConfig() {
+// InitStructuredLogConfig configures the global slog logger from environment variables.
+func InitStructuredLogConfig() {
 	opts := &slog.HandlerOptions{}
 	switch os.Getenv("LOG_LEVEL") {
 	case "debug":

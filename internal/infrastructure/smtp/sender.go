@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
 )
 
@@ -43,7 +42,6 @@ func (s *SMTPSender) Send(ctx context.Context, req api.SendEmailRequest) error {
 
 	msg := buildEmailMessage(req.To, req.Subject, req.HTML, req.Text, s.cfg.From)
 	if err := sendMessage(sendCtx, req.To, msg, s.cfg); err != nil {
-		slog.ErrorContext(ctx, "failed to send email", logging.ErrKey, err)
 		return fmt.Errorf("smtp send: %w", err)
 	}
 

@@ -27,7 +27,7 @@ const gracefulShutdownSeconds = 25
 
 func main() {
 	env := parseEnv()
-	logging.InitStructureLogConfig()
+	logging.InitStructuredLogConfig()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -98,6 +98,11 @@ func main() {
 }
 
 func setupNATS(ctx context.Context, natsURL string, handler *service.SendEmailHandler, wg *sync.WaitGroup, done chan os.Signal) (*natsgo.Conn, error) {
+	// msgCtx is a separate context for in-flight message handling. It is not
+	// cancelled until the NATS connection closes (after drain), so messages
+	// that arrive during the drain window are still processed fully.
+	msgCtx, msgCancel := context.WithCancel(context.Background())
+
 	nc, err := natsgo.Connect(
 		natsURL,
 		natsgo.DrainTimeout(gracefulShutdownSeconds*time.Second),
@@ -112,6 +117,7 @@ func setupNATS(ctx context.Context, natsURL string, handler *service.SendEmailHa
 			}
 		}),
 		natsgo.ClosedHandler(func(_ *natsgo.Conn) {
+			msgCancel()
 			if ctx.Err() == nil {
 				slog.Error("NATS connection closed unexpectedly")
 				select {
@@ -123,11 +129,12 @@ func setupNATS(ctx context.Context, natsURL string, handler *service.SendEmailHa
 		}),
 	)
 	if err != nil {
+		msgCancel()
 		return nil, fmt.Errorf("nats connect: %w", err)
 	}
 
 	_, err = nc.QueueSubscribe(api.SendEmailSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-		handler.Handle(ctx, msg)
+		handler.Handle(msgCtx, msg)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("nats subscribe: %w", err)
