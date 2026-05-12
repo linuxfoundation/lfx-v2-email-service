@@ -112,12 +112,14 @@ func setupNATS(ctx context.Context, natsURL string, handler *service.SendEmailHa
 			}
 		}),
 		natsgo.ClosedHandler(func(_ *natsgo.Conn) {
-			if ctx.Err() != nil {
-				wg.Done()
-				return
+			if ctx.Err() == nil {
+				slog.Error("NATS connection closed unexpectedly")
+				select {
+				case done <- syscall.SIGTERM:
+				default:
+				}
 			}
-			slog.Error("NATS connection closed unexpectedly")
-			done <- syscall.SIGTERM
+			wg.Done()
 		}),
 	)
 	if err != nil {

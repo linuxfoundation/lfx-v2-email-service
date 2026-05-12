@@ -7,9 +7,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
-	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
 // NoOpSender logs email requests without delivering them.
@@ -21,8 +19,6 @@ func NewNoOpSender() *NoOpSender { return &NoOpSender{} }
 
 // Send logs the request and returns nil without sending anything.
 func (s *NoOpSender) Send(ctx context.Context, req api.SendEmailRequest) error {
-	ctx = logging.AppendCtx(ctx, slog.String("recipient", redaction.RedactEmail(req.To)))
-	ctx = logging.AppendCtx(ctx, slog.String("subject", req.Subject))
-	slog.InfoContext(ctx, "email send skipped (EMAIL_ENABLED=false)")
+	slog.InfoContext(ctx, "email send skipped (EMAIL_ENABLED=false)", "to", req.To, "subject", req.Subject)
 	return nil
 }

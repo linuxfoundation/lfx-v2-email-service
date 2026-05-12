@@ -54,8 +54,8 @@ make run            # build and run with env vars from shell
 make test           # go test ./...
 make test-coverage  # test with coverage report
 make lint           # golangci-lint run
-make fmt            # gofmt + goimports
-make check          # fmt + lint + test
+make fmt            # go fmt + gofmt -s (no goimports)
+make check          # gofmt check + lint + license-check (does not run tests)
 ```
 
 ### Local dev loop

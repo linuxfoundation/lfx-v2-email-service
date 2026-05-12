@@ -58,7 +58,7 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 
 	if err := h.sender.Send(ctx, req); err != nil {
 		slog.ErrorContext(ctx, "email send failed", logging.ErrKey, err)
-		replyError(respond, err.Error())
+		replyError(respond, "email delivery failed")
 		return
 	}
 

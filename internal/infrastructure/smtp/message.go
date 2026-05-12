@@ -30,14 +30,21 @@ func generateMessageID(from string) string {
 	return fmt.Sprintf("<%x.%d@%s>", b, time.Now().UnixNano(), domain)
 }
 
+// sanitizeHeaderValue strips CR and LF characters to prevent SMTP header injection.
+func sanitizeHeaderValue(v string) string {
+	v = strings.ReplaceAll(v, "\r", "")
+	v = strings.ReplaceAll(v, "\n", "")
+	return v
+}
+
 // buildEmailMessage constructs a multipart/alternative MIME message (HTML + plain text).
 func buildEmailMessage(to, subject, htmlContent, textContent, from string) string {
 	messageID := generateMessageID(from)
 	boundary := generateBoundary()
 	var b strings.Builder
 
-	b.WriteString(fmt.Sprintf("From: LFX One <%s>\r\n", from))
-	b.WriteString(fmt.Sprintf("To: %s\r\n", to))
+	b.WriteString(fmt.Sprintf("From: LFX One <%s>\r\n", sanitizeHeaderValue(from)))
+	b.WriteString(fmt.Sprintf("To: %s\r\n", sanitizeHeaderValue(to)))
 	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject)))
 	b.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
 	b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
