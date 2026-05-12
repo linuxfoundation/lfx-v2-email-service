@@ -4,8 +4,10 @@
 package smtp
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
+	"mime"
 	"net/mail"
 	"net/smtp"
 	"strings"
@@ -36,7 +38,7 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from string) strin
 
 	b.WriteString(fmt.Sprintf("From: LFX One <%s>\r\n", from))
 	b.WriteString(fmt.Sprintf("To: %s\r\n", to))
-	b.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject)))
 	b.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
 	b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
 	b.WriteString("MIME-Version: 1.0\r\n")
@@ -62,7 +64,9 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from string) strin
 }
 
 // sendMessage delivers a pre-built MIME message via SMTP.
-func sendMessage(to, message string, cfg Config) error {
+// It runs the blocking smtp.SendMail call in a goroutine so ctx cancellation
+// (including a caller-supplied deadline) is respected.
+func sendMessage(ctx context.Context, to, message string, cfg Config) error {
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 
 	var auth smtp.Auth
@@ -79,5 +83,16 @@ func sendMessage(to, message string, cfg Config) error {
 		return fmt.Errorf("invalid recipient address: %w", err)
 	}
 
-	return smtp.SendMail(addr, auth, fromAddr.Address, []string{toAddr.Address}, []byte(message))
+	type result struct{ err error }
+	ch := make(chan result, 1)
+	go func() {
+		ch <- result{smtp.SendMail(addr, auth, fromAddr.Address, []string{toAddr.Address}, []byte(message))}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case r := <-ch:
+		return r.err
+	}
 }

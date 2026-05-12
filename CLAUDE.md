@@ -101,6 +101,7 @@ Both are in `pkg/api/nats.go`.
 | `SMTP_USERNAME` | _(empty)_ | From K8s Secret in production |
 | `SMTP_PASSWORD` | _(empty)_ | From K8s Secret in production |
 | `LOG_LEVEL` | `info` | |
+| `LOG_ADD_SOURCE` | `false` | `true` → include file/line in log entries |
 
 ## Testing Patterns
 

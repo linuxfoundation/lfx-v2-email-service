@@ -92,7 +92,9 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 
 			var responded []byte
 			respondedNil := false
+			respondCount := 0
 			respond := func(d []byte) error {
+				respondCount++
 				if d == nil {
 					respondedNil = true
 				} else {
@@ -103,6 +105,7 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 
 			handler.HandleData(context.Background(), data, respond)
 
+			assert.Equal(t, 1, respondCount, "respond must be called exactly once")
 			assert.Equal(t, tc.wantSent, sender.called, "sender.called")
 
 			if tc.wantNilResp {

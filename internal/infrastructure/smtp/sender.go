@@ -8,11 +8,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
+
+const smtpTimeout = 30 * time.Second
 
 // Config holds SMTP connection parameters.
 type Config struct {
@@ -34,12 +37,16 @@ func NewSMTPSender(cfg Config) *SMTPSender {
 }
 
 // Send renders and delivers an email via SMTP.
+// A 30-second deadline is applied to the blocking SMTP call.
 func (s *SMTPSender) Send(ctx context.Context, req api.SendEmailRequest) error {
 	ctx = logging.AppendCtx(ctx, slog.String("recipient", redaction.RedactEmail(req.To)))
 	ctx = logging.AppendCtx(ctx, slog.String("subject", req.Subject))
 
+	sendCtx, cancel := context.WithTimeout(ctx, smtpTimeout)
+	defer cancel()
+
 	msg := buildEmailMessage(req.To, req.Subject, req.HTML, req.Text, s.cfg.From)
-	if err := sendMessage(req.To, msg, s.cfg); err != nil {
+	if err := sendMessage(sendCtx, req.To, msg, s.cfg); err != nil {
 		slog.ErrorContext(ctx, "failed to send email", logging.ErrKey, err)
 		return fmt.Errorf("smtp send: %w", err)
 	}

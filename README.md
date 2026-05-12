@@ -78,6 +78,7 @@ make helm-install-local
 | `SMTP_USERNAME` | _(empty)_ | SMTP credential (from Kubernetes Secret in production) |
 | `SMTP_PASSWORD` | _(empty)_ | SMTP credential (from Kubernetes Secret in production) |
 | `LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
+| `LOG_ADD_SOURCE` | `false` | Set `true` to include source file/line in log entries |
 
 ## File Structure
 
