@@ -1,0 +1,54 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+---
+image:
+  repository: ghcr.io/linuxfoundation/lfx-v2-email-service/email-service
+  tag: ""
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+podAnnotations: {}
+podLabels: {}
+
+podDisruptionBudget:
+  enabled: false
+  # minAvailable: 1
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+service:
+  port: 8080
+
+app:
+  logLevel: info
+  logAddSource: true
+  emailEnabled: true
+  smtpHost: "email-smtp.us-west-2.amazonaws.com"
+  smtpPort: "587"
+  smtpFrom: "noreply@lfx.linuxfoundation.org"
+  # smtpSecretName is the name of the Kubernetes Secret containing SMTP credentials.
+  # The Secret must have keys: smtp-username, smtp-password.
+  # The Secret itself is NOT created by this chart — create it out-of-band.
+  smtpSecretName: "lfx-v2-email-service-smtp"
+  otel:
+    serviceName: ""
+    serviceVersion: ""
+    protocol: "grpc"
+    endpoint: ""
+    insecure: "false"
+    tracesExporter: "none"
+    tracesSampleRatio: "1.0"
+    metricsExporter: "none"
+    logsExporter: "none"
+    propagators: "tracecontext,baggage,jaeger"
+  extraEnv: []
+
+nats:
+  url: nats://lfx-platform-nats.lfx.svc.cluster.local:4222
