@@ -47,9 +47,15 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 		},
 		{
 			name:        "sender error",
-			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello"},
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"},
 			senderErr:   errors.New("smtp down"),
 			wantSent:    true,
+			wantErrResp: true,
+		},
+		{
+			name:        "missing html and text",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello"},
+			wantSent:    false,
 			wantErrResp: true,
 		},
 		{
@@ -73,7 +79,6 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

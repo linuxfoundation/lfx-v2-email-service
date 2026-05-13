@@ -8,7 +8,7 @@ Thin NATS request/reply relay. Receives pre-rendered `{to, subject, html, text}`
 payloads and delivers them via Amazon SES SMTP. No templates, no template registry —
 callers are responsible for rendering their own content.
 
-**Technologies:** Go 1.25, NATS (`nats.go`), `net/smtp`, Kubernetes/Helm
+**Technologies:** Go 1.24, NATS (`nats.go`), `net/smtp`, Kubernetes/Helm
 
 ## Architecture
 
@@ -42,7 +42,7 @@ pkg/redaction/         → email address redaction for logs
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.24+
 - `nats` CLI (`brew install nats-io/nats-tools/nats`)
 - Docker (for local NATS + Mailpit)
 
@@ -106,7 +106,7 @@ Both are in `pkg/api/nats.go`.
 ## Testing Patterns
 
 - **Table-driven tests** in `_test.go` files co-located with source.
-- **`mockSender`** in `internal/service/handler_test.go` — satisfies `domain.Sender`.
+- **`mockSender`** in `internal/service/send_email_handler_test.go` — satisfies `domain.Sender`.
 - **`HandleData`** on `SendEmailHandler` — testable entry point that takes raw bytes
   and a respond callback; `Handle` wraps it for real NATS messages. Use `HandleData`
   in tests instead of embedding a real NATS server.

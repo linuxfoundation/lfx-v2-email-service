@@ -26,8 +26,8 @@ import (
 const gracefulShutdownSeconds = 25
 
 func main() {
-	env := parseEnv()
 	logging.InitStructuredLogConfig()
+	env := parseEnv()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -48,7 +48,7 @@ func main() {
 		slog.Info("email sending disabled (EMAIL_ENABLED=false)")
 	}
 
-	handler := service.NewSendEmailHandler(sender)
+	sendEmailHandler := service.NewSendEmailHandler(sender)
 
 	// Connect to NATS.
 	done := make(chan os.Signal, 1)
@@ -57,14 +57,14 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(2) // HTTP server + NATS drain
 
-	nc, err := setupNATS(ctx, env.NatsURL, handler, &wg, done)
+	nc, err := setupNATS(ctx, env.NatsURL, sendEmailHandler, &wg, done)
 	if err != nil {
 		slog.Error("failed to connect to NATS", logging.ErrKey, err)
 		os.Exit(1)
 	}
 
 	// Start health HTTP server.
-	httpServer := setupHTTPServer(env.Port)
+	httpServer := setupHTTPServer(env.Port, nc)
 	go func() {
 		slog.Info("HTTP health server listening", "port", env.Port)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -144,12 +144,16 @@ func setupNATS(ctx context.Context, natsURL string, handler *service.SendEmailHa
 	return nc, nil
 }
 
-func setupHTTPServer(port string) *http.Server {
+func setupHTTPServer(port string, nc *natsgo.Conn) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if !nc.IsConnected() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	return &http.Server{

@@ -16,7 +16,7 @@ const (
 	QueueGroup = "lfx.email-service.queue"
 )
 
-// SendEmailRequest is the JSON payload published to SendSubject.
+// SendEmailRequest is the JSON payload published to SendEmailSubject.
 // Callers render the HTML and plain-text bodies before publishing.
 type SendEmailRequest struct {
 	To      string `json:"to"`

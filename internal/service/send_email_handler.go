@@ -44,12 +44,14 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		return
 	}
 
-	if req.To == "" || req.Subject == "" {
+	if req.To == "" || req.Subject == "" || req.HTML == "" || req.Text == "" {
 		slog.WarnContext(ctx, "send email request missing required fields",
 			"has_to", req.To != "",
 			"has_subject", req.Subject != "",
+			"has_html", req.HTML != "",
+			"has_text", req.Text != "",
 		)
-		replyError(ctx, respond, "to and subject are required")
+		replyError(ctx, respond, "to, subject, html, and text are required")
 		return
 	}
 

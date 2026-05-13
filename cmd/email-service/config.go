@@ -9,6 +9,13 @@ import (
 	"strconv"
 )
 
+// Version, BuildTime, and GitCommit are injected at build time via -ldflags.
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+	GitCommit = "unknown"
+)
+
 type environment struct {
 	NatsURL      string
 	Port         string
