@@ -86,7 +86,7 @@ nats req lfx.email-service.send_email \
 |---|---|---|
 | `NATS_URL` | `nats://localhost:4222` | NATS server URL |
 | `PORT` | `8080` | HTTP health probe port |
-| `EMAIL_ENABLED` | `true` | Set `false` to log instead of sending (NoOpSender) |
+| `EMAIL_ENABLED` | `false` | Set `true` to enable SMTP delivery; unset/empty uses NoOpSender |
 | `SMTP_HOST` | `localhost` | SMTP server hostname |
 | `SMTP_PORT` | `587` | SMTP server port (STARTTLS) |
 | `SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | Envelope From address |
@@ -113,7 +113,7 @@ lfx-v2-email-service/
 │   ├── logging/
 │   │   └── logging.go   # Structured log helpers
 │   └── service/
-│       └── handler.go   # NATS message handler
+│       └── send_email_handler.go   # NATS message handler
 ├── pkg/
 │   ├── api/
 │   │   └── nats.go      # Public NATS subject + request/response types (import this)

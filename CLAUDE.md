@@ -30,8 +30,8 @@ pkg/redaction/         → email address redaction for logs
 - **pkg/api is the public contract.** Any service that wants to send email imports
   `github.com/linuxfoundation/lfx-v2-email-service/pkg/api` for the subject constant
   and `SendEmailRequest` type. Never expose `internal/` packages to callers.
-- **NoOpSender for local dev.** Set `EMAIL_ENABLED=false` to log requests instead of
-  sending. No mock SMTP needed.
+- **NoOpSender for local dev.** `EMAIL_ENABLED` defaults to `false` (NoOpSender logs
+  instead of sending). Set `EMAIL_ENABLED=true` to enable real SMTP delivery.
 - **Queue group for horizontal scaling.** The subscription uses queue group
   `lfx.email-service.queue` so each message is delivered to exactly one pod.
 - **Handle always responds.** The NATS handler calls `msg.Respond` on every path
@@ -94,7 +94,7 @@ Both are in `pkg/api/nats.go`.
 |---|---|---|
 | `NATS_URL` | `nats://localhost:4222` | |
 | `PORT` | `8080` | HTTP health probe port |
-| `EMAIL_ENABLED` | `true` | `false` → NoOpSender |
+| `EMAIL_ENABLED` | `false` | `true`/`t`/`1` → SMTPSender; anything else → NoOpSender |
 | `SMTP_HOST` | `localhost` | |
 | `SMTP_PORT` | `587` | STARTTLS |
 | `SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | |

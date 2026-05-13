@@ -62,7 +62,6 @@ test-coverage:
 .PHONY: clean
 clean:
 	@rm -rf bin/ coverage/
-	@go clean -cache
 
 .PHONY: lint
 lint:
