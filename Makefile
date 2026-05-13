@@ -27,6 +27,11 @@ HELM_LOCAL_VALUES_FILE=values.local.yaml
 .PHONY: all
 all: clean fmt lint test build
 
+.PHONY: deps
+deps:
+	@echo "==> Downloading dependencies..."
+	@go mod download
+
 .PHONY: build
 build: clean
 	@echo "==> Building $(BINARY_NAME)..."
