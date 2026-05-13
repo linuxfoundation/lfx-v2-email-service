@@ -40,22 +40,22 @@ spec:
             - name: LOG_ADD_SOURCE
               value: {{ .Values.app.logAddSource | quote }}
             - name: EMAIL_ENABLED
-              value: {{ .Values.app.emailEnabled | quote }}
+              value: {{ .Values.app.email.enabled | quote }}
             - name: SMTP_HOST
-              value: {{ .Values.app.smtpHost | quote }}
+              value: {{ .Values.app.email.smtpHost | quote }}
             - name: SMTP_PORT
-              value: {{ .Values.app.smtpPort | quote }}
+              value: {{ .Values.app.email.smtpPort | quote }}
             - name: SMTP_FROM
-              value: {{ .Values.app.smtpFrom | quote }}
+              value: {{ .Values.app.email.smtpFrom | quote }}
             - name: SMTP_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.app.smtpSecretName }}
+                  name: {{ .Values.app.email.smtpSecretName }}
                   key: smtp-username
             - name: SMTP_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.app.smtpSecretName }}
+                  name: {{ .Values.app.email.smtpSecretName }}
                   key: smtp-password
             {{- with .Values.app.extraEnv }}
             {{- toYaml . | nindent 12 }}
