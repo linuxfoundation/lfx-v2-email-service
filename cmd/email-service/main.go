@@ -31,7 +31,6 @@ func main() {
 	env := parseEnv()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Build the email sender.
 	var sender domain.Sender
