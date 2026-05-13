@@ -1,6 +1,15 @@
 # Copyright The Linux Foundation and each contributor to LFX.
 # SPDX-License-Identifier: MIT
 ---
+# Local development values override file.
+# Copy this file to values.local.yaml and customize as needed.
+# values.local.yaml is gitignored so your local settings won't be committed.
+#
+# Usage:
+#   cp charts/lfx-v2-email-service/values.local.example.yaml \
+#      charts/lfx-v2-email-service/values.local.yaml
+#   make docker-build && make helm-install-local
+
 # image is the configuration for the container image
 image:
   # repository is the container image repository
@@ -60,16 +69,16 @@ app:
     # Set to false to use the no-op sender (logs only, no SMTP connection).
     enabled: true
     # smtpHost is the SMTP server hostname
-    smtpHost: "email-smtp.us-west-2.amazonaws.com"
+    smtpHost: "lfx-platform-mailpit-smtp.lfx.svc.cluster.local"
     # smtpPort is the SMTP server port (STARTTLS)
-    smtpPort: "587"
+    smtpPort: "25"
     # smtpFrom is the envelope sender address for all outbound mail
     smtpFrom: "noreply@lfx.linuxfoundation.org"
     # smtpSecretName is the name of the Kubernetes Secret containing SMTP credentials.
     # The Secret must have keys: smtp-username, smtp-password.
     # When externalSecretsOperator.enabled=true the ESO creates this secret automatically
     # as {{ .Chart.Name }}. Override only if managing the secret out-of-band.
-    smtpSecretName: "lfx-v2-email-service"
+    smtpSecretName: ""
 
   # extraEnv allows injecting additional environment variables into the container.
   # Supports both simple key-value pairs and Kubernetes field references.
