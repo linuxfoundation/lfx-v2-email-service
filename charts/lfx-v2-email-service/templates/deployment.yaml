@@ -47,16 +47,20 @@ spec:
               value: {{ .Values.app.email.smtpPort | quote }}
             - name: SMTP_FROM
               value: {{ .Values.app.email.smtpFrom | quote }}
+            {{- if .Values.app.email.smtpSecretName }}
             - name: SMTP_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.app.email.smtpSecretName }}
                   key: smtp-username
+                  optional: true
             - name: SMTP_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.app.email.smtpSecretName }}
                   key: smtp-password
+                  optional: true
+            {{- end }}
             {{- with .Values.app.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -67,6 +67,9 @@ app:
     smtpFrom: "noreply@lfx.linuxfoundation.org"
     # smtpSecretName is the name of the Kubernetes Secret containing SMTP credentials.
     # The Secret must have keys: smtp-username, smtp-password.
+    # Set to "" to skip injecting SMTP_USERNAME/SMTP_PASSWORD entirely — suitable for
+    # local development when no SMTP credentials are needed. Required for any real
+    # deployment that sends email.
     # When externalSecretsOperator.enabled=true the ESO creates this secret automatically
     # as {{ .Chart.Name }}. Override only if managing the secret out-of-band.
     smtpSecretName: "lfx-v2-email-service"
