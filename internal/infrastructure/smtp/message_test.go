@@ -64,7 +64,9 @@ func TestBuildEmailMessage_BoundaryPresent(t *testing.T) {
 	idx := strings.Index(contentTypeLine, `boundary="`)
 	require.NotEqual(t, -1, idx)
 	rest := contentTypeLine[idx+len(`boundary="`):]
-	boundary := rest[:strings.Index(rest, `"`)]
+	endIdx := strings.Index(rest, `"`)
+	require.NotEqual(t, -1, endIdx)
+	boundary := rest[:endIdx]
 	require.NotEmpty(t, boundary)
 
 	assert.Contains(t, msg, "--"+boundary+"\r\n", "part separator not found")

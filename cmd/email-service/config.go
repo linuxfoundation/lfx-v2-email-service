@@ -42,10 +42,8 @@ func parseEnv() environment {
 		port = "8080"
 	}
 
-	emailEnabled := true
-	if os.Getenv("EMAIL_ENABLED") == "false" {
-		emailEnabled = false
-	}
+	emailEnabledVal := os.Getenv("EMAIL_ENABLED")
+	emailEnabled := emailEnabledVal == "true" || emailEnabledVal == "t" || emailEnabledVal == "1"
 
 	smtpHost := os.Getenv("SMTP_HOST")
 	if smtpHost == "" {

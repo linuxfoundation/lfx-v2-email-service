@@ -1,0 +1,34 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+---
+GITHUB_COMMENT_REPORTER: false
+DISABLE_LINTERS:
+  # We are setting KUBERNETES_DIRECTORY to the helm chart so the
+  # KUBERNETES_HELM linter can find the chart, but then this linter expects to
+  # find raw Kubernetes manifests in this directory, which isn't the case.
+  - KUBERNETES_KUBECONFORM
+  # TBD how to use this from Megalinter with our setup.
+  - KUBERNETES_KUBESCAPE
+  # Repository-wide link checking returns mostly false positives (like internal
+  # service URLs in templates and nats:// scheme which lychee doesn't support).
+  - SPELL_LYCHEE
+  - SPELL_CSPELL
+  # yamllint is sufficient for us.
+  - YAML_PRETTIER
+  # golangci-lint covers all Go linting; revive runs standalone and adds noise
+  # for internal packages (package-comments, stutter).
+  - GO_REVIVE
+DISABLE_ERRORS_LINTERS:
+  # This may be informative but doesn't need to break the build.
+  - COPYPASTE_JSCPD
+  # TBD! Need to work through these.
+  - REPOSITORY_TRIVY
+  - REPOSITORY_CHECKOV
+  - REPOSITORY_DEVSKIM
+YAML_YAMLLINT_CONFIG_FILE: .yamllint
+SPELL_CSPELL_ANALYZE_FILE_NAMES: false
+# Ignore YAML files with templating macros; these typically fail linting and/or
+# schema checking.
+FILTER_REGEX_EXCLUDE: '(templates/.*\.yml|templates/.*\.yaml)'
+KUBERNETES_DIRECTORY: charts/lfx-v2-email-service/templates
+KUBERNETES_HELM_ARGUMENTS: charts/lfx-v2-email-service

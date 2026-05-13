@@ -61,6 +61,7 @@ func main() {
 	nc, err := setupNATS(ctx, env.NatsURL, sendEmailHandler, &wg, done)
 	if err != nil {
 		slog.Error("failed to connect to NATS", logging.ErrKey, err)
+		cancel()
 		os.Exit(1)
 	}
 
