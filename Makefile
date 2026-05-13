@@ -16,7 +16,7 @@ LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X 
 TEST_FLAGS=-race
 TEST_TIMEOUT=5m
 
-DOCKER_IMAGE=linuxfoundation/lfx-v2-email-service
+DOCKER_IMAGE=ghcr.io/linuxfoundation/lfx-v2-email-service/email-service
 DOCKER_TAG=latest
 
 HELM_CHART_PATH=./charts/lfx-v2-email-service
