@@ -35,8 +35,9 @@ app:
   smtpFrom: "noreply@lfx.linuxfoundation.org"
   # smtpSecretName is the name of the Kubernetes Secret containing SMTP credentials.
   # The Secret must have keys: smtp-username, smtp-password.
-  # The Secret itself is NOT created by this chart — create it out-of-band.
-  smtpSecretName: "lfx-v2-email-service-smtp"
+  # When externalSecretsOperator.enabled=true the ESO creates this secret automatically
+  # as {{ .Chart.Name }}. Override only if managing the secret out-of-band.
+  smtpSecretName: "lfx-v2-email-service"
   otel:
     serviceName: ""
     serviceVersion: ""
@@ -52,3 +53,25 @@ app:
 
 nats:
   url: nats://lfx-platform-nats.lfx.svc.cluster.local:4222
+
+serviceAccount:
+  create: true
+  name: "lfx-v2-email-service"
+  annotations: {}
+
+global:
+  awsRegion: ""
+
+externalSecretsOperator:
+  enabled: false
+  externalSecret:
+    refreshInterval: "10m"
+    data:
+      - secretKey: smtp-username
+        remoteRef:
+          key: /cloudops/ses-managed/email-service
+          property: smtp_username
+      - secretKey: smtp-password
+        remoteRef:
+          key: /cloudops/ses-managed/email-service
+          property: smtp_password
