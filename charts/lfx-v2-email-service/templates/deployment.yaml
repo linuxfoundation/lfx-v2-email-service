@@ -1,0 +1,119 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        app: {{ .Chart.Name }}
+        app.kubernetes.io/name: {{ .Chart.Name }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      containers:
+        - name: app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: NATS_URL
+              value: {{ .Values.nats.url }}
+            - name: LOG_LEVEL
+              value: {{ .Values.app.logLevel }}
+            - name: LOG_ADD_SOURCE
+              value: {{ .Values.app.logAddSource | quote }}
+            - name: EMAIL_ENABLED
+              value: {{ .Values.app.email.enabled | quote }}
+            - name: SMTP_HOST
+              value: {{ .Values.app.email.smtpHost | quote }}
+            - name: SMTP_PORT
+              value: {{ .Values.app.email.smtpPort | quote }}
+            - name: SMTP_FROM
+              value: {{ .Values.app.email.smtpFrom | quote }}
+            {{- if .Values.app.email.smtpSecretName }}
+            - name: SMTP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.email.smtpSecretName }}
+                  key: smtp-username
+                  optional: true
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.email.smtpSecretName }}
+                  key: smtp-password
+                  optional: true
+            {{- end }}
+            {{- with .Values.app.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- $otelServiceName := .Values.app.otel.serviceName | toString | trim }}
+            {{- if ne $otelServiceName "" }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ $otelServiceName | quote }}
+            {{- end }}
+            {{- $otelEndpoint := .Values.app.otel.endpoint | toString | trim }}
+            {{- if ne $otelEndpoint "" }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ $otelEndpoint | quote }}
+            {{- end }}
+            {{- $otelProtocol := .Values.app.otel.protocol | toString | trim }}
+            {{- if ne $otelProtocol "" }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ $otelProtocol | quote }}
+            {{- end }}
+            {{- $otelInsecure := .Values.app.otel.insecure | toString | trim }}
+            {{- if ne $otelInsecure "" }}
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: {{ $otelInsecure | quote }}
+            {{- end }}
+            {{- $otelTracesExporter := .Values.app.otel.tracesExporter | toString | trim }}
+            {{- if ne $otelTracesExporter "" }}
+            - name: OTEL_TRACES_EXPORTER
+              value: {{ $otelTracesExporter | quote }}
+            {{- end }}
+            {{- $otelPropagators := .Values.app.otel.propagators | toString | trim }}
+            {{- if ne $otelPropagators "" }}
+            - name: OTEL_PROPAGATORS
+              value: {{ $otelPropagators | quote }}
+            {{- end }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              name: web
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: web
+            failureThreshold: 3
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: web
+            failureThreshold: 1
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: web
+            failureThreshold: 30
+            periodSeconds: 1

@@ -1,0 +1,50 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
+// Package smtp implements email delivery via SMTP (Amazon SES or compatible).
+package smtp
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
+)
+
+const smtpTimeout = 30 * time.Second
+
+// Config holds SMTP connection parameters.
+type Config struct {
+	Host     string
+	Port     int
+	From     string
+	Username string
+	Password string
+}
+
+// SMTPSender sends emails via SMTP.
+type SMTPSender struct {
+	cfg Config
+}
+
+// NewSMTPSender creates a new SMTPSender with the given config.
+func NewSMTPSender(cfg Config) *SMTPSender {
+	return &SMTPSender{cfg: cfg}
+}
+
+// Send renders and delivers an email via SMTP.
+// A 30-second deadline is applied to the blocking SMTP call.
+func (s *SMTPSender) Send(ctx context.Context, req api.SendEmailRequest) error {
+	sendCtx, cancel := context.WithTimeout(ctx, smtpTimeout)
+	defer cancel()
+
+	msg := buildEmailMessage(req.To, req.Subject, req.HTML, req.Text, s.cfg.From)
+	if err := sendMessage(sendCtx, req.To, msg, s.cfg); err != nil {
+		return fmt.Errorf("smtp send: %w", err)
+	}
+
+	slog.DebugContext(ctx, "email sent successfully")
+	return nil
+}

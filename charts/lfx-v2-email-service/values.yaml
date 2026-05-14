@@ -1,0 +1,160 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+---
+# image is the configuration for the container image
+image:
+  # repository is the container image repository
+  repository: ghcr.io/linuxfoundation/lfx-v2-email-service/email-service
+  # tag is the container image tag (overrides appVersion from Chart.yaml)
+  tag: ""
+  # pullPolicy is the image pull policy
+  pullPolicy: IfNotPresent
+
+# replicaCount is the number of replicas for the deployment
+replicaCount: 2
+
+# podAnnotations are additional annotations applied to the pod template.
+# Example:
+#   prometheus.io/scrape: "true"
+#   prometheus.io/port: "8080"
+podAnnotations: {}
+
+# podLabels are additional labels applied to the pod template.
+# Example:
+#   team: platform
+#   environment: production
+podLabels: {}
+
+# podDisruptionBudget configures a PodDisruptionBudget for the deployment.
+# Only one of minAvailable or maxUnavailable may be set (not both).
+podDisruptionBudget:
+  enabled: false
+  # minAvailable: 1
+
+# resources is the configuration for container resource requests and limits
+resources:
+  # limits is the maximum amount of resources allowed
+  limits:
+    cpu: 200m
+    memory: 128Mi
+  # requests is the minimum amount of resources required
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# service is the configuration for the Kubernetes service
+service:
+  # port is the service port
+  port: 8080
+
+# app is the configuration for the application
+app:
+  # logLevel is the log level (debug, info, warn, error)
+  logLevel: info
+  # logAddSource is a boolean to determine if the log source should be added
+  logAddSource: true
+
+  # email is the configuration for email delivery
+  email:
+    # enabled controls whether email is actually sent.
+    # Set to false to use the no-op sender (logs only, no SMTP connection).
+    enabled: true
+    # smtpHost is the SMTP server hostname
+    smtpHost: "email-smtp.us-west-2.amazonaws.com"
+    # smtpPort is the SMTP server port (STARTTLS)
+    smtpPort: "587"
+    # smtpFrom is the envelope sender address for all outbound mail
+    smtpFrom: "noreply@lfx.linuxfoundation.org"
+    # smtpSecretName is the name of the Kubernetes Secret containing SMTP credentials.
+    # The Secret must have keys: smtp-username, smtp-password.
+    # Set to "" to skip injecting SMTP_USERNAME/SMTP_PASSWORD entirely — suitable for
+    # local development when no SMTP credentials are needed. Required for any real
+    # deployment that sends email.
+    # When externalSecretsOperator.enabled=true the ESO creates this secret automatically
+    # as {{ .Chart.Name }}. Override only if managing the secret out-of-band.
+    smtpSecretName: "lfx-v2-email-service"
+
+  # extraEnv allows injecting additional environment variables into the container.
+  # Supports both simple key-value pairs and Kubernetes field references.
+  # These are rendered BEFORE OTEL variables, allowing use in OTEL configuration.
+  extraEnv: []
+
+  # otel is the configuration for OpenTelemetry tracing
+  otel:
+    # serviceName is the service name for OpenTelemetry resource identification
+    # (default: "lfx-v2-email-service")
+    serviceName: ""
+    # serviceVersion is the service version for OpenTelemetry resource identification
+    # (default: build-time Version variable)
+    serviceVersion: ""
+    # protocol specifies the OTLP protocol: "grpc" or "http"
+    # (default: "grpc")
+    protocol: "grpc"
+    # endpoint is the OTLP collector endpoint
+    # For gRPC: typically "host:4317", for HTTP: typically "host:4318"
+    endpoint: ""
+    # insecure disables TLS for the OTLP connection
+    # Set to "true" for in-cluster communication without TLS
+    insecure: "false"
+    # tracesExporter specifies the traces exporter: "otlp" or "none"
+    # (default: "none")
+    tracesExporter: "none"
+    # tracesSampleRatio specifies the sampling ratio for traces (0.0 to 1.0)
+    # A value of 1.0 means all traces are sampled, 0.5 means 50% are sampled
+    # (default: "1.0")
+    tracesSampleRatio: "1.0"
+    # metricsExporter specifies the metrics exporter: "otlp" or "none"
+    # (default: "none")
+    metricsExporter: "none"
+    # logsExporter specifies the logs exporter: "otlp" or "none"
+    # (default: "none")
+    logsExporter: "none"
+    # propagators specifies the trace context propagators to use
+    # Comma-separated list of: "tracecontext", "baggage", "jaeger"
+    # (default: "tracecontext,baggage")
+    propagators: "tracecontext,baggage,jaeger"
+
+# nats is the configuration for the NATS server
+nats:
+  # url is the URL of the NATS server
+  url: nats://lfx-platform-nats.lfx.svc.cluster.local:4222
+
+# serviceAccount is the configuration for the Kubernetes ServiceAccount
+serviceAccount:
+  # create determines whether a ServiceAccount should be created
+  create: true
+  # name is the name of the ServiceAccount to create or reference
+  name: "lfx-v2-email-service"
+  # annotations are additional annotations applied to the ServiceAccount.
+  # Use this to attach an EKS IRSA role ARN, e.g.:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<role-name>
+  annotations: {}
+
+# global is the configuration shared across chart dependencies
+global:
+  # awsRegion is the AWS region used by the External Secrets Operator SecretStore.
+  # Must be set when externalSecretsOperator.enabled=true.
+  awsRegion: ""
+
+# externalSecretsOperator is the configuration for the External Secrets Operator integration.
+# When enabled, an ExternalSecret and SecretStore are created to pull SMTP credentials
+# from AWS Secrets Manager into the Kubernetes Secret referenced by app.smtpSecretName.
+# Requires global.awsRegion to be set and an IRSA-annotated ServiceAccount.
+externalSecretsOperator:
+  # enabled determines whether ESO resources (ExternalSecret + SecretStore) are created
+  enabled: false
+  externalSecret:
+    # refreshInterval is how often the ExternalSecret polls AWS Secrets Manager for updates
+    refreshInterval: "10m"
+    # data is the list of secret key mappings from AWS Secrets Manager to the Kubernetes Secret
+    data:
+      - secretKey: smtp-username
+        remoteRef:
+          # key is the AWS Secrets Manager secret path
+          key: /cloudops/ses-managed/email-service
+          # property is the JSON key within the secret value
+          property: smtp_username
+      - secretKey: smtp-password
+        remoteRef:
+          key: /cloudops/ses-managed/email-service
+          property: smtp_password
