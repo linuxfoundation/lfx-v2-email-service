@@ -22,7 +22,7 @@ func TestBuildEmailMessage_Headers(t *testing.T) {
 		"noreply@lfx.linuxfoundation.org",
 	)
 
-	assert.Contains(t, msg, "From: LFX One <noreply@lfx.linuxfoundation.org>")
+	assert.Contains(t, msg, "From: LFX Self Serve <noreply@lfx.linuxfoundation.org>")
 	assert.Contains(t, msg, "To: bob@example.com")
 	assert.Contains(t, msg, "Subject: Test Subject")
 	assert.Contains(t, msg, "MIME-Version: 1.0")
