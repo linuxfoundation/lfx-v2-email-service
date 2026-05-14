@@ -48,12 +48,12 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from string) strin
 	var b strings.Builder
 
 	// Extract the bare address so a cfg.From value like "Name <addr>" doesn't
-	// produce an invalid "From: LFX One <Name <addr>>" header.
+	// produce an invalid "From: LFX Self Serve <Name <addr>>" header.
 	fromAddr := from
 	if parsed, err := mail.ParseAddress(from); err == nil {
 		fromAddr = parsed.Address
 	}
-	b.WriteString(fmt.Sprintf("From: LFX One <%s>\r\n", sanitizeHeaderValue(fromAddr)))
+	b.WriteString(fmt.Sprintf("From: LFX Self Serve <%s>\r\n", sanitizeHeaderValue(fromAddr)))
 	b.WriteString(fmt.Sprintf("To: %s\r\n", sanitizeHeaderValue(to)))
 	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(subject))))
 	b.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
