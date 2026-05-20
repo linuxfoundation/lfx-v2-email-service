@@ -11,7 +11,15 @@ Amazon SES SMTP.
 **Subject:** `lfx.email-service.send_email`  
 **Queue group:** `lfx.email-service.queue`
 
-**Request payload:**
+**Request payload fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `to` | string | Recipient email address |
+| `subject` | string | Email subject line |
+| `html` | string | HTML body — callers render this before publishing |
+| `text` | string | Plain-text body — shown by clients that don't render HTML |
+
 ```json
 {
   "to": "user@example.com",
