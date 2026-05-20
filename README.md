@@ -28,6 +28,12 @@ Amazon SES SMTP.
 { "error": "<reason>" }
 ```
 
+**Example (NATS CLI):**
+```bash
+nats req lfx.email-service.send_email \
+  '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi"}'
+```
+
 ### Send from Go
 
 The `pkg/api` package exports the subject constant and request/response types,
@@ -91,13 +97,6 @@ func main() {
 	}
 	fmt.Println("send failed:", errResp.Error)
 }
-```
-
-### Send a test email from the CLI
-
-```bash
-nats req lfx.email-service.send_email \
-  '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi"}'
 ```
 
 ## Quick Start
