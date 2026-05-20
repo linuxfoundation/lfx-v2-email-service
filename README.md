@@ -62,7 +62,7 @@ Add it to your module:
 go get github.com/linuxfoundation/lfx-v2-email-service/pkg/api
 ```
 
-Then publish a request over an existing NATS connection:
+Connect to NATS and publish a request:
 
 ```go
 package main
