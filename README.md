@@ -171,6 +171,10 @@ make helm-install-local
 | `LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 | `LOG_ADD_SOURCE` | `false` | Set `true` to include source file/line in log entries |
 
+> **Note:** `EMAIL_ENABLED` defaults to `false`. In this mode the service accepts
+> requests and replies with success, but no email is sent. Set it to `true` to
+> enable real SMTP delivery.
+
 ## File Structure
 
 ```
@@ -204,6 +208,12 @@ lfx-v2-email-service/
 ```
 
 ## Development
+
+Run the test suite:
+
+```bash
+make test
+```
 
 Run `make check` before committing — it verifies formatting, runs the linter,
 and checks license headers:
