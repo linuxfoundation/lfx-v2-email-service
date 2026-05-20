@@ -36,6 +36,14 @@ Amazon SES SMTP.
 { "error": "<reason>" }
 ```
 
+Common error values:
+
+| `error` value | Cause |
+|---|---|
+| `invalid request payload` | Request body is not valid JSON |
+| `to, subject, html, and text are required` | One or more fields are missing or empty |
+| `email delivery failed` | Service accepted the request but SMTP delivery failed |
+
 **Example (NATS CLI):**
 ```bash
 nats req lfx.email-service.send_email \
