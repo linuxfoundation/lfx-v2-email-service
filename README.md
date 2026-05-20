@@ -4,18 +4,22 @@ Thin transactional email relay for the LFX Self-Service platform. Receives
 pre-rendered email payloads over NATS request/reply and delivers them via
 Amazon SES SMTP.
 
-## NATS Contract
+## Usage
 
-| Subject | Direction | Description |
-|---|---|---|
-| `lfx.email-service.send_email` | inbound request/reply | Send a pre-rendered email |
-
-### Send Email
+### Send via NATS
 
 **Subject:** `lfx.email-service.send_email`  
 **Queue group:** `lfx.email-service.queue`
 
-**Request payload:**
+**Request payload fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `to` | string | Recipient email address |
+| `subject` | string | Email subject line |
+| `html` | string | HTML body — callers render this before publishing |
+| `text` | string | Plain-text body — shown by clients that don't render HTML |
+
 ```json
 {
   "to": "user@example.com",
@@ -30,6 +34,87 @@ Amazon SES SMTP.
 **Error response:**
 ```json
 { "error": "<reason>" }
+```
+
+Common error values:
+
+| `error` value | Cause |
+|---|---|
+| `invalid request payload` | Request body is not valid JSON |
+| `to, subject, html, and text are required` | One or more fields are missing or empty |
+| `email delivery failed` | Service accepted the request but SMTP delivery failed |
+
+**Example (NATS CLI):**
+```bash
+# add --server <url> if not using nats://localhost:4222
+nats req lfx.email-service.send_email \
+  '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi"}'
+```
+
+### Send from Go
+
+The `pkg/api` package exports the subject constant and request/response types,
+so callers don't have to hardcode the wire format.
+
+Add it to your module:
+
+```bash
+go get github.com/linuxfoundation/lfx-v2-email-service/pkg/api
+```
+
+Connect to NATS and publish a request:
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/nats-io/nats.go"
+	emailapi "github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
+)
+
+func main() {
+	// replace panics with your own error handling when integrating into a service
+	nc, err := nats.Connect(nats.DefaultURL)
+	if err != nil {
+		panic(err)
+	}
+	defer nc.Close()
+
+	req := emailapi.SendEmailRequest{
+		To:      "user@example.com",
+		Subject: "You've been added",
+		HTML:    "<p>Hello</p>",
+		Text:    "Hello",
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		panic(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	reply, err := nc.RequestWithContext(ctx, emailapi.SendEmailSubject, data)
+	if err != nil {
+		panic(err) // transport / timeout error
+	}
+
+	if len(reply.Data) == 0 {
+		fmt.Println("email accepted")
+		return
+	}
+
+	var errResp emailapi.SendEmailErrorResponse
+	if err := json.Unmarshal(reply.Data, &errResp); err != nil {
+		panic(err)
+	}
+	fmt.Println("send failed:", errResp.Error)
+}
 ```
 
 ## Quick Start
@@ -73,20 +158,13 @@ make helm-install-local
 `values.local.yaml` is gitignored. The example file is pre-configured to use Mailpit
 (`lfx-platform-mailpit-smtp.lfx.svc.cluster.local:25`) with no SMTP credentials required.
 
-### Send a test email
-
-```bash
-nats req lfx.email-service.send_email \
-  '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi"}'
-```
-
 ## Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `NATS_URL` | `nats://localhost:4222` | NATS server URL |
 | `PORT` | `8080` | HTTP health probe port |
-| `EMAIL_ENABLED` | `false` | Set `true` to enable SMTP delivery; unset/empty uses NoOpSender |
+| `EMAIL_ENABLED` | `false` | Set `true` to enable SMTP delivery; when `false` requests succeed but delivery is skipped and logged via `NoOpSender` |
 | `SMTP_HOST` | `localhost` | SMTP server hostname |
 | `SMTP_PORT` | `587` | SMTP server port (STARTTLS) |
 | `SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | Envelope From address |
@@ -127,24 +205,20 @@ lfx-v2-email-service/
         └── service.yaml
 ```
 
-## Calling from Another Service
+## Development
 
-Import `pkg/api` to get the subject constant and wire types:
+Run the test suite:
 
-```go
-import emailapi "github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
-
-req := emailapi.SendEmailRequest{
-    To:      "user@example.com",
-    Subject: "You've been added",
-    HTML:    html,
-    Text:    plain,
-}
-data, _ := json.Marshal(req)
-reply, err := nc.RequestWithContext(ctx, emailapi.SendEmailSubject, data)
+```bash
+make test
 ```
 
-## Development
+Run `make check` before committing — it verifies formatting, runs the linter,
+and checks license headers:
+
+```bash
+make check
+```
 
 All commits must be signed off per the [DCO](https://developercertificate.org/):
 
