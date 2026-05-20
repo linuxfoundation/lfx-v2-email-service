@@ -46,6 +46,7 @@ Common error values:
 
 **Example (NATS CLI):**
 ```bash
+# add --server <url> if not using nats://localhost:4222
 nats req lfx.email-service.send_email \
   '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi"}'
 ```
@@ -77,6 +78,7 @@ import (
 )
 
 func main() {
+	// replace panics with your own error handling when integrating into a service
 	nc, err := nats.Connect(nats.DefaultURL)
 	if err != nil {
 		panic(err)
@@ -162,7 +164,7 @@ make helm-install-local
 |---|---|---|
 | `NATS_URL` | `nats://localhost:4222` | NATS server URL |
 | `PORT` | `8080` | HTTP health probe port |
-| `EMAIL_ENABLED` | `false` | Set `true` to enable SMTP delivery; unset/empty uses NoOpSender |
+| `EMAIL_ENABLED` | `false` | Set `true` to enable SMTP delivery; defaults to `false` which silently accepts requests without sending |
 | `SMTP_HOST` | `localhost` | SMTP server hostname |
 | `SMTP_PORT` | `587` | SMTP server port (STARTTLS) |
 | `SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | Envelope From address |
@@ -170,10 +172,6 @@ make helm-install-local
 | `SMTP_PASSWORD` | _(empty)_ | SMTP credential (from Kubernetes Secret in production) |
 | `LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 | `LOG_ADD_SOURCE` | `false` | Set `true` to include source file/line in log entries |
-
-> **Note:** `EMAIL_ENABLED` defaults to `false`. In this mode the service accepts
-> requests and replies with success, but no email is sent. Set it to `true` to
-> enable real SMTP delivery.
 
 ## File Structure
 
