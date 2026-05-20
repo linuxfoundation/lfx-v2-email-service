@@ -83,7 +83,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer nc.Drain()
+	defer nc.Close()
 
 	req := emailapi.SendEmailRequest{
 		To:      "user@example.com",
@@ -164,7 +164,7 @@ make helm-install-local
 |---|---|---|
 | `NATS_URL` | `nats://localhost:4222` | NATS server URL |
 | `PORT` | `8080` | HTTP health probe port |
-| `EMAIL_ENABLED` | `false` | Set `true` to enable SMTP delivery; defaults to `false` which silently accepts requests without sending |
+| `EMAIL_ENABLED` | `false` | Set `true` to enable SMTP delivery; when `false` requests succeed but delivery is skipped and logged via `NoOpSender` |
 | `SMTP_HOST` | `localhost` | SMTP server hostname |
 | `SMTP_PORT` | `587` | SMTP server port (STARTTLS) |
 | `SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | Envelope From address |
