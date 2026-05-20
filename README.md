@@ -205,6 +205,13 @@ lfx-v2-email-service/
 
 ## Development
 
+Run `make check` before committing — it verifies formatting, runs the linter,
+and checks license headers:
+
+```bash
+make check
+```
+
 All commits must be signed off per the [DCO](https://developercertificate.org/):
 
 ```bash
