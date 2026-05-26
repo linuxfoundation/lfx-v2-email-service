@@ -11,9 +11,9 @@ import (
 )
 
 // Sender is the interface implemented by SMTPSender and NoOpSender.
-// The returned string is the Message-ID (without angle brackets) assigned to the sent email;
-// it is the key used to look up tracking records in the NATS KV bucket.
-// An empty string is returned when email sending is disabled (NoOpSender).
+// emailID is the UUID assigned to this specific send (key in email-recipients KV).
+// groupID is the UUID grouping this send with others of the same campaign.
+// Both are empty strings when email sending is disabled (NoOpSender).
 type Sender interface {
-	Send(ctx context.Context, req api.SendEmailRequest) (messageID string, err error)
+	Send(ctx context.Context, req api.SendEmailRequest) (emailID, groupID string, err error)
 }

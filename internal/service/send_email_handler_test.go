@@ -17,16 +17,17 @@ import (
 )
 
 type mockSender struct {
-	called    bool
-	req       api.SendEmailRequest
-	messageID string
-	err       error
+	called  bool
+	req     api.SendEmailRequest
+	emailID string
+	groupID string
+	err     error
 }
 
-func (m *mockSender) Send(_ context.Context, req api.SendEmailRequest) (string, error) {
+func (m *mockSender) Send(_ context.Context, req api.SendEmailRequest) (string, string, error) {
 	m.called = true
 	m.req = req
-	return m.messageID, m.err
+	return m.emailID, m.groupID, m.err
 }
 
 func TestSendEmailHandler_HandleData(t *testing.T) {
@@ -36,21 +37,30 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 		name        string
 		payload     any
 		senderErr   error
+		emailID     string
+		groupID     string
 		wantSent    bool
 		wantErrResp bool
-		wantNilResp bool
+		wantEmailID string
+		wantGroupID string
 	}{
 		{
-			name:        "happy path",
+			name:        "happy path — ids returned",
 			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"},
+			emailID:     "email-uuid-1",
+			groupID:     "group-uuid-1",
 			wantSent:    true,
-			wantNilResp: true,
+			wantEmailID: "email-uuid-1",
+			wantGroupID: "group-uuid-1",
 		},
 		{
-			name:        "happy path with correlation id",
-			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", CorrelationID: "corr-123", SourceService: "invite-service"},
+			name:        "happy path — caller provides group_id",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "caller-group"},
+			emailID:     "email-uuid-2",
+			groupID:     "caller-group",
 			wantSent:    true,
-			wantNilResp: true,
+			wantEmailID: "email-uuid-2",
+			wantGroupID: "caller-group",
 		},
 		{
 			name:        "sender error",
@@ -89,9 +99,8 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			sender := &mockSender{err: tc.senderErr}
-			// nil kvStore — no KV writes in unit tests
-			handler := service.NewSendEmailHandler(sender, nil)
+			sender := &mockSender{err: tc.senderErr, emailID: tc.emailID, groupID: tc.groupID}
+			handler := service.NewSendEmailHandler(sender, nil, nil)
 
 			var data []byte
 			switch v := tc.payload.(type) {
@@ -104,15 +113,10 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			}
 
 			var responded []byte
-			respondedNil := false
 			respondCount := 0
 			respond := func(d []byte) error {
 				respondCount++
-				if d == nil {
-					respondedNil = true
-				} else {
-					responded = d
-				}
+				responded = d
 				return nil
 			}
 
@@ -121,12 +125,14 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			assert.Equal(t, 1, respondCount, "respond must be called exactly once")
 			assert.Equal(t, tc.wantSent, sender.called, "sender.called")
 
-			if tc.wantNilResp {
-				assert.True(t, respondedNil, "expected nil (success) response")
-				assert.Nil(t, responded)
+			if tc.wantEmailID != "" {
+				var resp api.SendEmailResponse
+				require.NoError(t, json.Unmarshal(responded, &resp))
+				assert.Equal(t, tc.wantEmailID, resp.EmailID)
+				assert.Equal(t, tc.wantGroupID, resp.GroupID)
 			}
 			if tc.wantErrResp {
-				require.NotNil(t, responded, "expected error response body")
+				require.NotNil(t, responded)
 				var errResp api.SendEmailErrorResponse
 				require.NoError(t, json.Unmarshal(responded, &errResp))
 				assert.NotEmpty(t, errResp.Error)

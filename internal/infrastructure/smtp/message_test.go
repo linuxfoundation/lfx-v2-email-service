@@ -14,12 +14,13 @@ import (
 func TestBuildEmailMessage_Headers(t *testing.T) {
 	t.Parallel()
 
-	_, msg := buildEmailMessage(
+	msg := buildEmailMessage(
 		"bob@example.com",
 		"Test Subject",
 		"<p>Hello Bob</p>",
 		"Hello Bob",
 		"noreply@lfx.linuxfoundation.org",
+		"",
 		"",
 	)
 
@@ -35,11 +36,21 @@ func TestBuildEmailMessage_Headers(t *testing.T) {
 func TestBuildEmailMessage_ConfigurationSetHeader(t *testing.T) {
 	t.Parallel()
 
-	_, msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "my-config-set")
+	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "my-config-set", "")
 	assert.Contains(t, msg, "X-SES-CONFIGURATION-SET: my-config-set")
 
-	_, msgNoSet := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "")
+	msgNoSet := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "", "")
 	assert.NotContains(t, msgNoSet, "X-SES-CONFIGURATION-SET")
+}
+
+func TestBuildEmailMessage_TrackingIDHeader(t *testing.T) {
+	t.Parallel()
+
+	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "", "group-uuid/email-uuid")
+	assert.Contains(t, msg, "X-LFX-TRACKING-ID: group-uuid/email-uuid")
+
+	msgNoTracking := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "", "")
+	assert.NotContains(t, msgNoTracking, "X-LFX-TRACKING-ID")
 }
 
 func TestBuildEmailMessage_BothParts(t *testing.T) {
@@ -48,7 +59,7 @@ func TestBuildEmailMessage_BothParts(t *testing.T) {
 	htmlBody := "<p>Hello Bob</p>"
 	textBody := "Hello Bob"
 
-	_, msg := buildEmailMessage("bob@example.com", "Subject", htmlBody, textBody, "from@example.com", "")
+	msg := buildEmailMessage("bob@example.com", "Subject", htmlBody, textBody, "from@example.com", "", "")
 
 	assert.Contains(t, msg, "Content-Type: text/plain; charset=UTF-8")
 	assert.Contains(t, msg, "Content-Type: text/html; charset=UTF-8")
@@ -56,22 +67,11 @@ func TestBuildEmailMessage_BothParts(t *testing.T) {
 	assert.Contains(t, msg, textBody)
 }
 
-func TestBuildEmailMessage_ReturnsMessageID(t *testing.T) {
-	t.Parallel()
-
-	msgID, _ := buildEmailMessage("bob@example.com", "Sub", "<b>x</b>", "x", "from@example.com", "")
-	assert.NotEmpty(t, msgID)
-	assert.NotContains(t, msgID, "<", "message ID should have angle brackets stripped")
-	assert.NotContains(t, msgID, ">", "message ID should have angle brackets stripped")
-	assert.Contains(t, msgID, "@")
-}
-
 func TestBuildEmailMessage_BoundaryPresent(t *testing.T) {
 	t.Parallel()
 
-	_, msg := buildEmailMessage("to@example.com", "Sub", "<b>x</b>", "x", "from@example.com", "")
+	msg := buildEmailMessage("to@example.com", "Sub", "<b>x</b>", "x", "from@example.com", "", "")
 
-	// multipart boundary must appear in the Content-Type header and as part separators
 	contentTypeLine := ""
 	for _, line := range strings.Split(msg, "\r\n") {
 		if strings.HasPrefix(line, "Content-Type: multipart/alternative;") {
@@ -81,7 +81,6 @@ func TestBuildEmailMessage_BoundaryPresent(t *testing.T) {
 	}
 	require.NotEmpty(t, contentTypeLine, "multipart Content-Type header not found")
 
-	// Extract boundary value
 	idx := strings.Index(contentTypeLine, `boundary="`)
 	require.NotEqual(t, -1, idx)
 	rest := contentTypeLine[idx+len(`boundary="`):]
@@ -106,7 +105,6 @@ func TestGenerateMessageID_ContainsDomain(t *testing.T) {
 func TestGenerateMessageID_FallbackDomain(t *testing.T) {
 	t.Parallel()
 
-	// when from address is invalid, falls back to localhost
 	id := generateMessageID("not-an-email")
 	assert.Contains(t, id, "localhost")
 }

@@ -35,7 +35,6 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Build the email sender.
 	var sender domain.Sender
 	if env.EmailEnabled {
 		sender = smtpinfra.NewSMTPSender(smtpinfra.Config{
@@ -55,37 +54,32 @@ func main() {
 		slog.Info("email sending disabled (EMAIL_ENABLED=false)")
 	}
 
-	// Connect to NATS.
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	var wg sync.WaitGroup
 
-	nc, js, kvStore, err := setupNATSAndKV(ctx, env.NatsURL)
+	nc, recipientsKV, groupIndexKV, err := setupNATSAndKV(ctx, env.NatsURL)
 	if err != nil {
 		slog.Error("failed to connect to NATS", logging.ErrKey, err)
 		cancel()
 		os.Exit(1)
 	}
-	_ = js
-
-	sendEmailHandler := service.NewSendEmailHandler(sender, kvStore)
 
 	wg.Add(2) // HTTP server + NATS drain
-	if err := subscribeHandlers(ctx, nc, sendEmailHandler, kvStore, &wg, done); err != nil {
+	if err := subscribeHandlers(ctx, nc, sender, recipientsKV, groupIndexKV, &wg, done); err != nil {
 		slog.Error("failed to subscribe NATS handlers", logging.ErrKey, err)
 		cancel()
 		os.Exit(1)
 	}
 
-	// Start SQS poller if configured.
-	if env.SESEngagementSQSURL != "" && kvStore != nil {
+	if env.SESEngagementSQSURL != "" && recipientsKV != nil {
 		awsCfg, err := config.LoadDefaultConfig(ctx)
 		if err != nil {
 			slog.Warn("failed to load AWS config, SQS poller disabled", logging.ErrKey, err)
 		} else {
 			sqsClient := awssqs.NewFromConfig(awsCfg)
-			engagementHandler := service.NewEngagementEventHandler(kvStore, nc)
+			engagementHandler := service.NewEngagementEventHandler(recipientsKV)
 			poller := sqsinfra.NewPoller(sqsClient, env.SESEngagementSQSURL, engagementHandler.Handle)
 			wg.Add(1)
 			go func() {
@@ -97,7 +91,6 @@ func main() {
 		}
 	}
 
-	// Start health HTTP server.
 	httpServer := setupHTTPServer(env.Port, nc)
 	go func() {
 		slog.Info("HTTP health server listening", "port", env.Port)
@@ -106,13 +99,11 @@ func main() {
 		}
 	}()
 
-	// Wait for shutdown signal.
 	<-done
 	slog.Info("shutdown signal received")
 
 	cancel()
 
-	// Shutdown HTTP server.
 	go func() {
 		defer wg.Done()
 		shutCtx, shutCancel := context.WithTimeout(context.Background(), gracefulShutdownSeconds*time.Second)
@@ -121,7 +112,6 @@ func main() {
 		slog.Info("HTTP server stopped")
 	}()
 
-	// Drain NATS.
 	if !nc.IsClosed() && !nc.IsDraining() {
 		slog.Info("draining NATS connection")
 		_ = nc.Drain()
@@ -131,7 +121,7 @@ func main() {
 	slog.Info("email service stopped")
 }
 
-func setupNATSAndKV(ctx context.Context, natsURL string) (*natsgo.Conn, natsgo.JetStreamContext, natsgo.KeyValue, error) {
+func setupNATSAndKV(ctx context.Context, natsURL string) (*natsgo.Conn, natsgo.KeyValue, natsgo.KeyValue, error) {
 	nc, err := natsgo.Connect(
 		natsURL,
 		natsgo.ConnectHandler(func(_ *natsgo.Conn) {
@@ -155,16 +145,29 @@ func setupNATSAndKV(ctx context.Context, natsURL string) (*natsgo.Conn, natsgo.J
 		return nc, nil, nil, nil
 	}
 
-	kv, err := js.KeyValue(api.EmailOpenTrackingKVBucket)
+	recipientsKV, err := js.KeyValue(api.EmailRecipientsKVBucket)
 	if err != nil {
-		slog.Warn("KV bucket not found, tracking disabled", "bucket", api.EmailOpenTrackingKVBucket, logging.ErrKey, err)
-		return nc, js, nil, nil
+		slog.Warn("KV bucket not found, tracking disabled", "bucket", api.EmailRecipientsKVBucket, logging.ErrKey, err)
+		return nc, nil, nil, nil
 	}
 
-	return nc, js, kv, nil
+	groupIndexKV, err := js.KeyValue(api.EmailGroupIndexKVBucket)
+	if err != nil {
+		slog.Warn("KV bucket not found, tracking disabled", "bucket", api.EmailGroupIndexKVBucket, logging.ErrKey, err)
+		return nc, nil, nil, nil
+	}
+
+	return nc, recipientsKV, groupIndexKV, nil
 }
 
-func subscribeHandlers(ctx context.Context, nc *natsgo.Conn, sendEmailHandler *service.SendEmailHandler, kvStore natsgo.KeyValue, wg *sync.WaitGroup, done chan os.Signal) error {
+func subscribeHandlers(
+	ctx context.Context,
+	nc *natsgo.Conn,
+	sender domain.Sender,
+	recipientsKV, groupIndexKV natsgo.KeyValue,
+	wg *sync.WaitGroup,
+	done chan os.Signal,
+) error {
 	msgCtx, msgCancel := context.WithCancel(context.Background())
 
 	nc.SetClosedHandler(func(_ *natsgo.Conn) {
@@ -179,25 +182,33 @@ func subscribeHandlers(ctx context.Context, nc *natsgo.Conn, sendEmailHandler *s
 		wg.Done()
 	})
 
-	_, err := nc.QueueSubscribe(api.SendEmailSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-		sendEmailHandler.Handle(msgCtx, msg)
-	})
-	if err != nil {
+	sendHandler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV)
+	if _, err := nc.QueueSubscribe(api.SendEmailSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+		sendHandler.Handle(msgCtx, msg)
+	}); err != nil {
 		msgCancel()
-		return fmt.Errorf("nats subscribe send_email: %w", err)
+		return fmt.Errorf("nats subscribe %s: %w", api.SendEmailSubject, err)
 	}
 	slog.Info("subscribed to NATS subject", "subject", api.SendEmailSubject, "queue", api.QueueGroup)
 
-	if kvStore != nil {
-		statusHandler := service.NewGetEmailStatusHandler(kvStore)
-		_, err = nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+	if recipientsKV != nil && groupIndexKV != nil {
+		statusHandler := service.NewGetEmailStatusHandler(recipientsKV)
+		if _, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
 			statusHandler.Handle(msgCtx, msg)
-		})
-		if err != nil {
+		}); err != nil {
 			msgCancel()
-			return fmt.Errorf("nats subscribe get_email_status: %w", err)
+			return fmt.Errorf("nats subscribe %s: %w", api.GetEmailStatusSubject, err)
 		}
-		slog.Info("subscribed to NATS subject", "subject", api.GetEmailStatusSubject, "queue", api.QueueGroup)
+		slog.Info("subscribed to NATS subject", "subject", api.GetEmailStatusSubject)
+
+		analyticsHandler := service.NewGetEmailEngagementAnalyticsHandler(recipientsKV, groupIndexKV)
+		if _, err := nc.QueueSubscribe(api.GetEmailEngagementAnalyticsSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+			analyticsHandler.Handle(msgCtx, msg)
+		}); err != nil {
+			msgCancel()
+			return fmt.Errorf("nats subscribe %s: %w", api.GetEmailEngagementAnalyticsSubject, err)
+		}
+		slog.Info("subscribed to NATS subject", "subject", api.GetEmailEngagementAnalyticsSubject)
 	}
 
 	return nil

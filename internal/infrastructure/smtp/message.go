@@ -42,11 +42,12 @@ func sanitizeHeaderValue(v string) string {
 }
 
 // buildEmailMessage constructs a multipart/alternative MIME message (HTML + plain text).
-// Returns the Message-ID (without angle brackets) and the full MIME body.
-// When configurationSet is non-empty the X-SES-CONFIGURATION-SET header is included so
-// SES routes engagement events to the named configuration set.
-func buildEmailMessage(to, subject, htmlContent, textContent, from, configurationSet string) (messageID, body string) {
-	rawMessageID := generateMessageID(from)
+// configurationSet, when non-empty, adds an X-SES-CONFIGURATION-SET header so SES routes
+// engagement events to the named configuration set.
+// trackingID, when non-empty, adds an X-LFX-TRACKING-ID header in the form group_id/email_id
+// so the SQS poller can correlate SES events back to the KV record.
+func buildEmailMessage(to, subject, htmlContent, textContent, from, configurationSet, trackingID string) string {
+	messageID := generateMessageID(from)
 	boundary := generateBoundary()
 	var b strings.Builder
 
@@ -60,9 +61,12 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from, configuratio
 	b.WriteString(fmt.Sprintf("To: %s\r\n", sanitizeHeaderValue(to)))
 	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(subject))))
 	b.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
-	b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", rawMessageID))
+	b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
 	if configurationSet != "" {
 		b.WriteString(fmt.Sprintf("X-SES-CONFIGURATION-SET: %s\r\n", sanitizeHeaderValue(configurationSet)))
+	}
+	if trackingID != "" {
+		b.WriteString(fmt.Sprintf("X-LFX-TRACKING-ID: %s\r\n", sanitizeHeaderValue(trackingID)))
 	}
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary))
@@ -83,10 +87,7 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from, configuratio
 	b.WriteString("\r\n")
 
 	b.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
-
-	// Strip angle brackets — callers use this as a KV key and map key.
-	messageID = strings.TrimPrefix(strings.TrimSuffix(rawMessageID, ">"), "<")
-	return messageID, b.String()
+	return b.String()
 }
 
 // sendMessage delivers a pre-built MIME message via SMTP.

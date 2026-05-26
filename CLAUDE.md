@@ -83,21 +83,22 @@ nats req lfx.email-service.send_email \
 
 | Constant | Value | Direction |
 |---|---|---|
-| `api.SendEmailSubject` | `lfx.email-service.send_email` | request/reply — callers publish to this |
+| `api.SendEmailSubject` | `lfx.email-service.send_email` | request/reply; reply is JSON `SendEmailResponse` |
 | `api.QueueGroup` | `lfx.email-service.queue` | queue group for all subscriptions |
-| `api.EmailOpenedSubject` | `lfx.email-service.email-opened` | publish — fired on each open event |
-| `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | request/reply — returns `EmailTrackingRecord` JSON |
+| `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | request/reply; payload `GetEmailStatusRequest` → `EmailRecipientRecord` |
+| `api.GetEmailEngagementAnalyticsSubject` | `lfx.email-service.get_email_engagement_analytics` | request/reply; payload `GetEmailEngagementAnalyticsRequest` → `GetEmailEngagementAnalyticsResponse` |
 
 All constants are in `pkg/api/nats.go`.
 
 ## NATS KV
 
-| Constant | Value |
-|---|---|
-| `api.EmailOpenTrackingKVBucket` | `email-open-tracking` |
+| Constant | Bucket | Key | Value |
+|---|---|---|---|
+| `api.EmailRecipientsKVBucket` | `email-recipients` | `<email_id>` (UUID per send) | JSON `EmailRecipientRecord` |
+| `api.EmailGroupIndexKVBucket` | `email-group-index` | `<group_id>` (UUID per campaign) | JSON `[]string` of `email_id`s |
 
-Key scheme: `ses-message-id/<Message-ID>` where `<Message-ID>` is the value of the `Message-ID` MIME header
-without angle brackets. Value: JSON-encoded `api.EmailTrackingRecord`.
+The `email_id` and `group_id` are returned to callers in `SendEmailResponse`.
+The `group_id` is optional in `SendEmailRequest` — if not provided the email service generates one.
 
 ## Environment Variables
 

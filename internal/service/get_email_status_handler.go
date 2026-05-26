@@ -16,12 +16,12 @@ import (
 
 // GetEmailStatusHandler handles NATS requests on the get_email_status subject.
 type GetEmailStatusHandler struct {
-	kvStore natsgo.KeyValue
+	recipientsKV natsgo.KeyValue
 }
 
-// NewGetEmailStatusHandler creates a handler backed by kvStore.
-func NewGetEmailStatusHandler(kvStore natsgo.KeyValue) *GetEmailStatusHandler {
-	return &GetEmailStatusHandler{kvStore: kvStore}
+// NewGetEmailStatusHandler creates a handler backed by recipientsKV.
+func NewGetEmailStatusHandler(recipientsKV natsgo.KeyValue) *GetEmailStatusHandler {
+	return &GetEmailStatusHandler{recipientsKV: recipientsKV}
 }
 
 // Handle processes a single NATS message.
@@ -33,74 +33,29 @@ func (h *GetEmailStatusHandler) Handle(ctx context.Context, msg *natsgo.Msg) {
 		return
 	}
 
-	if req.SESMessageID == "" && req.CorrelationID == "" {
-		respondErrorMsg(msg, "ses_message_id or correlation_id is required")
+	if req.EmailID == "" {
+		respondErrorMsg(msg, "email_id is required")
 		return
 	}
 
-	var record *api.EmailTrackingRecord
-
-	if req.SESMessageID != "" {
-		r, err := h.lookupByMessageID(ctx, req.SESMessageID)
-		if err != nil {
-			respondErrorMsg(msg, "not found")
-			return
-		}
-		record = r
-	} else {
-		r, err := h.lookupByCorrelationID(ctx, req.CorrelationID)
-		if err != nil {
-			respondErrorMsg(msg, "not found")
-			return
-		}
-		record = r
+	entry, err := h.recipientsKV.Get(req.EmailID)
+	if err != nil {
+		slog.DebugContext(ctx, "recipient record not found", "email_id", req.EmailID)
+		respondErrorMsg(msg, "not found")
+		return
 	}
 
-	b, err := json.Marshal(record)
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to marshal tracking record", logging.ErrKey, err)
+	var record api.EmailRecipientRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		slog.ErrorContext(ctx, "failed to unmarshal recipient record", logging.ErrKey, err)
 		respondErrorMsg(msg, "internal error")
 		return
 	}
+
+	b, _ := json.Marshal(record)
 	if err := msg.Respond(b); err != nil {
 		slog.WarnContext(ctx, "failed to respond to get_email_status request", logging.ErrKey, err)
 	}
-}
-
-func (h *GetEmailStatusHandler) lookupByMessageID(ctx context.Context, messageID string) (*api.EmailTrackingRecord, error) {
-	key := "ses-message-id/" + messageID
-	entry, err := h.kvStore.Get(key)
-	if err != nil {
-		slog.DebugContext(ctx, "tracking record not found", "key", key)
-		return nil, err
-	}
-	var record api.EmailTrackingRecord
-	if err := json.Unmarshal(entry.Value(), &record); err != nil {
-		return nil, err
-	}
-	return &record, nil
-}
-
-func (h *GetEmailStatusHandler) lookupByCorrelationID(ctx context.Context, correlationID string) (*api.EmailTrackingRecord, error) {
-	keys, err := h.kvStore.Keys()
-	if err != nil {
-		slog.WarnContext(ctx, "failed to list kv keys for correlation id lookup", logging.ErrKey, err)
-		return nil, err
-	}
-	for _, key := range keys {
-		entry, err := h.kvStore.Get(key)
-		if err != nil {
-			continue
-		}
-		var record api.EmailTrackingRecord
-		if err := json.Unmarshal(entry.Value(), &record); err != nil {
-			continue
-		}
-		if record.CorrelationID == correlationID {
-			return &record, nil
-		}
-	}
-	return nil, natsgo.ErrKeyNotFound
 }
 
 func respondErrorMsg(msg *natsgo.Msg, reason string) {

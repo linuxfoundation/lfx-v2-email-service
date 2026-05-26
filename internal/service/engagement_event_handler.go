@@ -24,10 +24,9 @@ type snsEnvelope struct {
 
 // sesEvent is the parsed SES engagement event.
 type sesEvent struct {
-	EventType string   `json:"eventType"`
-	Mail      sesMail  `json:"mail"`
-	Open      *sesOpen `json:"open"`
-	Bounce    *sesBounce `json:"bounce"`
+	EventType string        `json:"eventType"`
+	Mail      sesMail       `json:"mail"`
+	Bounce    *sesBounce    `json:"bounce"`
 	Complaint *sesComplaint `json:"complaint"`
 	Delivery  *sesDelivery  `json:"delivery"`
 }
@@ -39,10 +38,6 @@ type sesMail struct {
 type sesHeader struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
-}
-
-type sesOpen struct {
-	Timestamp string `json:"timestamp"`
 }
 
 type sesBounce struct {
@@ -57,15 +52,14 @@ type sesDelivery struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// EngagementEventHandler parses SES engagement events from SQS and updates the tracking KV bucket.
+// EngagementEventHandler parses SES engagement events from SQS and updates the recipients KV bucket.
 type EngagementEventHandler struct {
-	kvStore natsgo.KeyValue
-	nc      *natsgo.Conn
+	recipientsKV natsgo.KeyValue
 }
 
-// NewEngagementEventHandler creates a handler that writes to kvStore and publishes on nc.
-func NewEngagementEventHandler(kvStore natsgo.KeyValue, nc *natsgo.Conn) *EngagementEventHandler {
-	return &EngagementEventHandler{kvStore: kvStore, nc: nc}
+// NewEngagementEventHandler creates a handler that writes to recipientsKV.
+func NewEngagementEventHandler(recipientsKV natsgo.KeyValue) *EngagementEventHandler {
+	return &EngagementEventHandler{recipientsKV: recipientsKV}
 }
 
 // Handle processes a single SQS message containing an SNS-wrapped SES event.
@@ -87,36 +81,42 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 		return nil
 	}
 
-	messageID := extractMessageID(event.Mail.Headers)
-	if messageID == "" {
-		slog.WarnContext(ctx, "ses event missing Message-ID header, skipping")
+	emailID := extractEmailID(event.Mail.Headers)
+	if emailID == "" {
+		slog.WarnContext(ctx, "ses event missing X-LFX-TRACKING-ID header, skipping")
 		return nil
 	}
 
-	kvKey := "ses-message-id/" + messageID
-
-	entry, err := h.kvStore.Get(kvKey)
+	entry, err := h.recipientsKV.Get(emailID)
 	if err != nil {
-		slog.DebugContext(ctx, "no tracking record for message, skipping", "key", kvKey)
+		slog.DebugContext(ctx, "no recipient record for email_id, skipping", "email_id", emailID)
 		return nil
 	}
 
-	var record api.EmailTrackingRecord
+	var record api.EmailRecipientRecord
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
-		slog.WarnContext(ctx, "failed to unmarshal tracking record", logging.ErrKey, err, "key", kvKey)
+		slog.WarnContext(ctx, "failed to unmarshal recipient record", logging.ErrKey, err, "email_id", emailID)
 		return nil
 	}
 
+	now := time.Now().UTC()
 	eventType := strings.ToUpper(event.EventType)
 	switch eventType {
 	case "OPEN":
-		h.applyOpen(ctx, &record, &event)
-	case "BOUNCE":
-		h.applyBounce(&record, &event)
-	case "COMPLAINT":
-		h.applyComplaint(&record, &event)
+		if !record.Opened {
+			record.Opened = true
+			record.OpenedAt = &now
+		}
 	case "DELIVERY":
-		h.applyDelivery(&record, &event)
+		if !record.Delivered {
+			record.Delivered = true
+			record.DeliveredAt = &now
+		}
+	case "BOUNCE", "COMPLAINT":
+		if !record.Failed {
+			record.Failed = true
+			record.FailedAt = &now
+		}
 	default:
 		slog.DebugContext(ctx, "ignoring unknown ses event type", "event_type", event.EventType)
 		return nil
@@ -124,64 +124,25 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 
 	updated, err := json.Marshal(record)
 	if err != nil {
-		slog.WarnContext(ctx, "failed to marshal updated tracking record", logging.ErrKey, err)
+		slog.WarnContext(ctx, "failed to marshal updated recipient record", logging.ErrKey, err)
 		return nil
 	}
-	if _, err := h.kvStore.Put(kvKey, updated); err != nil {
-		slog.WarnContext(ctx, "failed to update tracking record in KV", logging.ErrKey, err, "key", kvKey)
-		return nil
-	}
-
-	if eventType == "OPEN" {
-		if err := h.nc.Publish(api.EmailOpenedSubject, updated); err != nil {
-			slog.WarnContext(ctx, "failed to publish email-opened event", logging.ErrKey, err)
-		}
+	if _, err := h.recipientsKV.Put(emailID, updated); err != nil {
+		slog.WarnContext(ctx, "failed to update recipient record in KV", logging.ErrKey, err, "email_id", emailID)
 	}
 
 	return nil
 }
 
-func (h *EngagementEventHandler) applyOpen(ctx context.Context, record *api.EmailTrackingRecord, event *sesEvent) {
-	now := time.Now().UTC()
-	record.OpenCount++
-	if record.FirstOpenedAt == nil {
-		record.FirstOpenedAt = &now
-		slog.DebugContext(ctx, "first open recorded", "message_id", record.SESMessageID)
-	}
-	record.LastOpenedAt = &now
-}
-
-func (h *EngagementEventHandler) applyBounce(record *api.EmailTrackingRecord, event *sesEvent) {
-	if record.BouncedAt != nil {
-		return
-	}
-	now := time.Now().UTC()
-	record.BouncedAt = &now
-}
-
-func (h *EngagementEventHandler) applyComplaint(record *api.EmailTrackingRecord, event *sesEvent) {
-	if record.ComplainedAt != nil {
-		return
-	}
-	now := time.Now().UTC()
-	record.ComplainedAt = &now
-}
-
-func (h *EngagementEventHandler) applyDelivery(record *api.EmailTrackingRecord, event *sesEvent) {
-	if record.DeliveredAt != nil {
-		return
-	}
-	now := time.Now().UTC()
-	record.DeliveredAt = &now
-}
-
-// extractMessageID finds the Message-ID header value from the mail headers and strips angle brackets.
-func extractMessageID(headers []sesHeader) string {
+// extractEmailID finds the X-LFX-TRACKING-ID header (format: group_id/email_id)
+// and returns the email_id portion (everything after the first '/').
+func extractEmailID(headers []sesHeader) string {
 	for _, h := range headers {
-		if strings.EqualFold(h.Name, "Message-ID") {
+		if strings.EqualFold(h.Name, "X-LFX-TRACKING-ID") {
 			v := strings.TrimSpace(h.Value)
-			v = strings.TrimPrefix(v, "<")
-			v = strings.TrimSuffix(v, ">")
+			if idx := strings.Index(v, "/"); idx != -1 {
+				return v[idx+1:]
+			}
 			return v
 		}
 	}

@@ -10,21 +10,28 @@ import "time"
 
 const (
 	// SendEmailSubject is the NATS request/reply subject for sending emails.
-	// Callers publish a JSON-encoded SendEmailRequest and wait for a reply.
-	// An empty reply body means success; a JSON SendEmailErrorResponse means failure.
+	// On success the reply body is a JSON-encoded SendEmailResponse.
+	// On failure the reply body is a JSON-encoded SendEmailErrorResponse.
 	SendEmailSubject = "lfx.email-service.send_email"
 
 	// QueueGroup is the NATS queue group used by email service subscribers.
 	QueueGroup = "lfx.email-service.queue"
 
-	// EmailOpenedSubject is the NATS subject published when an email open event is received.
-	EmailOpenedSubject = "lfx.email-service.email-opened"
-
-	// GetEmailStatusSubject is the NATS request/reply subject for querying email tracking state.
+	// GetEmailStatusSubject is the NATS request/reply subject for fetching a
+	// single recipient record by email_id.
 	GetEmailStatusSubject = "lfx.email-service.get_email_status"
 
-	// EmailOpenTrackingKVBucket is the NATS KV bucket name for per-message tracking records.
-	EmailOpenTrackingKVBucket = "email-open-tracking"
+	// GetEmailEngagementAnalyticsSubject is the NATS request/reply subject for
+	// fetching aggregate engagement counts for a group of emails.
+	GetEmailEngagementAnalyticsSubject = "lfx.email-service.get_email_engagement_analytics"
+
+	// EmailRecipientsKVBucket is the NATS KV bucket that stores one record per
+	// sent email, keyed by email_id.
+	EmailRecipientsKVBucket = "email-recipients"
+
+	// EmailGroupIndexKVBucket is the NATS KV bucket that maps a group_id to the
+	// list of email_ids belonging to that group.
+	EmailGroupIndexKVBucket = "email-group-index"
 )
 
 // SendEmailRequest is the JSON payload published to SendEmailSubject.
@@ -34,36 +41,52 @@ type SendEmailRequest struct {
 	Subject       string `json:"subject"`
 	HTML          string `json:"html"`
 	Text          string `json:"text"`
+	GroupID       string `json:"group_id,omitempty"`
 	CorrelationID string `json:"correlation_id,omitempty"`
 	SourceService string `json:"source_service,omitempty"`
 }
 
+// SendEmailResponse is the JSON payload returned in the NATS reply on success.
+type SendEmailResponse struct {
+	EmailID string `json:"email_id"`
+	GroupID string `json:"group_id"`
+}
+
 // SendEmailErrorResponse is the JSON payload returned in the NATS reply on failure.
-// A nil or empty reply body indicates success.
 type SendEmailErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// EmailTrackingRecord is the NATS KV value stored per sent email.
-// Keyed by the Message-ID header (without angle brackets) under bucket EmailOpenTrackingKVBucket.
-type EmailTrackingRecord struct {
-	SESMessageID  string     `json:"ses_message_id"`
-	CorrelationID string     `json:"correlation_id,omitempty"`
-	SourceService string     `json:"source_service,omitempty"`
-	To            string     `json:"to"`
-	Subject       string     `json:"subject"`
-	SentAt        time.Time  `json:"sent_at"`
-	OpenCount     int        `json:"open_count"`
-	FirstOpenedAt *time.Time `json:"first_opened_at,omitempty"`
-	LastOpenedAt  *time.Time `json:"last_opened_at,omitempty"`
-	DeliveredAt   *time.Time `json:"delivered_at,omitempty"`
-	BouncedAt     *time.Time `json:"bounced_at,omitempty"`
-	ComplainedAt  *time.Time `json:"complained_at,omitempty"`
+// EmailRecipientRecord is the value stored in EmailRecipientsKVBucket, keyed by email_id.
+type EmailRecipientRecord struct {
+	GroupID     string     `json:"group_id"`
+	EmailID     string     `json:"email_id"`
+	To          string     `json:"to"`
+	Subject     string     `json:"subject"`
+	SentAt      time.Time  `json:"sent_at"`
+	Delivered   bool       `json:"delivered"`
+	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
+	Opened      bool       `json:"opened"`
+	OpenedAt    *time.Time `json:"opened_at,omitempty"`
+	Failed      bool       `json:"failed"`
+	FailedAt    *time.Time `json:"failed_at,omitempty"`
 }
 
 // GetEmailStatusRequest is the payload for GetEmailStatusSubject.
-// Exactly one of SESMessageID or CorrelationID must be set.
 type GetEmailStatusRequest struct {
-	SESMessageID  string `json:"ses_message_id,omitempty"`
-	CorrelationID string `json:"correlation_id,omitempty"`
+	EmailID string `json:"email_id"`
+}
+
+// GetEmailEngagementAnalyticsRequest is the payload for GetEmailEngagementAnalyticsSubject.
+type GetEmailEngagementAnalyticsRequest struct {
+	GroupID string `json:"group_id"`
+}
+
+// GetEmailEngagementAnalyticsResponse is the reply for GetEmailEngagementAnalyticsSubject.
+type GetEmailEngagementAnalyticsResponse struct {
+	GroupID   string `json:"group_id"`
+	TotalSent int    `json:"total_sent"`
+	Delivered int    `json:"delivered"`
+	Opened    int    `json:"opened"`
+	Failed    int    `json:"failed"`
 }

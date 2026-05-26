@@ -18,27 +18,25 @@ import (
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
-// SendEmailHandler handles inbound NATS requests on the lfx.email-service.send_email subject.
+// SendEmailHandler handles inbound NATS requests on the send_email subject.
 type SendEmailHandler struct {
-	sender  domain.Sender
-	kvStore natsgo.KeyValue
+	sender       domain.Sender
+	recipientsKV natsgo.KeyValue
+	groupIndexKV natsgo.KeyValue
 }
 
-// NewSendEmailHandler creates a SendEmailHandler backed by the given Sender.
-// kvStore may be nil; when non-nil a tracking record is written to the KV bucket after each send.
-func NewSendEmailHandler(sender domain.Sender, kvStore natsgo.KeyValue) *SendEmailHandler {
-	return &SendEmailHandler{sender: sender, kvStore: kvStore}
+// NewSendEmailHandler creates a SendEmailHandler.
+// recipientsKV and groupIndexKV may be nil; tracking is skipped when either is absent.
+func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo.KeyValue) *SendEmailHandler {
+	return &SendEmailHandler{sender: sender, recipientsKV: recipientsKV, groupIndexKV: groupIndexKV}
 }
 
-// Handle processes a single NATS message. It always calls msg.Respond so the
-// caller's RequestWithContext does not time out.
+// Handle processes a single NATS message.
 func (h *SendEmailHandler) Handle(ctx context.Context, msg *natsgo.Msg) {
 	h.HandleData(ctx, msg.Data, msg.Respond)
 }
 
-// HandleData is the core handler logic. respond is called exactly once with either
-// nil (success) or a JSON-encoded SendEmailErrorResponse (failure).
-// Separating this from Handle makes the logic unit-testable without a real NATS connection.
+// HandleData is the testable core: respond is called exactly once.
 func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond func([]byte) error) {
 	var req api.SendEmailRequest
 	if err := json.Unmarshal(data, &req); err != nil {
@@ -61,41 +59,73 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	ctx = logging.AppendCtx(ctx, slog.String("recipient", redaction.RedactEmail(req.To)))
 	ctx = logging.AppendCtx(ctx, slog.String("subject", req.Subject))
 
-	messageID, err := h.sender.Send(ctx, req)
+	emailID, groupID, err := h.sender.Send(ctx, req)
 	if err != nil {
 		slog.ErrorContext(ctx, "email send failed", logging.ErrKey, err)
 		replyError(ctx, respond, "email delivery failed")
 		return
 	}
 
-	if messageID != "" && h.kvStore != nil {
-		h.writeTrackingRecord(ctx, messageID, req)
+	if emailID != "" && h.recipientsKV != nil && h.groupIndexKV != nil {
+		h.writeTrackingRecords(ctx, emailID, groupID, req)
 	}
 
-	if err := respond(nil); err != nil {
+	resp, _ := json.Marshal(api.SendEmailResponse{EmailID: emailID, GroupID: groupID})
+	if err := respond(resp); err != nil {
 		slog.WarnContext(ctx, "failed to respond to NATS request", logging.ErrKey, err)
 	}
 }
 
-func (h *SendEmailHandler) writeTrackingRecord(ctx context.Context, messageID string, req api.SendEmailRequest) {
-	record := api.EmailTrackingRecord{
-		SESMessageID:  messageID,
-		CorrelationID: req.CorrelationID,
-		SourceService: req.SourceService,
-		To:            req.To,
-		Subject:       req.Subject,
-		SentAt:        time.Now().UTC(),
-		OpenCount:     0,
+func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, groupID string, req api.SendEmailRequest) {
+	record := api.EmailRecipientRecord{
+		GroupID: groupID,
+		EmailID: emailID,
+		To:      req.To,
+		Subject: req.Subject,
+		SentAt:  time.Now().UTC(),
 	}
 	b, err := json.Marshal(record)
 	if err != nil {
-		slog.WarnContext(ctx, "failed to marshal email tracking record", logging.ErrKey, err)
+		slog.WarnContext(ctx, "failed to marshal recipient record", logging.ErrKey, err)
 		return
 	}
-	key := "ses-message-id/" + messageID
-	if _, err := h.kvStore.Put(key, b); err != nil {
-		slog.WarnContext(ctx, "failed to write email tracking record to KV", logging.ErrKey, err, "key", key)
+	if _, err := h.recipientsKV.Put(emailID, b); err != nil {
+		slog.WarnContext(ctx, "failed to write recipient record to KV", logging.ErrKey, err, "email_id", emailID)
 	}
+
+	h.appendToGroupIndex(ctx, groupID, emailID)
+}
+
+// appendToGroupIndex adds emailID to the group's index entry with optimistic locking.
+// Retries once on write conflict.
+func (h *SendEmailHandler) appendToGroupIndex(ctx context.Context, groupID, emailID string) {
+	for attempt := range 2 {
+		var ids []string
+		var revision uint64
+
+		entry, err := h.groupIndexKV.Get(groupID)
+		if err == nil {
+			revision = entry.Revision()
+			_ = json.Unmarshal(entry.Value(), &ids)
+		}
+
+		ids = append(ids, emailID)
+		b, _ := json.Marshal(ids)
+
+		if entry == nil || err != nil {
+			_, err = h.groupIndexKV.Put(groupID, b)
+		} else {
+			_, err = h.groupIndexKV.Update(groupID, b, revision)
+		}
+
+		if err == nil {
+			return
+		}
+		if attempt == 0 {
+			slog.DebugContext(ctx, "group index write conflict, retrying", "group_id", groupID)
+		}
+	}
+	slog.WarnContext(ctx, "failed to update group index after retry", "group_id", groupID)
 }
 
 func replyError(ctx context.Context, respond func([]byte) error, reason string) {
