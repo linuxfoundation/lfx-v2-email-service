@@ -42,8 +42,11 @@ func sanitizeHeaderValue(v string) string {
 }
 
 // buildEmailMessage constructs a multipart/alternative MIME message (HTML + plain text).
-func buildEmailMessage(to, subject, htmlContent, textContent, from string) string {
-	messageID := generateMessageID(from)
+// Returns the Message-ID (without angle brackets) and the full MIME body.
+// When configurationSet is non-empty the X-SES-CONFIGURATION-SET header is included so
+// SES routes engagement events to the named configuration set.
+func buildEmailMessage(to, subject, htmlContent, textContent, from, configurationSet string) (messageID, body string) {
+	rawMessageID := generateMessageID(from)
 	boundary := generateBoundary()
 	var b strings.Builder
 
@@ -57,7 +60,10 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from string) strin
 	b.WriteString(fmt.Sprintf("To: %s\r\n", sanitizeHeaderValue(to)))
 	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(subject))))
 	b.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
-	b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
+	b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", rawMessageID))
+	if configurationSet != "" {
+		b.WriteString(fmt.Sprintf("X-SES-CONFIGURATION-SET: %s\r\n", sanitizeHeaderValue(configurationSet)))
+	}
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary))
 	b.WriteString("\r\n")
@@ -77,7 +83,10 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from string) strin
 	b.WriteString("\r\n")
 
 	b.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
-	return b.String()
+
+	// Strip angle brackets — callers use this as a KV key and map key.
+	messageID = strings.TrimPrefix(strings.TrimSuffix(rawMessageID, ">"), "<")
+	return messageID, b.String()
 }
 
 // sendMessage delivers a pre-built MIME message via SMTP.

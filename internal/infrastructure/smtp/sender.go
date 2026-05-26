@@ -17,11 +17,12 @@ const smtpTimeout = 30 * time.Second
 
 // Config holds SMTP connection parameters.
 type Config struct {
-	Host     string
-	Port     int
-	From     string
-	Username string
-	Password string
+	Host             string
+	Port             int
+	From             string
+	Username         string
+	Password         string
+	ConfigurationSet string
 }
 
 // SMTPSender sends emails via SMTP.
@@ -36,15 +37,16 @@ func NewSMTPSender(cfg Config) *SMTPSender {
 
 // Send renders and delivers an email via SMTP.
 // A 30-second deadline is applied to the blocking SMTP call.
-func (s *SMTPSender) Send(ctx context.Context, req api.SendEmailRequest) error {
+// Returns the Message-ID (without angle brackets) assigned to the sent email.
+func (s *SMTPSender) Send(ctx context.Context, req api.SendEmailRequest) (string, error) {
 	sendCtx, cancel := context.WithTimeout(ctx, smtpTimeout)
 	defer cancel()
 
-	msg := buildEmailMessage(req.To, req.Subject, req.HTML, req.Text, s.cfg.From)
+	messageID, msg := buildEmailMessage(req.To, req.Subject, req.HTML, req.Text, s.cfg.From, s.cfg.ConfigurationSet)
 	if err := sendMessage(sendCtx, req.To, msg, s.cfg); err != nil {
-		return fmt.Errorf("smtp send: %w", err)
+		return "", fmt.Errorf("smtp send: %w", err)
 	}
 
-	slog.DebugContext(ctx, "email sent successfully")
-	return nil
+	slog.DebugContext(ctx, "email sent successfully", "message_id", messageID)
+	return messageID, nil
 }

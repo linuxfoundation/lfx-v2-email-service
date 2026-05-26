@@ -74,6 +74,19 @@ app:
     # as {{ .Chart.Name }}. Override only if managing the secret out-of-band.
     smtpSecretName: "lfx-v2-email-service"
 
+  # ses is the configuration for SES engagement event tracking.
+  ses:
+    # configurationSetName is the SES v2 configuration set to attach to outbound emails
+    # via the X-SES-CONFIGURATION-SET header. When empty the header is omitted and
+    # engagement events are not captured. Set via the engagement config secret.
+    configurationSetName: ""
+    # engagementQueueURL is the SQS queue URL that receives SES engagement events.
+    # When empty the SQS poller is not started. Set via the engagement config secret.
+    engagementQueueURL: ""
+    # engagementSecretName is the Kubernetes Secret containing ses_configuration_set_name
+    # and sqs_queue_url. Created by ESO from /cloudops/ses-managed/email-service-engagement.
+    engagementSecretName: "lfx-v2-email-service-engagement"
+
   # extraEnv allows injecting additional environment variables into the container.
   # Supports both simple key-value pairs and Kubernetes field references.
   # These are rendered BEFORE OTEL variables, allowing use in OTEL configuration.

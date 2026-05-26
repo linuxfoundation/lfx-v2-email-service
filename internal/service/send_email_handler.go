@@ -8,8 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 
-	"github.com/nats-io/nats.go"
+	natsgo "github.com/nats-io/nats.go"
 
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
@@ -19,17 +20,19 @@ import (
 
 // SendEmailHandler handles inbound NATS requests on the lfx.email-service.send_email subject.
 type SendEmailHandler struct {
-	sender domain.Sender
+	sender  domain.Sender
+	kvStore natsgo.KeyValue
 }
 
 // NewSendEmailHandler creates a SendEmailHandler backed by the given Sender.
-func NewSendEmailHandler(sender domain.Sender) *SendEmailHandler {
-	return &SendEmailHandler{sender: sender}
+// kvStore may be nil; when non-nil a tracking record is written to the KV bucket after each send.
+func NewSendEmailHandler(sender domain.Sender, kvStore natsgo.KeyValue) *SendEmailHandler {
+	return &SendEmailHandler{sender: sender, kvStore: kvStore}
 }
 
 // Handle processes a single NATS message. It always calls msg.Respond so the
 // caller's RequestWithContext does not time out.
-func (h *SendEmailHandler) Handle(ctx context.Context, msg *nats.Msg) {
+func (h *SendEmailHandler) Handle(ctx context.Context, msg *natsgo.Msg) {
 	h.HandleData(ctx, msg.Data, msg.Respond)
 }
 
@@ -58,14 +61,40 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	ctx = logging.AppendCtx(ctx, slog.String("recipient", redaction.RedactEmail(req.To)))
 	ctx = logging.AppendCtx(ctx, slog.String("subject", req.Subject))
 
-	if err := h.sender.Send(ctx, req); err != nil {
+	messageID, err := h.sender.Send(ctx, req)
+	if err != nil {
 		slog.ErrorContext(ctx, "email send failed", logging.ErrKey, err)
 		replyError(ctx, respond, "email delivery failed")
 		return
 	}
 
+	if messageID != "" && h.kvStore != nil {
+		h.writeTrackingRecord(ctx, messageID, req)
+	}
+
 	if err := respond(nil); err != nil {
 		slog.WarnContext(ctx, "failed to respond to NATS request", logging.ErrKey, err)
+	}
+}
+
+func (h *SendEmailHandler) writeTrackingRecord(ctx context.Context, messageID string, req api.SendEmailRequest) {
+	record := api.EmailTrackingRecord{
+		SESMessageID:  messageID,
+		CorrelationID: req.CorrelationID,
+		SourceService: req.SourceService,
+		To:            req.To,
+		Subject:       req.Subject,
+		SentAt:        time.Now().UTC(),
+		OpenCount:     0,
+	}
+	b, err := json.Marshal(record)
+	if err != nil {
+		slog.WarnContext(ctx, "failed to marshal email tracking record", logging.ErrKey, err)
+		return
+	}
+	key := "ses-message-id/" + messageID
+	if _, err := h.kvStore.Put(key, b); err != nil {
+		slog.WarnContext(ctx, "failed to write email tracking record to KV", logging.ErrKey, err, "key", key)
 	}
 }
 

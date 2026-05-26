@@ -79,14 +79,25 @@ nats req lfx.email-service.send_email \
   '{"to":"test@example.com","subject":"Hello","html":"<p>Hi</p>","text":"Hi"}'
 ```
 
-## NATS Subject
+## NATS Subjects
+
+| Constant | Value | Direction |
+|---|---|---|
+| `api.SendEmailSubject` | `lfx.email-service.send_email` | request/reply — callers publish to this |
+| `api.QueueGroup` | `lfx.email-service.queue` | queue group for all subscriptions |
+| `api.EmailOpenedSubject` | `lfx.email-service.email-opened` | publish — fired on each open event |
+| `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | request/reply — returns `EmailTrackingRecord` JSON |
+
+All constants are in `pkg/api/nats.go`.
+
+## NATS KV
 
 | Constant | Value |
 |---|---|
-| `api.SendEmailSubject` | `lfx.email-service.send_email` |
-| `api.QueueGroup` | `lfx.email-service.queue` |
+| `api.EmailOpenTrackingKVBucket` | `email-open-tracking` |
 
-Both are in `pkg/api/nats.go`.
+Key scheme: `ses-message-id/<Message-ID>` where `<Message-ID>` is the value of the `Message-ID` MIME header
+without angle brackets. Value: JSON-encoded `api.EmailTrackingRecord`.
 
 ## Environment Variables
 
@@ -100,6 +111,8 @@ Both are in `pkg/api/nats.go`.
 | `SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | |
 | `SMTP_USERNAME` | _(empty)_ | From K8s Secret in production |
 | `SMTP_PASSWORD` | _(empty)_ | From K8s Secret in production |
+| `SES_CONFIGURATION_SET` | _(empty)_ | SES v2 configuration set name; when set adds `X-SES-CONFIGURATION-SET` header to outbound mail |
+| `SES_ENGAGEMENT_SQS_QUEUE_URL` | _(empty)_ | SQS queue URL for SES engagement events; when set starts the SQS long-poller |
 | `LOG_LEVEL` | `info` | |
 | `LOG_ADD_SOURCE` | `false` | `true` → include file/line in log entries |
 

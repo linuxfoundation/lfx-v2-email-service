@@ -17,15 +17,16 @@ import (
 )
 
 type mockSender struct {
-	called bool
-	req    api.SendEmailRequest
-	err    error
+	called    bool
+	req       api.SendEmailRequest
+	messageID string
+	err       error
 }
 
-func (m *mockSender) Send(_ context.Context, req api.SendEmailRequest) error {
+func (m *mockSender) Send(_ context.Context, req api.SendEmailRequest) (string, error) {
 	m.called = true
 	m.req = req
-	return m.err
+	return m.messageID, m.err
 }
 
 func TestSendEmailHandler_HandleData(t *testing.T) {
@@ -42,6 +43,12 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 		{
 			name:        "happy path",
 			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"},
+			wantSent:    true,
+			wantNilResp: true,
+		},
+		{
+			name:        "happy path with correlation id",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", CorrelationID: "corr-123", SourceService: "invite-service"},
 			wantSent:    true,
 			wantNilResp: true,
 		},
@@ -83,7 +90,8 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			t.Parallel()
 
 			sender := &mockSender{err: tc.senderErr}
-			handler := service.NewSendEmailHandler(sender)
+			// nil kvStore — no KV writes in unit tests
+			handler := service.NewSendEmailHandler(sender, nil)
 
 			var data []byte
 			switch v := tc.payload.(type) {

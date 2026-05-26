@@ -1,0 +1,14 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+---
+apiVersion: jetstream.nats.io/v1beta2
+kind: KeyValue
+metadata:
+  name: email-open-tracking
+  namespace: {{ .Release.Namespace }}
+spec:
+  bucket: email-open-tracking
+  history: 1
+  maxValueSize: 65536
+  storage: file
+  replicas: 1

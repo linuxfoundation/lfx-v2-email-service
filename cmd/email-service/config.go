@@ -17,10 +17,12 @@ var (
 )
 
 type environment struct {
-	NatsURL      string
-	Port         string
-	EmailEnabled bool
-	SMTP         smtpConfig
+	NatsURL              string
+	Port                 string
+	EmailEnabled         bool
+	SMTP                 smtpConfig
+	SESConfigurationSet  string
+	SESEngagementSQSURL  string
 }
 
 type smtpConfig struct {
@@ -65,9 +67,11 @@ func parseEnv() environment {
 	}
 
 	return environment{
-		NatsURL:      natsURL,
-		Port:         port,
-		EmailEnabled: emailEnabled,
+		NatsURL:             natsURL,
+		Port:                port,
+		EmailEnabled:        emailEnabled,
+		SESConfigurationSet: os.Getenv("SES_CONFIGURATION_SET"),
+		SESEngagementSQSURL: os.Getenv("SES_ENGAGEMENT_SQS_QUEUE_URL"),
 		SMTP: smtpConfig{
 			Host:     smtpHost,
 			Port:     smtpPort,

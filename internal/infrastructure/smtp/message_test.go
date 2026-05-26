@@ -14,12 +14,13 @@ import (
 func TestBuildEmailMessage_Headers(t *testing.T) {
 	t.Parallel()
 
-	msg := buildEmailMessage(
+	_, msg := buildEmailMessage(
 		"bob@example.com",
 		"Test Subject",
 		"<p>Hello Bob</p>",
 		"Hello Bob",
 		"noreply@lfx.linuxfoundation.org",
+		"",
 	)
 
 	assert.Contains(t, msg, "From: LFX Self Serve <noreply@lfx.linuxfoundation.org>")
@@ -31,13 +32,23 @@ func TestBuildEmailMessage_Headers(t *testing.T) {
 	assert.Contains(t, msg, "Date:")
 }
 
+func TestBuildEmailMessage_ConfigurationSetHeader(t *testing.T) {
+	t.Parallel()
+
+	_, msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "my-config-set")
+	assert.Contains(t, msg, "X-SES-CONFIGURATION-SET: my-config-set")
+
+	_, msgNoSet := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "")
+	assert.NotContains(t, msgNoSet, "X-SES-CONFIGURATION-SET")
+}
+
 func TestBuildEmailMessage_BothParts(t *testing.T) {
 	t.Parallel()
 
 	htmlBody := "<p>Hello Bob</p>"
 	textBody := "Hello Bob"
 
-	msg := buildEmailMessage("bob@example.com", "Subject", htmlBody, textBody, "from@example.com")
+	_, msg := buildEmailMessage("bob@example.com", "Subject", htmlBody, textBody, "from@example.com", "")
 
 	assert.Contains(t, msg, "Content-Type: text/plain; charset=UTF-8")
 	assert.Contains(t, msg, "Content-Type: text/html; charset=UTF-8")
@@ -45,10 +56,20 @@ func TestBuildEmailMessage_BothParts(t *testing.T) {
 	assert.Contains(t, msg, textBody)
 }
 
+func TestBuildEmailMessage_ReturnsMessageID(t *testing.T) {
+	t.Parallel()
+
+	msgID, _ := buildEmailMessage("bob@example.com", "Sub", "<b>x</b>", "x", "from@example.com", "")
+	assert.NotEmpty(t, msgID)
+	assert.NotContains(t, msgID, "<", "message ID should have angle brackets stripped")
+	assert.NotContains(t, msgID, ">", "message ID should have angle brackets stripped")
+	assert.Contains(t, msgID, "@")
+}
+
 func TestBuildEmailMessage_BoundaryPresent(t *testing.T) {
 	t.Parallel()
 
-	msg := buildEmailMessage("to@example.com", "Sub", "<b>x</b>", "x", "from@example.com")
+	_, msg := buildEmailMessage("to@example.com", "Sub", "<b>x</b>", "x", "from@example.com", "")
 
 	// multipart boundary must appear in the Content-Type header and as part separators
 	contentTypeLine := ""

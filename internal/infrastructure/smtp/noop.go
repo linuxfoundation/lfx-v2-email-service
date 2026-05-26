@@ -19,10 +19,11 @@ type NoOpSender struct{}
 func NewNoOpSender() *NoOpSender { return &NoOpSender{} }
 
 // Send logs the request and returns nil without sending anything.
-func (s *NoOpSender) Send(ctx context.Context, req api.SendEmailRequest) error {
+// Returns an empty message ID because no message is actually sent.
+func (s *NoOpSender) Send(ctx context.Context, req api.SendEmailRequest) (string, error) {
 	slog.InfoContext(ctx, "email send skipped (EMAIL_ENABLED=false)",
 		"to", redaction.RedactEmail(req.To),
 		"subject", req.Subject,
 	)
-	return nil
+	return "", nil
 }
