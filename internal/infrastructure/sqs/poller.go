@@ -6,6 +6,7 @@ package sqs
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -20,23 +21,34 @@ type MessageHandler func(ctx context.Context, msg types.Message) error
 
 // Poller long-polls an SQS queue and dispatches messages to a handler.
 type Poller struct {
-	client   *sqs.Client
-	queueURL string
-	handler  MessageHandler
+	client               *sqs.Client
+	queueURL             string
+	maxConsecutiveErrors int
+	handler              MessageHandler
 }
 
 // NewPoller creates a Poller that reads from queueURL.
-func NewPoller(client *sqs.Client, queueURL string, handler MessageHandler) *Poller {
-	return &Poller{client: client, queueURL: queueURL, handler: handler}
+// maxConsecutiveErrors is the number of consecutive ReceiveMessage failures allowed before
+// Run returns — the caller should treat a return from Run as a fatal condition and exit.
+func NewPoller(client *sqs.Client, queueURL string, maxConsecutiveErrors int, handler MessageHandler) *Poller {
+	return &Poller{
+		client:               client,
+		queueURL:             queueURL,
+		maxConsecutiveErrors: maxConsecutiveErrors,
+		handler:              handler,
+	}
 }
 
-// Run polls the queue until ctx is cancelled.
+// Run polls the queue until ctx is cancelled or consecutive errors exceed the limit.
 // Each iteration requests up to 10 messages with a 20-second long-poll wait.
-func (p *Poller) Run(ctx context.Context) {
+// Returns a non-nil error when the consecutive error limit is reached.
+func (p *Poller) Run(ctx context.Context) error {
+	consecutiveErrors := 0
+
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		default:
 		}
 
@@ -47,11 +59,21 @@ func (p *Poller) Run(ctx context.Context) {
 		})
 		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return nil
 			}
-			slog.ErrorContext(ctx, "sqs receive message failed", "error", err)
+			consecutiveErrors++
+			slog.ErrorContext(ctx, "sqs receive message failed",
+				"error", err,
+				"consecutive_errors", consecutiveErrors,
+				"max", p.maxConsecutiveErrors,
+			)
+			if consecutiveErrors >= p.maxConsecutiveErrors {
+				return fmt.Errorf("sqs poller aborting after %d consecutive errors: %w", consecutiveErrors, err)
+			}
 			continue
 		}
+
+		consecutiveErrors = 0
 
 		for _, msg := range output.Messages {
 			if err := p.handler(ctx, msg); err != nil {

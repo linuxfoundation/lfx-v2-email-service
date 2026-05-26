@@ -73,22 +73,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	if env.SESEngagementSQSURL != "" && recipientsKV != nil {
+	if env.SESEngagementSQSURL != "" {
 		awsCfg, err := config.LoadDefaultConfig(ctx)
 		if err != nil {
-			slog.Warn("failed to load AWS config, SQS poller disabled", logging.ErrKey, err)
-		} else {
-			sqsClient := awssqs.NewFromConfig(awsCfg)
-			engagementHandler := service.NewEngagementEventHandler(recipientsKV)
-			poller := sqsinfra.NewPoller(sqsClient, env.SESEngagementSQSURL, engagementHandler.Handle)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				slog.Info("SQS engagement poller started", "queue_url", env.SESEngagementSQSURL)
-				poller.Run(ctx)
-				slog.Info("SQS engagement poller stopped")
-			}()
+			slog.Error("failed to load AWS config for SQS poller", logging.ErrKey, err)
+			cancel()
+			os.Exit(1)
 		}
+		sqsClient := awssqs.NewFromConfig(awsCfg)
+		engagementHandler := service.NewEngagementEventHandler(recipientsKV)
+		poller := sqsinfra.NewPoller(sqsClient, env.SESEngagementSQSURL, 3, engagementHandler.Handle)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slog.Info("SQS engagement poller started", "queue_url", env.SESEngagementSQSURL)
+			if err := poller.Run(ctx); err != nil {
+				slog.Error("SQS engagement poller aborted, exiting", logging.ErrKey, err)
+				os.Exit(1)
+			}
+			slog.Info("SQS engagement poller stopped")
+		}()
 	}
 
 	httpServer := setupHTTPServer(env.Port, nc)
