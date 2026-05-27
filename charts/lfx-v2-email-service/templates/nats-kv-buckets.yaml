@@ -1,0 +1,28 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+{{- if .Values.natsKVBuckets.enabled }}
+---
+apiVersion: jetstream.nats.io/v1beta2
+kind: KeyValue
+metadata:
+  name: email-recipients
+  namespace: {{ .Release.Namespace }}
+spec:
+  bucket: email-recipients
+  history: 1
+  maxValueSize: 65536
+  storage: file
+  replicas: 1
+---
+apiVersion: jetstream.nats.io/v1beta2
+kind: KeyValue
+metadata:
+  name: email-group-index
+  namespace: {{ .Release.Namespace }}
+spec:
+  bucket: email-group-index
+  history: 1
+  maxValueSize: 1048576
+  storage: file
+  replicas: 1
+{{- end }}

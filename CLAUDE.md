@@ -79,14 +79,26 @@ nats req lfx.email-service.send_email \
   '{"to":"test@example.com","subject":"Hello","html":"<p>Hi</p>","text":"Hi"}'
 ```
 
-## NATS Subject
+## NATS Subjects
 
-| Constant | Value |
-|---|---|
-| `api.SendEmailSubject` | `lfx.email-service.send_email` |
-| `api.QueueGroup` | `lfx.email-service.queue` |
+| Constant | Value | Direction |
+|---|---|---|
+| `api.SendEmailSubject` | `lfx.email-service.send_email` | request/reply; reply is JSON `SendEmailResponse` |
+| `api.QueueGroup` | `lfx.email-service.queue` | queue group for all subscriptions |
+| `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | request/reply; payload `GetEmailStatusRequest` → `EmailRecipientRecord` |
+| `api.GetEmailEngagementAnalyticsSubject` | `lfx.email-service.get_email_engagement_analytics` | request/reply; payload `GetEmailEngagementAnalyticsRequest` → `GetEmailEngagementAnalyticsResponse` |
 
-Both are in `pkg/api/nats.go`.
+All constants are in `pkg/api/nats.go`.
+
+## NATS KV
+
+| Constant | Bucket | Key | Value |
+|---|---|---|---|
+| `api.EmailRecipientsKVBucket` | `email-recipients` | `<email_id>` (UUID per send) | JSON `EmailRecipientRecord` |
+| `api.EmailGroupIndexKVBucket` | `email-group-index` | `<group_id>` (UUID per campaign) | JSON `[]string` of `email_id`s |
+
+The `email_id` and `group_id` are returned to callers in `SendEmailResponse`.
+The `group_id` is optional in `SendEmailRequest` — if not provided the email service generates one.
 
 ## Environment Variables
 
@@ -100,6 +112,9 @@ Both are in `pkg/api/nats.go`.
 | `SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | |
 | `SMTP_USERNAME` | _(empty)_ | From K8s Secret in production |
 | `SMTP_PASSWORD` | _(empty)_ | From K8s Secret in production |
+| `SES_EVENTING_ENABLED` | `false` | `true`/`t`/`1` → start the SQS engagement event poller; fatal at startup if AWS config fails to load |
+| `SES_CONFIGURATION_SET` | _(empty)_ | SES v2 configuration set name; when set adds `X-SES-CONFIGURATION-SET` header to outbound mail |
+| `SES_ENGAGEMENT_SQS_QUEUE_URL` | _(empty)_ | SQS queue URL for SES engagement events; required when `SES_EVENTING_ENABLED=true` |
 | `LOG_LEVEL` | `info` | |
 | `LOG_ADD_SOURCE` | `false` | `true` → include file/line in log entries |
 

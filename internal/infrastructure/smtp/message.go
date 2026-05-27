@@ -42,7 +42,11 @@ func sanitizeHeaderValue(v string) string {
 }
 
 // buildEmailMessage constructs a multipart/alternative MIME message (HTML + plain text).
-func buildEmailMessage(to, subject, htmlContent, textContent, from string) string {
+// configurationSet, when non-empty, adds an X-SES-CONFIGURATION-SET header so SES routes
+// engagement events to the named configuration set.
+// trackingID, when non-empty, adds an X-LFX-TRACKING-ID header in the form group_id/email_id
+// so the SQS poller can correlate SES events back to the KV record.
+func buildEmailMessage(to, subject, htmlContent, textContent, from, configurationSet, trackingID string) string {
 	messageID := generateMessageID(from)
 	boundary := generateBoundary()
 	var b strings.Builder
@@ -58,6 +62,12 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from string) strin
 	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(subject))))
 	b.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
 	b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
+	if configurationSet != "" {
+		b.WriteString(fmt.Sprintf("X-SES-CONFIGURATION-SET: %s\r\n", sanitizeHeaderValue(configurationSet)))
+	}
+	if trackingID != "" {
+		b.WriteString(fmt.Sprintf("X-LFX-TRACKING-ID: %s\r\n", sanitizeHeaderValue(trackingID)))
+	}
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary))
 	b.WriteString("\r\n")

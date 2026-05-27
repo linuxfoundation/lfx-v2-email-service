@@ -61,6 +61,22 @@ spec:
                   key: smtp-password
                   optional: true
             {{- end }}
+            - name: SES_EVENTING_ENABLED
+              value: {{ .Values.app.ses.eventingEnabled | quote }}
+            {{- if .Values.app.ses.engagementSecretName }}
+            - name: SES_CONFIGURATION_SET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.ses.engagementSecretName }}
+                  key: ses_configuration_set_name
+                  optional: true
+            - name: SES_ENGAGEMENT_SQS_QUEUE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.ses.engagementSecretName }}
+                  key: sqs_queue_url
+                  optional: true
+            {{- end }}
             {{- with .Values.app.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

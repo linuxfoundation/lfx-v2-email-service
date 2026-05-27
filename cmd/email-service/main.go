@@ -12,13 +12,17 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	awssqs "github.com/aws/aws-sdk-go-v2/service/sqs"
 	natsgo "github.com/nats-io/nats.go"
 
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	smtpinfra "github.com/linuxfoundation/lfx-v2-email-service/internal/infrastructure/smtp"
+	sqsinfra "github.com/linuxfoundation/lfx-v2-email-service/internal/infrastructure/sqs"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/service"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
@@ -32,39 +36,83 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Build the email sender.
 	var sender domain.Sender
 	if env.EmailEnabled {
 		sender = smtpinfra.NewSMTPSender(smtpinfra.Config{
-			Host:     env.SMTP.Host,
-			Port:     env.SMTP.Port,
-			From:     env.SMTP.From,
-			Username: env.SMTP.Username,
-			Password: env.SMTP.Password,
+			Host:             env.SMTP.Host,
+			Port:             env.SMTP.Port,
+			From:             env.SMTP.From,
+			Username:         env.SMTP.Username,
+			Password:         env.SMTP.Password,
+			ConfigurationSet: env.SESConfigurationSet,
 		})
 		slog.Info("email sender ready", "smtp_host", env.SMTP.Host, "smtp_port", env.SMTP.Port)
+		if env.SESConfigurationSet != "" {
+			slog.Info("SES configuration set enabled", "configuration_set", env.SESConfigurationSet)
+		}
 	} else {
 		sender = smtpinfra.NewNoOpSender()
 		slog.Info("email sending disabled (EMAIL_ENABLED=false)")
 	}
 
-	sendEmailHandler := service.NewSendEmailHandler(sender)
-
-	// Connect to NATS.
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	var wg sync.WaitGroup
-	wg.Add(2) // HTTP server + NATS drain
 
-	nc, err := setupNATS(ctx, env.NatsURL, sendEmailHandler, &wg, done)
+	nc, recipientsKV, groupIndexKV, err := setupNATSAndKV(ctx, env.NatsURL)
 	if err != nil {
 		slog.Error("failed to connect to NATS", logging.ErrKey, err)
 		cancel()
 		os.Exit(1)
 	}
 
-	// Start health HTTP server.
+	wg.Add(2) // HTTP server + NATS drain
+	if err := subscribeHandlers(ctx, nc, sender, recipientsKV, groupIndexKV, &wg, done); err != nil {
+		slog.Error("failed to subscribe NATS handlers", logging.ErrKey, err)
+		cancel()
+		os.Exit(1)
+	}
+
+	var pollerAborted atomic.Bool
+
+	if env.SESEventingEnabled {
+		if env.SESEngagementSQSURL == "" {
+			slog.Error("SES_EVENTING_ENABLED is true but SES_ENGAGEMENT_SQS_QUEUE_URL is not set")
+			cancel()
+			os.Exit(1)
+		}
+		if recipientsKV == nil {
+			slog.Error("SES_EVENTING_ENABLED is true but NATS KV (email-recipients bucket) is unavailable")
+			cancel()
+			os.Exit(1)
+		}
+		awsCfg, err := config.LoadDefaultConfig(ctx)
+		if err != nil {
+			slog.Error("failed to load AWS config for SQS poller", logging.ErrKey, err)
+			cancel()
+			os.Exit(1)
+		}
+		sqsClient := awssqs.NewFromConfig(awsCfg)
+		engagementHandler := service.NewEngagementEventHandler(recipientsKV)
+		poller := sqsinfra.NewPoller(sqsClient, env.SESEngagementSQSURL, 3, engagementHandler.Handle)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slog.Info("SQS engagement poller started", "queue_url", env.SESEngagementSQSURL)
+			if err := poller.Run(ctx); err != nil {
+				slog.Error("SQS engagement poller aborted, requesting shutdown", logging.ErrKey, err)
+				pollerAborted.Store(true)
+				cancel()
+				select {
+				case done <- syscall.SIGTERM:
+				default:
+				}
+			}
+			slog.Info("SQS engagement poller stopped")
+		}()
+	}
+
 	httpServer := setupHTTPServer(env.Port, nc)
 	go func() {
 		slog.Info("HTTP health server listening", "port", env.Port)
@@ -73,13 +121,11 @@ func main() {
 		}
 	}()
 
-	// Wait for shutdown signal.
 	<-done
 	slog.Info("shutdown signal received")
 
 	cancel()
 
-	// Shutdown HTTP server.
 	go func() {
 		defer wg.Done()
 		shutCtx, shutCancel := context.WithTimeout(context.Background(), gracefulShutdownSeconds*time.Second)
@@ -88,7 +134,6 @@ func main() {
 		slog.Info("HTTP server stopped")
 	}()
 
-	// Drain NATS.
 	if !nc.IsClosed() && !nc.IsDraining() {
 		slog.Info("draining NATS connection")
 		_ = nc.Drain()
@@ -96,14 +141,12 @@ func main() {
 
 	wg.Wait()
 	slog.Info("email service stopped")
+	if pollerAborted.Load() {
+		os.Exit(1)
+	}
 }
 
-func setupNATS(ctx context.Context, natsURL string, handler *service.SendEmailHandler, wg *sync.WaitGroup, done chan os.Signal) (*natsgo.Conn, error) {
-	// msgCtx is a separate context for in-flight message handling. It is not
-	// cancelled until the NATS connection closes (after drain), so messages
-	// that arrive during the drain window are still processed fully.
-	msgCtx, msgCancel := context.WithCancel(context.Background())
-
+func setupNATSAndKV(ctx context.Context, natsURL string) (*natsgo.Conn, natsgo.KeyValue, natsgo.KeyValue, error) {
 	nc, err := natsgo.Connect(
 		natsURL,
 		natsgo.DrainTimeout(gracefulShutdownSeconds*time.Second),
@@ -117,32 +160,84 @@ func setupNATS(ctx context.Context, natsURL string, handler *service.SendEmailHa
 				slog.Error("async NATS error", logging.ErrKey, err)
 			}
 		}),
-		natsgo.ClosedHandler(func(_ *natsgo.Conn) {
-			msgCancel()
-			if ctx.Err() == nil {
-				slog.Error("NATS connection closed unexpectedly")
-				select {
-				case done <- syscall.SIGTERM:
-				default:
-				}
-			}
-			wg.Done()
-		}),
 	)
 	if err != nil {
-		msgCancel()
-		return nil, fmt.Errorf("nats connect: %w", err)
+		return nil, nil, nil, fmt.Errorf("nats connect: %w", err)
 	}
 
-	_, err = nc.QueueSubscribe(api.SendEmailSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-		handler.Handle(msgCtx, msg)
-	})
+	js, err := nc.JetStream()
 	if err != nil {
-		return nil, fmt.Errorf("nats subscribe: %w", err)
+		slog.Warn("JetStream not available, KV tracking disabled", logging.ErrKey, err)
+		return nc, nil, nil, nil
 	}
 
+	recipientsKV, err := js.KeyValue(api.EmailRecipientsKVBucket)
+	if err != nil {
+		slog.Warn("KV bucket not found, tracking disabled", "bucket", api.EmailRecipientsKVBucket, logging.ErrKey, err)
+		return nc, nil, nil, nil
+	}
+
+	groupIndexKV, err := js.KeyValue(api.EmailGroupIndexKVBucket)
+	if err != nil {
+		slog.Warn("KV bucket not found, tracking disabled", "bucket", api.EmailGroupIndexKVBucket, logging.ErrKey, err)
+		return nc, nil, nil, nil
+	}
+
+	return nc, recipientsKV, groupIndexKV, nil
+}
+
+func subscribeHandlers(
+	ctx context.Context,
+	nc *natsgo.Conn,
+	sender domain.Sender,
+	recipientsKV, groupIndexKV natsgo.KeyValue,
+	wg *sync.WaitGroup,
+	done chan os.Signal,
+) error {
+	msgCtx, msgCancel := context.WithCancel(context.Background())
+
+	nc.SetClosedHandler(func(_ *natsgo.Conn) {
+		msgCancel()
+		if ctx.Err() == nil {
+			slog.Error("NATS connection closed unexpectedly")
+			select {
+			case done <- syscall.SIGTERM:
+			default:
+			}
+		}
+		wg.Done()
+	})
+
+	sendHandler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV)
+	if _, err := nc.QueueSubscribe(api.SendEmailSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+		sendHandler.Handle(msgCtx, msg)
+	}); err != nil {
+		msgCancel()
+		return fmt.Errorf("nats subscribe %s: %w", api.SendEmailSubject, err)
+	}
 	slog.Info("subscribed to NATS subject", "subject", api.SendEmailSubject, "queue", api.QueueGroup)
-	return nc, nil
+
+	if recipientsKV != nil && groupIndexKV != nil {
+		statusHandler := service.NewGetEmailStatusHandler(recipientsKV)
+		if _, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+			statusHandler.Handle(msgCtx, msg)
+		}); err != nil {
+			msgCancel()
+			return fmt.Errorf("nats subscribe %s: %w", api.GetEmailStatusSubject, err)
+		}
+		slog.Info("subscribed to NATS subject", "subject", api.GetEmailStatusSubject)
+
+		analyticsHandler := service.NewGetEmailEngagementAnalyticsHandler(recipientsKV, groupIndexKV)
+		if _, err := nc.QueueSubscribe(api.GetEmailEngagementAnalyticsSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+			analyticsHandler.Handle(msgCtx, msg)
+		}); err != nil {
+			msgCancel()
+			return fmt.Errorf("nats subscribe %s: %w", api.GetEmailEngagementAnalyticsSubject, err)
+		}
+		slog.Info("subscribed to NATS subject", "subject", api.GetEmailEngagementAnalyticsSubject)
+	}
+
+	return nil
 }
 
 func setupHTTPServer(port string, nc *natsgo.Conn) *http.Server {
