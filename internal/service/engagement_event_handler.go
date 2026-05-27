@@ -20,7 +20,8 @@ import (
 
 // snsEnvelope is the outer SNS notification wrapper around the SES event JSON.
 type snsEnvelope struct {
-	Message string `json:"Message"`
+	MessageID string `json:"MessageId"`
+	Message   string `json:"Message"`
 }
 
 // sesEvent is the parsed SES engagement event.
@@ -120,7 +121,7 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 			return nil
 		}
 
-		applyEngagementEvent(&record, eventType, event)
+		applyEngagementEvent(&record, eventType, env.MessageID, event)
 
 		updated, err := json.Marshal(record)
 		if err != nil {
@@ -145,17 +146,25 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 
 // applyEngagementEvent updates record fields based on the SES event type,
 // using SES-provided timestamps when available and falling back to time.Now().
-func applyEngagementEvent(record *api.EmailRecipientRecord, eventType string, event sesEvent) {
+// snsMessageID is used to deduplicate replayed open events.
+func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessageID string, event sesEvent) {
 	switch eventType {
 	case "OPEN":
-		if !record.Opened {
-			var ts string
-			if event.Open != nil {
-				ts = event.Open.Timestamp
+		for _, e := range record.OpenedAtList {
+			if e.EventID == snsMessageID {
+				return // already processed this SNS delivery
 			}
-			t := parseTimestamp(ts)
-			record.Opened = true
-			record.OpenedAt = &t
+		}
+		var ts string
+		if event.Open != nil {
+			ts = event.Open.Timestamp
+		}
+		t := parseTimestamp(ts)
+		record.Opened = true
+		record.OpenedAtList = append(record.OpenedAtList, api.OpenEvent{EventID: snsMessageID, OpenedAt: t})
+		record.OpenCount = len(record.OpenedAtList)
+		if record.LastOpenedAt == nil || t.After(*record.LastOpenedAt) {
+			record.LastOpenedAt = &t
 		}
 	case "DELIVERY":
 		if !record.Delivered {
