@@ -55,27 +55,19 @@ type SendEmailErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// OpenEvent records a single open of an email, keyed by the SNS MessageId so
-// replayed deliveries can be deduplicated.
-type OpenEvent struct {
-	EventID  string    `json:"event_id"`
-	OpenedAt time.Time `json:"opened_at"`
-}
-
 // EmailRecipientRecord is the value stored in EmailRecipientsKVBucket, keyed by email_id.
 type EmailRecipientRecord struct {
-	GroupID      string      `json:"group_id"`
-	EmailID      string      `json:"email_id"`
-	To           string      `json:"to"`
-	Subject      string      `json:"subject"`
-	SentAt       time.Time   `json:"sent_at"`
-	Delivered    bool        `json:"delivered"`
-	DeliveredAt  *time.Time  `json:"delivered_at,omitempty"`
-	Opened       bool        `json:"opened"`
-	OpenedAtList []OpenEvent `json:"opened_at_list,omitempty"`
-	LastOpenedAt *time.Time  `json:"last_opened_at,omitempty"`
-	Failed       bool        `json:"failed"`
-	FailedAt     *time.Time  `json:"failed_at,omitempty"`
+	GroupID     string     `json:"group_id"`
+	EmailID     string     `json:"email_id"`
+	To          string     `json:"to"`
+	Subject     string     `json:"subject"`
+	SentAt      time.Time  `json:"sent_at"`
+	Delivered   bool       `json:"delivered"`
+	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
+	Opened      bool       `json:"opened"`
+	OpenedAt    *time.Time `json:"opened_at,omitempty"`
+	Failed      bool       `json:"failed"`
+	FailedAt    *time.Time `json:"failed_at,omitempty"`
 }
 
 // GetEmailStatusRequest is the payload for GetEmailStatusSubject.

@@ -85,16 +85,10 @@ Exactly one of `email_id` or `group_id` must be provided.
   "delivered": true,
   "delivered_at": "2025-01-15T10:30:02Z",
   "opened": true,
-  "opened_at_list": [
-    { "event_id": "abc-sns-message-id-1", "opened_at": "2025-01-15T11:05:33Z" },
-    { "event_id": "abc-sns-message-id-2", "opened_at": "2025-01-15T14:22:10Z" }
-  ],
-  "last_opened_at": "2025-01-15T14:22:10Z",
+  "opened_at": "2025-01-15T11:05:33Z",
   "failed": false
 }
 ```
-
-`opened_at_list` contains one entry per unique open event (keyed by SNS `MessageId` to survive replays). Use `len(opened_at_list)` for the open count.
 
 **Success response — by `group_id`** — an array of `EmailRecipientRecord`:
 ```json
