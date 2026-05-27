@@ -72,6 +72,7 @@ type EmailRecipientRecord struct {
 	Delivered    bool        `json:"delivered"`
 	DeliveredAt  *time.Time  `json:"delivered_at,omitempty"`
 	Opened       bool        `json:"opened"`
+	OpenCount    int         `json:"open_count"`
 	OpenedAtList []OpenEvent `json:"opened_at_list,omitempty"`
 	LastOpenedAt *time.Time  `json:"last_opened_at,omitempty"`
 	Failed       bool        `json:"failed"`
