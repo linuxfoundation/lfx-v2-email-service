@@ -1,5 +1,6 @@
 # Copyright The Linux Foundation and each contributor to LFX.
 # SPDX-License-Identifier: MIT
+{{- if .Values.natsKVBuckets.enabled }}
 ---
 apiVersion: jetstream.nats.io/v1beta2
 kind: KeyValue
@@ -24,3 +25,4 @@ spec:
   maxValueSize: 1048576
   storage: file
   replicas: 1
+{{- end }}

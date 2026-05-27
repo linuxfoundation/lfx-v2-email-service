@@ -132,6 +132,12 @@ app:
     # (default: "tracecontext,baggage")
     propagators: "tracecontext,baggage,jaeger"
 
+# natsKVBuckets controls whether the JetStream KeyValue CRs are rendered.
+# Set to false in environments where the NATS JetStream operator CRDs are not
+# installed — the service will still start but KV tracking will be disabled.
+natsKVBuckets:
+  enabled: true
+
 # nats is the configuration for the NATS server
 nats:
   # url is the URL of the NATS server

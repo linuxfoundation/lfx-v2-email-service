@@ -164,16 +164,19 @@ func main() {
 		panic(err)
 	}
 
-	var resp emailapi.SendEmailResponse
-	if err := json.Unmarshal(reply.Data, &resp); err == nil && resp.EmailID != "" {
-		fmt.Println("sent, email_id:", resp.EmailID)
+	// Check for an error response first — SendEmailErrorResponse and
+	// SendEmailResponse are distinguished by the presence of the "error" field.
+	var errResp emailapi.SendEmailErrorResponse
+	if err := json.Unmarshal(reply.Data, &errResp); err == nil && errResp.Error != "" {
+		fmt.Println("send failed:", errResp.Error)
 		return
 	}
 
-	var errResp emailapi.SendEmailErrorResponse
-	if err := json.Unmarshal(reply.Data, &errResp); err == nil {
-		fmt.Println("send failed:", errResp.Error)
+	var resp emailapi.SendEmailResponse
+	if err := json.Unmarshal(reply.Data, &resp); err != nil {
+		panic(err)
 	}
+	fmt.Println("sent, email_id:", resp.EmailID)
 }
 ```
 

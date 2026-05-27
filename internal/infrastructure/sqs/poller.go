@@ -71,7 +71,7 @@ func (p *Poller) Run(ctx context.Context) error {
 			if consecutiveErrors >= p.maxConsecutiveErrors {
 				return fmt.Errorf("sqs poller aborting after %d consecutive errors: %w", consecutiveErrors, err)
 			}
-			// Exponential backoff capped at 30s to avoid hot-looping on persistent failures.
+			// Linear backoff (1s × consecutive errors) capped at 30s to avoid hot-looping on persistent failures.
 			backoff := time.Duration(consecutiveErrors) * time.Second
 			if backoff > 30*time.Second {
 				backoff = 30 * time.Second

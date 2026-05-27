@@ -92,6 +92,7 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 	}
 	if _, err := h.recipientsKV.Put(emailID, b); err != nil {
 		slog.WarnContext(ctx, "failed to write recipient record to KV", logging.ErrKey, err, "email_id", emailID)
+		return
 	}
 
 	if groupID != "" {
@@ -103,6 +104,7 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 // Retries once on write conflict. Distinguishes ErrKeyNotFound from transient errors
 // so a Get failure does not silently overwrite the existing index.
 func (h *SendEmailHandler) appendToGroupIndex(ctx context.Context, groupID, emailID string) {
+	var writeErr error
 	for attempt := range 2 {
 		var ids []string
 		var revision uint64
@@ -126,7 +128,6 @@ func (h *SendEmailHandler) appendToGroupIndex(ctx context.Context, groupID, emai
 		ids = append(ids, emailID)
 		b, _ := json.Marshal(ids)
 
-		var writeErr error
 		if isNew {
 			_, writeErr = h.groupIndexKV.Put(groupID, b)
 		} else {
@@ -140,7 +141,7 @@ func (h *SendEmailHandler) appendToGroupIndex(ctx context.Context, groupID, emai
 			slog.DebugContext(ctx, "group index write conflict, retrying", "group_id", groupID)
 		}
 	}
-	slog.WarnContext(ctx, "failed to update group index after retry", "group_id", groupID)
+	slog.WarnContext(ctx, "failed to update group index after retry", "group_id", groupID, logging.ErrKey, writeErr)
 }
 
 func replyError(ctx context.Context, respond func([]byte) error, reason string) {

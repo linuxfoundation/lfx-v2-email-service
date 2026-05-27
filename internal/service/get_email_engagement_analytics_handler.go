@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 
 	natsgo "github.com/nats-io/nats.go"
@@ -41,8 +42,13 @@ func (h *GetEmailEngagementAnalyticsHandler) Handle(ctx context.Context, msg *na
 
 	entry, err := h.groupIndexKV.Get(req.GroupID)
 	if err != nil {
-		slog.DebugContext(ctx, "group index not found", "group_id", req.GroupID)
-		respondErrorMsg(msg, "not found")
+		if errors.Is(err, natsgo.ErrKeyNotFound) {
+			slog.DebugContext(ctx, "group index not found", "group_id", req.GroupID)
+			respondErrorMsg(msg, "not found")
+		} else {
+			slog.ErrorContext(ctx, "failed to read group index from KV", logging.ErrKey, err, "group_id", req.GroupID)
+			respondErrorMsg(msg, "internal error")
+		}
 		return
 	}
 

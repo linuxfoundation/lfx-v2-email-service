@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -130,7 +131,7 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 		}
 	}
 	slog.WarnContext(ctx, "failed to update recipient record after retry", "email_id", emailID)
-	return nil
+	return fmt.Errorf("kv update conflict unresolved for email_id %s", emailID)
 }
 
 // applyEngagementEvent updates record fields based on the SES event type,
@@ -193,12 +194,13 @@ func parseTimestamp(s string) time.Time {
 }
 
 // extractEmailID finds the X-LFX-TRACKING-ID header (format: group_id/email_id)
-// and returns the email_id portion (everything after the first '/').
+// and returns the email_id portion (everything after the last '/').
+// Splitting on the last '/' means a group_id that itself contains '/' is handled safely.
 func extractEmailID(headers []sesHeader) string {
 	for _, h := range headers {
 		if strings.EqualFold(h.Name, "X-LFX-TRACKING-ID") {
 			v := strings.TrimSpace(h.Value)
-			if idx := strings.Index(v, "/"); idx != -1 {
+			if idx := strings.LastIndex(v, "/"); idx != -1 {
 				return v[idx+1:]
 			}
 			return v

@@ -31,7 +31,8 @@ func (e *kvEntry) Created() time.Time           { return time.Time{} }
 func (e *kvEntry) Operation() natsgo.KeyValueOp { return natsgo.KeyValuePut }
 
 // KeyValue is a thread-safe in-memory mock that satisfies natsgo.KeyValue.
-// Only Get, Put, and Update are functional; other methods are no-ops.
+// Get, Put, Update, and PutString are functional. All other methods return an
+// "not implemented" error — they exist only to satisfy the interface.
 type KeyValue struct {
 	mu      sync.RWMutex
 	entries map[string]*kvEntry
