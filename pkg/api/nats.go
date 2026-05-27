@@ -41,9 +41,7 @@ type SendEmailRequest struct {
 	Subject       string `json:"subject"`
 	HTML          string `json:"html"`
 	Text          string `json:"text"`
-	GroupID       string `json:"group_id,omitempty"`
-	CorrelationID string `json:"correlation_id,omitempty"`
-	SourceService string `json:"source_service,omitempty"`
+	GroupID string `json:"group_id,omitempty"`
 }
 
 // SendEmailResponse is the JSON payload returned in the NATS reply on success.

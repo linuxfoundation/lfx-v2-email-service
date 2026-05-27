@@ -20,9 +20,7 @@ complaints) in NATS KV.
 | `subject` | string | yes | Email subject line |
 | `html` | string | yes | HTML body — callers render this before publishing |
 | `text` | string | yes | Plain-text body — shown by clients that don't render HTML |
-| `group_id` | string | no | Caller-supplied ID grouping related emails (e.g. an invite batch). Used as the key in the group index KV bucket. |
-| `correlation_id` | string | no | Opaque caller reference stored in the recipient record for later lookup |
-| `source_service` | string | no | Name of the publishing service, stored in the recipient record |
+| `group_id` | string | no | Caller-supplied ID grouping related emails (e.g. an invite batch). Use it to query aggregate engagement counts via [`lfx.email-service.get_email_engagement_analytics`](#query-group-engagement-analytics). If omitted, a UUID is generated and returned but is not meaningful for analytics. |
 
 ```json
 {
@@ -30,8 +28,7 @@ complaints) in NATS KV.
   "subject": "You've been added as a Writer on Demo Project",
   "html": "<html>...</html>",
   "text": "You've been added as a Writer on Demo Project.",
-  "group_id": "invite-batch-abc123",
-  "source_service": "invite-service"
+  "group_id": "invite-batch-abc123"
 }
 ```
 
@@ -93,7 +90,21 @@ is configured (JetStream enabled and both KV buckets exist).
 They remain `false` until the poller is enabled and the corresponding SES event
 arrives.
 
-**Error response:** `{ "error": "not found" }` when the `email_id` has no record.
+**Error response:**
+```json
+{ "error": "<reason>" }
+```
+
+| `error` value | Cause |
+|---|---|
+| `invalid request payload` | Request body is not valid JSON or `email_id` is missing |
+| `not found` | No record exists for the given `email_id` |
+
+**Example (NATS CLI):**
+```bash
+nats req lfx.email-service.get_email_status \
+  '{"email_id":"550e8400-e29b-41d4-a716-446655440000"}'
+```
 
 ### Query group engagement analytics
 
@@ -118,7 +129,23 @@ NATS KV is configured.
 }
 ```
 
-### Send from Go
+**Error response:**
+```json
+{ "error": "<reason>" }
+```
+
+| `error` value | Cause |
+|---|---|
+| `invalid request payload` | Request body is not valid JSON or `group_id` is missing |
+| `not found` | No emails have been sent under the given `group_id` |
+
+**Example (NATS CLI):**
+```bash
+nats req lfx.email-service.get_email_engagement_analytics \
+  '{"group_id":"invite-batch-abc123"}'
+```
+
+### Use with Go
 
 The `pkg/api` package exports subject constants and request/response types.
 
@@ -146,18 +173,18 @@ func main() {
 	}
 	defer nc.Close()
 
-	req := emailapi.SendEmailRequest{
-		To:            "user@example.com",
-		Subject:       "You've been added",
-		HTML:          "<p>Hello</p>",
-		Text:          "Hello",
-		GroupID:       "my-batch-id",
-		SourceService: "my-service",
-	}
-	data, _ := json.Marshal(req)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// Send an email.
+	req := emailapi.SendEmailRequest{
+		To:      "user@example.com",
+		Subject: "You've been added",
+		HTML:    "<p>Hello</p>",
+		Text:    "Hello",
+		GroupID: "my-batch-id",
+	}
+	data, _ := json.Marshal(req)
 
 	reply, err := nc.RequestWithContext(ctx, emailapi.SendEmailSubject, data)
 	if err != nil {
@@ -172,54 +199,38 @@ func main() {
 		return
 	}
 
-	var resp emailapi.SendEmailResponse
-	if err := json.Unmarshal(reply.Data, &resp); err != nil {
+	var sendResp emailapi.SendEmailResponse
+	if err := json.Unmarshal(reply.Data, &sendResp); err != nil {
 		panic(err)
 	}
-	fmt.Println("sent, email_id:", resp.EmailID)
+	fmt.Println("sent, email_id:", sendResp.EmailID)
+
+	// Query the delivery/open status of the email we just sent.
+	statusReq, _ := json.Marshal(emailapi.GetEmailStatusRequest{EmailID: sendResp.EmailID})
+	statusReply, err := nc.RequestWithContext(ctx, emailapi.GetEmailStatusSubject, statusReq)
+	if err != nil {
+		panic(err)
+	}
+	var record emailapi.EmailRecipientRecord
+	if err := json.Unmarshal(statusReply.Data, &record); err != nil {
+		panic(err)
+	}
+	fmt.Printf("status: delivered=%v opened=%v failed=%v\n", record.Delivered, record.Opened, record.Failed)
+
+	// Query aggregate engagement counts for the whole group.
+	analyticsReq, _ := json.Marshal(emailapi.GetEmailEngagementAnalyticsRequest{GroupID: sendResp.GroupID})
+	analyticsReply, err := nc.RequestWithContext(ctx, emailapi.GetEmailEngagementAnalyticsSubject, analyticsReq)
+	if err != nil {
+		panic(err)
+	}
+	var analytics emailapi.GetEmailEngagementAnalyticsResponse
+	if err := json.Unmarshal(analyticsReply.Data, &analytics); err != nil {
+		panic(err)
+	}
+	fmt.Printf("group analytics: sent=%d delivered=%d opened=%d failed=%d\n",
+		analytics.TotalSent, analytics.Delivered, analytics.Opened, analytics.Failed)
 }
 ```
-
-## SES Engagement Event Tracking
-
-The service optionally captures SES engagement events (open, delivery, bounce,
-complaint) and stores them in NATS KV so callers can query whether their emails
-were opened or delivered.
-
-### How it works
-
-1. **Send time**: `SendEmailHandler` injects two MIME headers into every outbound email:
-   - `X-SES-CONFIGURATION-SET: <name>` — routes SES events to the configured event destination
-   - `X-LFX-TRACKING-ID: <group_id>/<email_id>` — a stable key SES echoes back in every engagement event
-
-2. **KV write on send**: After each successful SMTP delivery the handler writes an
-   `EmailRecipientRecord` to the `email-recipients` NATS KV bucket (key: `email_id`)
-   and appends the `email_id` to the caller's group in the `email-group-index` bucket
-   (key: `group_id`). Both writes use optimistic locking with a single retry on conflict.
-
-3. **SES event pipeline**: SES → SNS topic → SQS queue. The email service polls
-   the SQS queue in a background goroutine.
-
-4. **Poller**: `internal/infrastructure/sqs.Poller` long-polls the queue (20-second
-   wait, up to 10 messages per call) using AWS SDK v2 with IRSA credentials.
-   On consecutive `ReceiveMessage` failures it applies exponential backoff (capped
-   at 30 s) and aborts after 3 consecutive errors, triggering graceful shutdown.
-
-5. **Event handler**: `EngagementEventHandler` parses each SNS-wrapped SES event,
-   extracts the `email_id` from `X-LFX-TRACKING-ID`, looks up the KV record, updates
-   the relevant fields using SES-provided RFC3339 timestamps, and writes back with
-   optimistic locking. Unrecognised event types and missing records are silently skipped.
-
-### Enabling the poller
-
-Set `SES_EVENTING_ENABLED=true`. The service then requires both
-`SES_ENGAGEMENT_SQS_QUEUE_URL` and a reachable NATS KV — missing either is a **fatal
-startup error** (the pod exits without restarting rather than looping).
-
-The AWS-side infrastructure (SES configuration set, SNS topic, SQS queue) is
-provisioned separately in `lfx-v2-opentofu`. The Helm chart reads the configuration
-set name and queue URL from a Kubernetes Secret created by External Secrets Operator
-(secret name configured via `app.ses.engagementSecretName` in `values.yaml`).
 
 ## Quick Start
 
@@ -335,6 +346,47 @@ All commits must be signed off per the [DCO](https://developercertificate.org/):
 ```bash
 git commit -s -m "feat: ..."
 ```
+
+## SES Engagement Event Tracking
+
+The service optionally captures SES engagement events (open, delivery, bounce,
+complaint) and stores them in NATS KV so callers can query whether their emails
+were opened or delivered.
+
+### How it works
+
+1. **Send time**: `SendEmailHandler` injects two MIME headers into every outbound email:
+   - `X-SES-CONFIGURATION-SET: <name>` — routes SES events to the configured event destination
+   - `X-LFX-TRACKING-ID: <group_id>/<email_id>` — a stable key SES echoes back in every engagement event
+
+2. **KV write on send**: After each successful SMTP delivery the handler writes an
+   `EmailRecipientRecord` to the `email-recipients` NATS KV bucket (key: `email_id`)
+   and appends the `email_id` to the caller's group in the `email-group-index` bucket
+   (key: `group_id`). Both writes use optimistic locking with a single retry on conflict.
+
+3. **SES event pipeline**: SES → SNS topic → SQS queue. The email service polls
+   the SQS queue in a background goroutine.
+
+4. **Poller**: `internal/infrastructure/sqs.Poller` long-polls the queue (20-second
+   wait, up to 10 messages per call) using AWS SDK v2 with IRSA credentials.
+   On consecutive `ReceiveMessage` failures it applies exponential backoff (capped
+   at 30 s) and aborts after 3 consecutive errors, triggering graceful shutdown.
+
+5. **Event handler**: `EngagementEventHandler` parses each SNS-wrapped SES event,
+   extracts the `email_id` from `X-LFX-TRACKING-ID`, looks up the KV record, updates
+   the relevant fields using SES-provided RFC3339 timestamps, and writes back with
+   optimistic locking. Unrecognised event types and missing records are silently skipped.
+
+### Enabling the poller
+
+Set `SES_EVENTING_ENABLED=true`. The service then requires both
+`SES_ENGAGEMENT_SQS_QUEUE_URL` and a reachable NATS KV — missing either is a **fatal
+startup error** (the pod exits without restarting rather than looping).
+
+The AWS-side infrastructure (SES configuration set, SNS topic, SQS queue) is
+provisioned separately in `lfx-v2-opentofu`. The Helm chart reads the configuration
+set name and queue URL from a Kubernetes Secret created by External Secrets Operator
+(secret name configured via `app.ses.engagementSecretName` in `values.yaml`).
 
 ## License
 
