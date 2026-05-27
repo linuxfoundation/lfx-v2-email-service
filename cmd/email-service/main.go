@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -73,7 +74,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	var pollerAborted atomic.Bool
+
 	if env.SESEventingEnabled {
+		if env.SESEngagementSQSURL == "" {
+			slog.Error("SES_EVENTING_ENABLED is true but SES_ENGAGEMENT_SQS_QUEUE_URL is not set")
+			cancel()
+			os.Exit(1)
+		}
+		if recipientsKV == nil {
+			slog.Error("SES_EVENTING_ENABLED is true but NATS KV (email-recipients bucket) is unavailable")
+			cancel()
+			os.Exit(1)
+		}
 		awsCfg, err := config.LoadDefaultConfig(ctx)
 		if err != nil {
 			slog.Error("failed to load AWS config for SQS poller", logging.ErrKey, err)
@@ -88,8 +101,13 @@ func main() {
 			defer wg.Done()
 			slog.Info("SQS engagement poller started", "queue_url", env.SESEngagementSQSURL)
 			if err := poller.Run(ctx); err != nil {
-				slog.Error("SQS engagement poller aborted, exiting", logging.ErrKey, err)
-				os.Exit(1)
+				slog.Error("SQS engagement poller aborted, requesting shutdown", logging.ErrKey, err)
+				pollerAborted.Store(true)
+				cancel()
+				select {
+				case done <- syscall.SIGTERM:
+				default:
+				}
 			}
 			slog.Info("SQS engagement poller stopped")
 		}()
@@ -123,11 +141,15 @@ func main() {
 
 	wg.Wait()
 	slog.Info("email service stopped")
+	if pollerAborted.Load() {
+		os.Exit(1)
+	}
 }
 
 func setupNATSAndKV(ctx context.Context, natsURL string) (*natsgo.Conn, natsgo.KeyValue, natsgo.KeyValue, error) {
 	nc, err := natsgo.Connect(
 		natsURL,
+		natsgo.DrainTimeout(gracefulShutdownSeconds*time.Second),
 		natsgo.ConnectHandler(func(_ *natsgo.Conn) {
 			slog.Info("NATS connection established", "url", natsURL)
 		}),

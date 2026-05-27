@@ -7,6 +7,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -97,28 +98,40 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 }
 
 // appendToGroupIndex adds emailID to the group's index entry with optimistic locking.
-// Retries once on write conflict.
+// Retries once on write conflict. Distinguishes ErrKeyNotFound from transient errors
+// so a Get failure does not silently overwrite the existing index.
 func (h *SendEmailHandler) appendToGroupIndex(ctx context.Context, groupID, emailID string) {
 	for attempt := range 2 {
 		var ids []string
 		var revision uint64
+		var isNew bool
 
 		entry, err := h.groupIndexKV.Get(groupID)
-		if err == nil {
+		switch {
+		case err == nil:
 			revision = entry.Revision()
-			_ = json.Unmarshal(entry.Value(), &ids)
+			if jsonErr := json.Unmarshal(entry.Value(), &ids); jsonErr != nil {
+				slog.WarnContext(ctx, "corrupted group index, resetting", "group_id", groupID, logging.ErrKey, jsonErr)
+				ids = nil
+			}
+		case errors.Is(err, natsgo.ErrKeyNotFound):
+			isNew = true
+		default:
+			slog.WarnContext(ctx, "failed to read group index, aborting append", "group_id", groupID, logging.ErrKey, err)
+			return
 		}
 
 		ids = append(ids, emailID)
 		b, _ := json.Marshal(ids)
 
-		if entry == nil || err != nil {
-			_, err = h.groupIndexKV.Put(groupID, b)
+		var writeErr error
+		if isNew {
+			_, writeErr = h.groupIndexKV.Put(groupID, b)
 		} else {
-			_, err = h.groupIndexKV.Update(groupID, b, revision)
+			_, writeErr = h.groupIndexKV.Update(groupID, b, revision)
 		}
 
-		if err == nil {
+		if writeErr == nil {
 			return
 		}
 		if attempt == 0 {

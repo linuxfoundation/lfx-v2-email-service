@@ -26,6 +26,7 @@ type snsEnvelope struct {
 type sesEvent struct {
 	EventType string        `json:"eventType"`
 	Mail      sesMail       `json:"mail"`
+	Open      *sesOpen      `json:"open"`
 	Bounce    *sesBounce    `json:"bounce"`
 	Complaint *sesComplaint `json:"complaint"`
 	Delivery  *sesDelivery  `json:"delivery"`
@@ -38,6 +39,10 @@ type sesMail struct {
 type sesHeader struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
+}
+
+type sesOpen struct {
+	Timestamp string `json:"timestamp"`
 }
 
 type sesBounce struct {
@@ -87,51 +92,104 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 		return nil
 	}
 
-	entry, err := h.recipientsKV.Get(emailID)
-	if err != nil {
-		slog.DebugContext(ctx, "no recipient record for email_id, skipping", "email_id", emailID)
-		return nil
-	}
-
-	var record api.EmailRecipientRecord
-	if err := json.Unmarshal(entry.Value(), &record); err != nil {
-		slog.WarnContext(ctx, "failed to unmarshal recipient record", logging.ErrKey, err, "email_id", emailID)
-		return nil
-	}
-
-	now := time.Now().UTC()
 	eventType := strings.ToUpper(event.EventType)
 	switch eventType {
-	case "OPEN":
-		if !record.Opened {
-			record.Opened = true
-			record.OpenedAt = &now
-		}
-	case "DELIVERY":
-		if !record.Delivered {
-			record.Delivered = true
-			record.DeliveredAt = &now
-		}
-	case "BOUNCE", "COMPLAINT":
-		if !record.Failed {
-			record.Failed = true
-			record.FailedAt = &now
-		}
+	case "OPEN", "DELIVERY", "BOUNCE", "COMPLAINT":
 	default:
 		slog.DebugContext(ctx, "ignoring unknown ses event type", "event_type", event.EventType)
 		return nil
 	}
 
-	updated, err := json.Marshal(record)
-	if err != nil {
-		slog.WarnContext(ctx, "failed to marshal updated recipient record", logging.ErrKey, err)
-		return nil
-	}
-	if _, err := h.recipientsKV.Put(emailID, updated); err != nil {
-		slog.WarnContext(ctx, "failed to update recipient record in KV", logging.ErrKey, err, "email_id", emailID)
-	}
+	// Retry once on KV write conflict to avoid losing concurrent updates.
+	for attempt := range 2 {
+		entry, err := h.recipientsKV.Get(emailID)
+		if err != nil {
+			slog.DebugContext(ctx, "no recipient record for email_id, skipping", "email_id", emailID)
+			return nil
+		}
 
+		var record api.EmailRecipientRecord
+		if err := json.Unmarshal(entry.Value(), &record); err != nil {
+			slog.WarnContext(ctx, "failed to unmarshal recipient record", logging.ErrKey, err, "email_id", emailID)
+			return nil
+		}
+
+		applyEngagementEvent(&record, eventType, event)
+
+		updated, err := json.Marshal(record)
+		if err != nil {
+			slog.WarnContext(ctx, "failed to marshal updated recipient record", logging.ErrKey, err)
+			return nil
+		}
+
+		if _, err := h.recipientsKV.Update(emailID, updated, entry.Revision()); err == nil {
+			return nil
+		}
+		if attempt == 0 {
+			slog.DebugContext(ctx, "recipient record write conflict, retrying", "email_id", emailID)
+		}
+	}
+	slog.WarnContext(ctx, "failed to update recipient record after retry", "email_id", emailID)
 	return nil
+}
+
+// applyEngagementEvent updates record fields based on the SES event type,
+// using SES-provided timestamps when available and falling back to time.Now().
+func applyEngagementEvent(record *api.EmailRecipientRecord, eventType string, event sesEvent) {
+	switch eventType {
+	case "OPEN":
+		if !record.Opened {
+			var ts string
+			if event.Open != nil {
+				ts = event.Open.Timestamp
+			}
+			t := parseTimestamp(ts)
+			record.Opened = true
+			record.OpenedAt = &t
+		}
+	case "DELIVERY":
+		if !record.Delivered {
+			var ts string
+			if event.Delivery != nil {
+				ts = event.Delivery.Timestamp
+			}
+			t := parseTimestamp(ts)
+			record.Delivered = true
+			record.DeliveredAt = &t
+		}
+	case "BOUNCE":
+		if !record.Failed {
+			var ts string
+			if event.Bounce != nil {
+				ts = event.Bounce.Timestamp
+			}
+			t := parseTimestamp(ts)
+			record.Failed = true
+			record.FailedAt = &t
+		}
+	case "COMPLAINT":
+		if !record.Failed {
+			var ts string
+			if event.Complaint != nil {
+				ts = event.Complaint.Timestamp
+			}
+			t := parseTimestamp(ts)
+			record.Failed = true
+			record.FailedAt = &t
+		}
+	}
+}
+
+// parseTimestamp parses an RFC3339 timestamp string, falling back to time.Now().UTC().
+func parseTimestamp(s string) time.Time {
+	if s == "" {
+		return time.Now().UTC()
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil || t.IsZero() {
+		return time.Now().UTC()
+	}
+	return t.UTC()
 }
 
 // extractEmailID finds the X-LFX-TRACKING-ID header (format: group_id/email_id)
