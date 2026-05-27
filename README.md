@@ -90,24 +90,21 @@ Exactly one of `email_id` or `group_id` must be provided.
 }
 ```
 
-**Success response — by `group_id`** — a `GetGroupEmailStatusResponse`:
+**Success response — by `group_id`** — an array of `EmailRecipientRecord`:
 ```json
-{
-  "group_id": "invite-batch-abc123",
-  "emails": [
-    {
-      "email_id": "550e8400-e29b-41d4-a716-446655440000",
-      "group_id": "invite-batch-abc123",
-      "to": "user@example.com",
-      "subject": "You've been added as a Writer on Demo Project",
-      "sent_at": "2025-01-15T10:30:00Z",
-      "delivered": true,
-      "delivered_at": "2025-01-15T10:30:02Z",
-      "opened": false,
-      "failed": false
-    }
-  ]
-}
+[
+  {
+    "email_id": "550e8400-e29b-41d4-a716-446655440000",
+    "group_id": "invite-batch-abc123",
+    "to": "user@example.com",
+    "subject": "You've been added as a Writer on Demo Project",
+    "sent_at": "2025-01-15T10:30:00Z",
+    "delivered": true,
+    "delivered_at": "2025-01-15T10:30:02Z",
+    "opened": false,
+    "failed": false
+  }
+]
 ```
 
 `delivered`, `opened`, and `failed` are set by the SES engagement event poller
@@ -246,6 +243,18 @@ func main() {
 		panic(err)
 	}
 	fmt.Printf("status: delivered=%v opened=%v failed=%v\n", record.Delivered, record.Opened, record.Failed)
+
+	// Query status for all emails in the group.
+	groupStatusReq, _ := json.Marshal(emailapi.GetEmailStatusRequest{GroupID: sendResp.GroupID})
+	groupStatusReply, err := nc.RequestWithContext(ctx, emailapi.GetEmailStatusSubject, groupStatusReq)
+	if err != nil {
+		panic(err)
+	}
+	var groupRecords []emailapi.EmailRecipientRecord
+	if err := json.Unmarshal(groupStatusReply.Data, &groupRecords); err != nil {
+		panic(err)
+	}
+	fmt.Printf("group status: %d emails\n", len(groupRecords))
 
 	// Query aggregate engagement counts for the whole group.
 	analyticsReq, _ := json.Marshal(emailapi.GetEmailEngagementAnalyticsRequest{GroupID: sendResp.GroupID})

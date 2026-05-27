@@ -109,11 +109,7 @@ func (h *GetEmailStatusHandler) handleByGroupID(ctx context.Context, msg *natsgo
 		records = append(records, record)
 	}
 
-	resp := api.GetGroupEmailStatusResponse{
-		GroupID: groupID,
-		Emails:  records,
-	}
-	b, _ := json.Marshal(resp)
+	b, _ := json.Marshal(records)
 	if err := msg.Respond(b); err != nil {
 		slog.WarnContext(ctx, "failed to respond to get_email_status (group) request", logging.ErrKey, err)
 	}

@@ -79,12 +79,6 @@ type GetEmailStatusRequest struct {
 	GroupID string `json:"group_id,omitempty"`
 }
 
-// GetGroupEmailStatusResponse is the reply when GetEmailStatusRequest is made with a GroupID.
-type GetGroupEmailStatusResponse struct {
-	GroupID string                 `json:"group_id"`
-	Emails  []EmailRecipientRecord `json:"emails"`
-}
-
 // GetEmailEngagementAnalyticsRequest is the payload for GetEmailEngagementAnalyticsSubject.
 type GetEmailEngagementAnalyticsRequest struct {
 	GroupID string `json:"group_id"`
