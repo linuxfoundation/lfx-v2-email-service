@@ -94,7 +94,9 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 		slog.WarnContext(ctx, "failed to write recipient record to KV", logging.ErrKey, err, "email_id", emailID)
 	}
 
-	h.appendToGroupIndex(ctx, groupID, emailID)
+	if groupID != "" {
+		h.appendToGroupIndex(ctx, groupID, emailID)
+	}
 }
 
 // appendToGroupIndex adds emailID to the group's index entry with optimistic locking.

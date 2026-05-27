@@ -231,6 +231,25 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		assert.Error(t, err, "no record should be written when emailID is empty")
 	})
 
+	t.Run("no group index write when group_id is empty", func(t *testing.T) {
+		t.Parallel()
+
+		recipientsKV := mocks.NewKeyValue()
+		groupIndexKV := mocks.NewKeyValue()
+		sender := &mockSender{emailID: "email-nogroupid", groupID: ""}
+		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV)
+
+		req := api.SendEmailRequest{To: "f@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
+		data, _ := json.Marshal(req)
+		handler.HandleData(context.Background(), data, func([]byte) error { return nil })
+
+		_, err := recipientsKV.Get("email-nogroupid")
+		assert.NoError(t, err, "recipient record should still be written")
+
+		_, err = groupIndexKV.Get("")
+		assert.Error(t, err, "group index should not be written under empty key")
+	})
+
 	t.Run("KV write skipped when sender errors", func(t *testing.T) {
 		t.Parallel()
 
