@@ -37,13 +37,11 @@ const (
 // SendEmailRequest is the JSON payload published to SendEmailSubject.
 // Callers render the HTML and plain-text bodies before publishing.
 type SendEmailRequest struct {
-	To            string `json:"to"`
-	Subject       string `json:"subject"`
-	HTML          string `json:"html"`
-	Text          string `json:"text"`
-	GroupID       string `json:"group_id,omitempty"`
-	CorrelationID string `json:"correlation_id,omitempty"`
-	SourceService string `json:"source_service,omitempty"`
+	To      string `json:"to"`
+	Subject string `json:"subject"`
+	HTML    string `json:"html"`
+	Text    string `json:"text"`
+	GroupID string `json:"group_id,omitempty"`
 }
 
 // SendEmailResponse is the JSON payload returned in the NATS reply on success.

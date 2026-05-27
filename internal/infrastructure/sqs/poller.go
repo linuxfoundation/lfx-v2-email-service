@@ -86,7 +86,12 @@ func (p *Poller) Run(ctx context.Context) error {
 
 		consecutiveErrors = 0
 
+		if len(output.Messages) > 0 {
+			slog.InfoContext(ctx, "sqs received messages", "count", len(output.Messages))
+		}
+
 		for _, msg := range output.Messages {
+			slog.InfoContext(ctx, "sqs processing message", "message_id", aws.ToString(msg.MessageId))
 			if err := p.handler(ctx, msg); err != nil {
 				slog.WarnContext(ctx, "sqs message handler failed, leaving in queue",
 					"error", err,
