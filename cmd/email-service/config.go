@@ -17,13 +17,13 @@ var (
 )
 
 type environment struct {
-	NatsURL              string
-	Port                 string
-	EmailEnabled         bool
-	SESEventingEnabled   bool
-	SMTP                 smtpConfig
-	SESConfigurationSet  string
-	SESEngagementSQSURL  string
+	NatsURL             string
+	Port                string
+	EmailEnabled        bool
+	SESEventingEnabled  bool
+	SMTP                smtpConfig
+	SESConfigurationSet string
+	SESEngagementSQSURL string
 }
 
 type smtpConfig struct {
