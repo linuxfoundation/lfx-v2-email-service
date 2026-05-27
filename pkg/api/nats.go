@@ -37,10 +37,10 @@ const (
 // SendEmailRequest is the JSON payload published to SendEmailSubject.
 // Callers render the HTML and plain-text bodies before publishing.
 type SendEmailRequest struct {
-	To            string `json:"to"`
-	Subject       string `json:"subject"`
-	HTML          string `json:"html"`
-	Text          string `json:"text"`
+	To      string `json:"to"`
+	Subject string `json:"subject"`
+	HTML    string `json:"html"`
+	Text    string `json:"text"`
 	GroupID string `json:"group_id,omitempty"`
 }
 
