@@ -162,7 +162,9 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		t := parseTimestamp(ts)
 		record.Opened = true
 		record.OpenedAtList = append(record.OpenedAtList, api.OpenEvent{EventID: snsMessageID, OpenedAt: t})
-		record.LastOpenedAt = &t
+		if record.LastOpenedAt == nil || t.After(*record.LastOpenedAt) {
+			record.LastOpenedAt = &t
+		}
 	case "DELIVERY":
 		if !record.Delivered {
 			var ts string
