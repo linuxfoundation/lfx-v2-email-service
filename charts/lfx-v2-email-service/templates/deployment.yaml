@@ -61,6 +61,8 @@ spec:
                   key: smtp-password
                   optional: true
             {{- end }}
+            - name: SES_EVENTING_ENABLED
+              value: {{ .Values.app.ses.eventingEnabled | quote }}
             {{- if .Values.app.ses.engagementSecretName }}
             - name: SES_CONFIGURATION_SET
               valueFrom:

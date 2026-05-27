@@ -73,7 +73,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if env.SESEngagementSQSURL != "" {
+	if env.SESEventingEnabled {
 		awsCfg, err := config.LoadDefaultConfig(ctx)
 		if err != nil {
 			slog.Error("failed to load AWS config for SQS poller", logging.ErrKey, err)

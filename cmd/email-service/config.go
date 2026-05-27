@@ -20,6 +20,7 @@ type environment struct {
 	NatsURL              string
 	Port                 string
 	EmailEnabled         bool
+	SESEventingEnabled   bool
 	SMTP                 smtpConfig
 	SESConfigurationSet  string
 	SESEngagementSQSURL  string
@@ -47,6 +48,9 @@ func parseEnv() environment {
 	emailEnabledVal := os.Getenv("EMAIL_ENABLED")
 	emailEnabled := emailEnabledVal == "true" || emailEnabledVal == "t" || emailEnabledVal == "1"
 
+	sesEventingEnabledVal := os.Getenv("SES_EVENTING_ENABLED")
+	sesEventingEnabled := sesEventingEnabledVal == "true" || sesEventingEnabledVal == "t" || sesEventingEnabledVal == "1"
+
 	smtpHost := os.Getenv("SMTP_HOST")
 	if smtpHost == "" {
 		smtpHost = "localhost"
@@ -70,6 +74,7 @@ func parseEnv() environment {
 		NatsURL:             natsURL,
 		Port:                port,
 		EmailEnabled:        emailEnabled,
+		SESEventingEnabled:  sesEventingEnabled,
 		SESConfigurationSet: os.Getenv("SES_CONFIGURATION_SET"),
 		SESEngagementSQSURL: os.Getenv("SES_ENGAGEMENT_SQS_QUEUE_URL"),
 		SMTP: smtpConfig{

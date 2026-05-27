@@ -76,12 +76,17 @@ app:
 
   # ses is the configuration for SES engagement event tracking.
   ses:
+    # eventingEnabled controls whether the SQS engagement event poller is started.
+    # Set to true only after the SES configuration set, SNS topic, and SQS queue have
+    # been provisioned and the IRSA role is annotated on the ServiceAccount.
+    # If true and AWS credentials are unavailable at startup, the service exits immediately.
+    eventingEnabled: false
     # configurationSetName is the SES v2 configuration set to attach to outbound emails
     # via the X-SES-CONFIGURATION-SET header. When empty the header is omitted and
     # engagement events are not captured. Set via the engagement config secret.
     configurationSetName: ""
     # engagementQueueURL is the SQS queue URL that receives SES engagement events.
-    # When empty the SQS poller is not started. Set via the engagement config secret.
+    # Required when eventingEnabled is true. Set via the engagement config secret.
     engagementQueueURL: ""
     # engagementSecretName is the Kubernetes Secret containing ses_configuration_set_name
     # and sqs_queue_url. Created by ESO from /cloudops/ses-managed/email-service-engagement.

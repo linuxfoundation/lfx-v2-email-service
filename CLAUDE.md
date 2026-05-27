@@ -112,8 +112,9 @@ The `group_id` is optional in `SendEmailRequest` — if not provided the email s
 | `SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | |
 | `SMTP_USERNAME` | _(empty)_ | From K8s Secret in production |
 | `SMTP_PASSWORD` | _(empty)_ | From K8s Secret in production |
+| `SES_EVENTING_ENABLED` | `false` | `true`/`t`/`1` → start the SQS engagement event poller; fatal at startup if AWS config fails to load |
 | `SES_CONFIGURATION_SET` | _(empty)_ | SES v2 configuration set name; when set adds `X-SES-CONFIGURATION-SET` header to outbound mail |
-| `SES_ENGAGEMENT_SQS_QUEUE_URL` | _(empty)_ | SQS queue URL for SES engagement events; when set starts the SQS long-poller |
+| `SES_ENGAGEMENT_SQS_QUEUE_URL` | _(empty)_ | SQS queue URL for SES engagement events; required when `SES_EVENTING_ENABLED=true` |
 | `LOG_LEVEL` | `info` | |
 | `LOG_ADD_SOURCE` | `false` | `true` → include file/line in log entries |
 
