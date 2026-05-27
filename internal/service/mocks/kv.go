@@ -34,9 +34,10 @@ func (e *kvEntry) Operation() natsgo.KeyValueOp { return natsgo.KeyValuePut }
 // Get, Put, Update, and PutString are functional. All other methods return an
 // "not implemented" error — they exist only to satisfy the interface.
 type KeyValue struct {
-	mu      sync.RWMutex
-	entries map[string]*kvEntry
-	PutErr  error // if non-nil, Put returns this error
+	mu        sync.RWMutex
+	entries   map[string]*kvEntry
+	PutErr    error            // if non-nil, Put returns this error
+	GetErrFor map[string]error // if a key is present, Get returns that error instead of looking up the entry
 }
 
 // NewKeyValue returns an empty KeyValue mock.
@@ -47,6 +48,9 @@ func NewKeyValue() *KeyValue {
 func (m *KeyValue) Get(key string) (natsgo.KeyValueEntry, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if err, ok := m.GetErrFor[key]; ok {
+		return nil, err
+	}
 	e, ok := m.entries[key]
 	if !ok {
 		return nil, natsgo.ErrKeyNotFound
