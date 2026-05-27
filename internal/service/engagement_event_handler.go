@@ -101,6 +101,11 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 		return nil
 	}
 
+	slog.InfoContext(ctx, "ses engagement event received",
+		"event_type", strings.ToLower(eventType),
+		"email_id", emailID,
+	)
+
 	// Retry once on KV write conflict to avoid losing concurrent updates.
 	for attempt := range 2 {
 		entry, err := h.recipientsKV.Get(emailID)
@@ -124,6 +129,10 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 		}
 
 		if _, err := h.recipientsKV.Update(emailID, updated, entry.Revision()); err == nil {
+			slog.InfoContext(ctx, "ses engagement event applied",
+				"event_type", strings.ToLower(eventType),
+				"email_id", emailID,
+			)
 			return nil
 		}
 		if attempt == 0 {
