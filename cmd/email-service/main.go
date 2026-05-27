@@ -218,7 +218,7 @@ func subscribeHandlers(
 	slog.Info("subscribed to NATS subject", "subject", api.SendEmailSubject, "queue", api.QueueGroup)
 
 	if recipientsKV != nil && groupIndexKV != nil {
-		statusHandler := service.NewGetEmailStatusHandler(recipientsKV)
+		statusHandler := service.NewGetEmailStatusHandler(recipientsKV, groupIndexKV)
 		if _, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
 			statusHandler.Handle(msgCtx, msg)
 		}); err != nil {

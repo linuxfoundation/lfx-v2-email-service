@@ -61,15 +61,20 @@ nats req lfx.email-service.send_email \
 
 **Subject:** `lfx.email-service.get_email_status`
 
-Returns the tracking record for a single email. Only available when NATS KV
+Returns the tracking record(s) for one or more emails. Only available when NATS KV
 is configured (JetStream enabled and both KV buckets exist).
+
+Exactly one of `email_id` or `group_id` must be provided.
 
 **Request:**
 ```json
 { "email_id": "<uuid returned by send>" }
 ```
+```json
+{ "group_id": "<group id>" }
+```
 
-**Success response** — an `EmailRecipientRecord`:
+**Success response — by `email_id`** — an `EmailRecipientRecord`:
 ```json
 {
   "email_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -85,6 +90,26 @@ is configured (JetStream enabled and both KV buckets exist).
 }
 ```
 
+**Success response — by `group_id`** — a `GetGroupEmailStatusResponse`:
+```json
+{
+  "group_id": "invite-batch-abc123",
+  "emails": [
+    {
+      "email_id": "550e8400-e29b-41d4-a716-446655440000",
+      "group_id": "invite-batch-abc123",
+      "to": "user@example.com",
+      "subject": "You've been added as a Writer on Demo Project",
+      "sent_at": "2025-01-15T10:30:00Z",
+      "delivered": true,
+      "delivered_at": "2025-01-15T10:30:02Z",
+      "opened": false,
+      "failed": false
+    }
+  ]
+}
+```
+
 `delivered`, `opened`, and `failed` are set by the SES engagement event poller
 (see [SES Engagement Event Tracking](#ses-engagement-event-tracking) below).
 They remain `false` until the poller is enabled and the corresponding SES event
@@ -97,13 +122,18 @@ arrives.
 
 | `error` value | Cause |
 |---|---|
-| `invalid request payload` | Request body is not valid JSON or `email_id` is missing |
-| `not found` | No record exists for the given `email_id` |
+| `invalid request payload` | Request body is not valid JSON |
+| `email_id or group_id is required` | Neither field was set |
+| `only one of email_id or group_id may be set` | Both fields were set |
+| `not found` | No record exists for the given `email_id` or `group_id` |
 
-**Example (NATS CLI):**
+**Examples (NATS CLI):**
 ```bash
 nats req lfx.email-service.get_email_status \
   '{"email_id":"550e8400-e29b-41d4-a716-446655440000"}'
+
+nats req lfx.email-service.get_email_status \
+  '{"group_id":"invite-batch-abc123"}'
 ```
 
 ### Query group engagement analytics

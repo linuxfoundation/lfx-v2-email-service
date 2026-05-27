@@ -71,8 +71,18 @@ type EmailRecipientRecord struct {
 }
 
 // GetEmailStatusRequest is the payload for GetEmailStatusSubject.
+// Exactly one of EmailID or GroupID must be set.
+// When EmailID is set the reply is a single EmailRecipientRecord.
+// When GroupID is set the reply is a GetGroupEmailStatusResponse.
 type GetEmailStatusRequest struct {
-	EmailID string `json:"email_id"`
+	EmailID string `json:"email_id,omitempty"`
+	GroupID string `json:"group_id,omitempty"`
+}
+
+// GetGroupEmailStatusResponse is the reply when GetEmailStatusRequest is made with a GroupID.
+type GetGroupEmailStatusResponse struct {
+	GroupID string                 `json:"group_id"`
+	Emails  []EmailRecipientRecord `json:"emails"`
 }
 
 // GetEmailEngagementAnalyticsRequest is the payload for GetEmailEngagementAnalyticsSubject.
