@@ -77,8 +77,9 @@ func (h *GetEmailEngagementAnalyticsHandler) Handle(ctx context.Context, msg *na
 		if record.Delivered {
 			resp.Delivered++
 		}
+		resp.Opened += record.OpenCount
 		if record.Opened {
-			resp.Opened++
+			resp.UniqueOpened++
 		}
 		if record.Failed {
 			resp.Failed++

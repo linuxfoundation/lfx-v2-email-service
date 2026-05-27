@@ -95,9 +95,10 @@ type GetEmailEngagementAnalyticsRequest struct {
 
 // GetEmailEngagementAnalyticsResponse is the reply for GetEmailEngagementAnalyticsSubject.
 type GetEmailEngagementAnalyticsResponse struct {
-	GroupID   string `json:"group_id"`
-	TotalSent int    `json:"total_sent"`
-	Delivered int    `json:"delivered"`
-	Opened    int    `json:"opened"`
-	Failed    int    `json:"failed"`
+	GroupID      string `json:"group_id"`
+	TotalSent    int    `json:"total_sent"`
+	Delivered    int    `json:"delivered"`
+	Opened       int    `json:"opened"`
+	UniqueOpened int    `json:"unique_opened"`
+	Failed       int    `json:"failed"`
 }

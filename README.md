@@ -157,7 +157,8 @@ NATS KV is configured.
   "group_id": "invite-batch-abc123",
   "total_sent": 42,
   "delivered": 40,
-  "opened": 18,
+  "opened": 31,
+  "unique_opened": 18,
   "failed": 2
 }
 ```
