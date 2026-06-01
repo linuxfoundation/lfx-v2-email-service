@@ -20,7 +20,10 @@ useDefault = true
     # values, image tags, IRSA annotations, and ExternalSecret wiring. The
     # `wiring: ` + backticked-token shape trips the default `generic-api-key`
     # rule even though it is plain prose referencing a public repo name, not a
-    # credential. Scoped to the literal token so secret scanning stays active.
+    # credential. Scoped to the literal doc line so secret scanning stays active.
+    # regexTarget = "line" is required because gitleaks matches allowlist regexes
+    # against the detected secret by default, not the source line.
+    regexTarget = "line"
     regexes = [
         '''ExternalSecret wiring: `lfx-v2-argocd`''',
     ]
