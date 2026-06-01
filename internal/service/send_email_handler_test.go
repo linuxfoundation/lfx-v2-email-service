@@ -35,15 +35,17 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		payload     any
-		senderErr   error
-		emailID     string
-		groupID     string
-		wantSent    bool
-		wantErrResp bool
-		wantEmailID string
-		wantGroupID string
+		name                string
+		payload             any
+		senderErr           error
+		emailID             string
+		groupID             string
+		wantSent            bool
+		wantErrResp         bool
+		wantEmailID         string
+		wantGroupID         string
+		wantFrom            string // assert sender received this From value
+		wantFromDisplayName string // assert sender received this FromDisplayName value
 	}{
 		{
 			name:        "happy path — ids returned",
@@ -95,13 +97,15 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			wantErrResp: true,
 		},
 		{
-			name:        "custom from on allowed domain",
-			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", From: "events@lfx.linuxfoundation.org"},
-			emailID:     "email-uuid-3",
-			groupID:     "group-uuid-3",
-			wantSent:    true,
-			wantEmailID: "email-uuid-3",
-			wantGroupID: "group-uuid-3",
+			name:                "custom from on allowed domain",
+			payload:             api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", From: "events@lfx.linuxfoundation.org"},
+			emailID:             "email-uuid-3",
+			groupID:             "group-uuid-3",
+			wantSent:            true,
+			wantEmailID:         "email-uuid-3",
+			wantGroupID:         "group-uuid-3",
+			wantFrom:            "events@lfx.linuxfoundation.org",
+			wantFromDisplayName: "",
 		},
 		{
 			name:        "custom from on disallowed domain",
@@ -116,22 +120,27 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			wantErrResp: true,
 		},
 		{
-			name:        "custom from_display_name passed through to sender",
-			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", From: "events@lfx.linuxfoundation.org", FromDisplayName: "LFX Events"},
-			emailID:     "email-uuid-4",
-			groupID:     "group-uuid-4",
-			wantSent:    true,
-			wantEmailID: "email-uuid-4",
-			wantGroupID: "group-uuid-4",
+			name:                "custom from_display_name passed through to sender",
+			payload:             api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", From: "events@lfx.linuxfoundation.org", FromDisplayName: "LFX Events"},
+			emailID:             "email-uuid-4",
+			groupID:             "group-uuid-4",
+			wantSent:            true,
+			wantEmailID:         "email-uuid-4",
+			wantGroupID:         "group-uuid-4",
+			wantFrom:            "events@lfx.linuxfoundation.org",
+			wantFromDisplayName: "LFX Events",
 		},
 		{
-			name:        "from omitted uses service default",
+			// The handler passes From/FromDisplayName through unchanged; defaults
+			// are resolved later in the SMTP sender, not here.
+			name:        "from omitted — sender called with empty from field",
 			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"},
 			emailID:     "email-uuid-5",
 			groupID:     "group-uuid-5",
 			wantSent:    true,
 			wantEmailID: "email-uuid-5",
 			wantGroupID: "group-uuid-5",
+			wantFrom:    "",
 		},
 	}
 
@@ -176,6 +185,10 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 				var errResp api.SendEmailErrorResponse
 				require.NoError(t, json.Unmarshal(responded, &errResp))
 				assert.NotEmpty(t, errResp.Error)
+			}
+			if tc.wantFrom != "" || tc.wantSent {
+				assert.Equal(t, tc.wantFrom, sender.req.From, "sender received wrong From")
+				assert.Equal(t, tc.wantFromDisplayName, sender.req.FromDisplayName, "sender received wrong FromDisplayName")
 			}
 		})
 	}

@@ -78,6 +78,6 @@ func (s *SMTPSender) Send(ctx context.Context, req api.SendEmailRequest) (emailI
 		return "", "", fmt.Errorf("smtp send: %w", err)
 	}
 
-	slog.DebugContext(ctx, "email sent", "email_id", emailID, "group_id", groupID, "from", fromAddr)
+	slog.DebugContext(ctx, "email sent", "email_id", emailID, "group_id", groupID)
 	return emailID, groupID, nil
 }

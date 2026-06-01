@@ -77,13 +77,13 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	if req.From != "" {
 		addr, err := mail.ParseAddress(req.From)
 		if err != nil {
-			slog.WarnContext(ctx, "send email request has invalid from address", "from", req.From, logging.ErrKey, err)
+			slog.WarnContext(ctx, "send email request has invalid from address", "from", redaction.RedactEmail(req.From), logging.ErrKey, err)
 			replyError(ctx, respond, "invalid from address")
 			return
 		}
 		parts := strings.SplitN(addr.Address, "@", 2)
 		if len(parts) != 2 {
-			slog.WarnContext(ctx, "send email request from address missing domain", "from", req.From)
+			slog.WarnContext(ctx, "send email request from address missing domain", "from", redaction.RedactEmail(req.From))
 			replyError(ctx, respond, "invalid from address")
 			return
 		}

@@ -68,7 +68,13 @@ func parseEnv() environment {
 		}
 	}
 
+	// DEFAULT_SMTP_FROM is the primary env var. Fall back to the legacy SMTP_FROM
+	// so existing deployments that haven't migrated yet don't silently revert to
+	// the hardcoded default and send mail from the wrong address.
 	smtpFrom := os.Getenv("DEFAULT_SMTP_FROM")
+	if smtpFrom == "" {
+		smtpFrom = os.Getenv("SMTP_FROM")
+	}
 	if smtpFrom == "" {
 		smtpFrom = "noreply@lfx.linuxfoundation.org"
 	}
@@ -78,14 +84,16 @@ func parseEnv() environment {
 		smtpFromDisplayName = "LFX Self Serve"
 	}
 
-	// SMTP_ALLOWED_FROM_DOMAINS is a comma-separated list of domains (e.g.
-	// "lfx.linuxfoundation.org,linuxfoundation.org"). Defaults to
-	// "lfx.linuxfoundation.org". Set to "" to disable per-message From overrides.
-	allowedDomainsRaw := os.Getenv("SMTP_ALLOWED_FROM_DOMAINS")
-	if allowedDomainsRaw == "" {
+	// SMTP_ALLOWED_FROM_DOMAINS is a comma-separated list of domains permitted
+	// for per-message From overrides (e.g. "lfx.linuxfoundation.org,linuxfoundation.org").
+	// Defaults to "lfx.linuxfoundation.org" when the variable is unset.
+	// Set it to an explicit empty string ("") to disable per-message From overrides entirely.
+	// os.LookupEnv is used to distinguish "unset" (apply default) from "set to empty" (disable).
+	var allowedFromDomains []string
+	allowedDomainsRaw, allowedDomainsSet := os.LookupEnv("SMTP_ALLOWED_FROM_DOMAINS")
+	if !allowedDomainsSet {
 		allowedDomainsRaw = "lfx.linuxfoundation.org"
 	}
-	var allowedFromDomains []string
 	for _, d := range strings.Split(allowedDomainsRaw, ",") {
 		if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
 			allowedFromDomains = append(allowedFromDomains, d)
