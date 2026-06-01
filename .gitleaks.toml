@@ -10,9 +10,6 @@ useDefault = true
 [allowlist]
     description = "Allowlisted files"
     paths = [
-        # Exclude test files as they often contain dummy/fake data
-        '''.*_test\.go$''',
-        '''(go.mod|go.sum)$''',
         '''(.*?)gitleaks\.toml$'''
     ]
     # False positive in documentation: the cross-repo contract list in CLAUDE.md

@@ -74,6 +74,10 @@ Run:
 make license-check
 ```
 
+Note: `make license-check` only validates Go (`*.go`) files. It does not check
+Markdown or other file types — CI's separate License Header Check covers those.
+When adding or editing Markdown, add the HTML-comment header manually.
+
 In default mode, add the standard two-line header only when the file type and
 placement are clear. In dry-run mode, report missing headers without editing.
 
