@@ -20,6 +20,8 @@ complaints) in NATS KV.
 | `subject` | string | yes | Email subject line |
 | `html` | string | yes | HTML body — callers render this before publishing |
 | `text` | string | yes | Plain-text body — shown by clients that don't render HTML |
+| `from` | string | no | Sender address (e.g. `events@lfx.linuxfoundation.org`). When omitted the service default (`DEFAULT_SMTP_FROM`) is used. The domain must be in the service's allowed list — see [Configuring the sender address](#configuring-the-sender-address). |
+| `from_display_name` | string | no | Display name shown in the From header (e.g. `LFX Events`). When omitted the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default: `"LFX Self Serve"`) is used. |
 | `group_id` | string | no | Caller-supplied ID grouping related emails (e.g. an invite batch). Use it to query aggregate engagement counts via [`lfx.email-service.get_email_engagement_analytics`](#query-group-engagement-analytics). If omitted, a UUID is generated and returned but is not meaningful for analytics. |
 
 ```json
@@ -28,6 +30,8 @@ complaints) in NATS KV.
   "subject": "You've been added as a Writer on Demo Project",
   "html": "<html>...</html>",
   "text": "You've been added as a Writer on Demo Project.",
+  "from": "events@lfx.linuxfoundation.org",
+  "from_display_name": "LFX Events",
   "group_id": "invite-batch-abc123"
 }
 ```
@@ -49,13 +53,37 @@ MIME header. Store it if you want to query delivery/open status later.
 |---|---|
 | `invalid request payload` | Request body is not valid JSON |
 | `to, subject, html, and text are required` | One or more required fields are missing |
+| `invalid from address` | `from` field is not a valid email address |
+| `from address domain not allowed` | `from` domain is not in the service's allowed list |
 | `email delivery failed` | Service accepted the request but SMTP delivery failed |
 
-**Example (NATS CLI):**
+**Examples (NATS CLI):**
 ```bash
+# Default sender ("LFX Self Serve <noreply@lfx.linuxfoundation.org>")
 nats req lfx.email-service.send_email \
   '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi"}'
+
+# Custom sender address and display name
+nats req lfx.email-service.send_email \
+  '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi","from":"events@lfx.linuxfoundation.org","from_display_name":"LFX Events"}'
 ```
+
+### Configuring the sender address
+
+The `from` field lets callers send from any address whose domain is in the service's
+allowlist. The allowlist is configured via the `SMTP_ALLOWED_FROM_DOMAINS` env var
+(comma-separated, default: `lfx.linuxfoundation.org`).
+
+| Scenario | Behaviour |
+|---|---|
+| `from` omitted | Service default (`DEFAULT_SMTP_FROM`) is used |
+| `from` domain is in the allowlist | Email is sent from the specified address |
+| `from` domain is **not** in the allowlist | Request is rejected — `{"error":"from address domain not allowed"}` |
+| `from_display_name` omitted | Service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default: `"LFX Self Serve"`) is used |
+
+> **Note:** Because delivery goes through Amazon SES, the `from` domain must also be
+> a verified SES sending identity. Contact the platform team to add a new domain to
+> both the SES configuration and `SMTP_ALLOWED_FROM_DOMAINS`.
 
 ### Query email status
 
@@ -210,13 +238,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Send an email.
+	// Send an email with a custom sender address and display name.
+	// From and FromDisplayName are optional — omit them to use the service defaults.
 	req := emailapi.SendEmailRequest{
-		To:      "user@example.com",
-		Subject: "You've been added",
-		HTML:    "<p>Hello</p>",
-		Text:    "Hello",
-		GroupID: "my-batch-id",
+		To:              "user@example.com",
+		Subject:         "You've been added",
+		HTML:            "<p>Hello</p>",
+		Text:            "Hello",
+		From:            "events@lfx.linuxfoundation.org", // optional
+		FromDisplayName: "LFX Events",                     // optional
+		GroupID:         "my-batch-id",
 	}
 	data, _ := json.Marshal(req)
 
