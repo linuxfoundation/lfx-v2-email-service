@@ -20,8 +20,8 @@ complaints) in NATS KV.
 | `subject` | string | yes | Email subject line |
 | `html` | string | yes | HTML body — callers render this before publishing |
 | `text` | string | yes | Plain-text body — shown by clients that don't render HTML |
-| `from` | string | no | Sender address (e.g. `events@lfx.linuxfoundation.org`). When omitted the service default (`DEFAULT_SMTP_FROM`) is used. The domain must be in the service's allowed list — see [Configuring the sender address](#configuring-the-sender-address). |
-| `from_display_name` | string | no | Display name shown in the From header (e.g. `LFX Events`). When omitted the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default: `"LFX Self Serve"`) is used. |
+| `from` | string | no | Sender address (e.g. `newsletter@lfx.linuxfoundation.org`). When omitted the service default (`DEFAULT_SMTP_FROM`) is used. The domain must be in the service's allowed list — see [Configuring the sender address](#configuring-the-sender-address). |
+| `from_display_name` | string | no | Display name shown in the From header (e.g. `LFX Newsletter`). When omitted the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default: `"LFX Self Serve"`) is used. |
 | `group_id` | string | no | Caller-supplied ID grouping related emails (e.g. an invite batch). Use it to query aggregate engagement counts via [`lfx.email-service.get_email_engagement_analytics`](#query-group-engagement-analytics). If omitted, a UUID is generated and returned but is not meaningful for analytics. |
 
 ```json
@@ -30,8 +30,8 @@ complaints) in NATS KV.
   "subject": "You've been added as a Writer on Demo Project",
   "html": "<html>...</html>",
   "text": "You've been added as a Writer on Demo Project.",
-  "from": "events@lfx.linuxfoundation.org",
-  "from_display_name": "LFX Events",
+  "from": "newsletter@lfx.linuxfoundation.org",
+  "from_display_name": "LFX Newsletter",
   "group_id": "invite-batch-abc123"
 }
 ```
@@ -65,7 +65,7 @@ nats req lfx.email-service.send_email \
 
 # Custom sender address and display name
 nats req lfx.email-service.send_email \
-  '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi","from":"events@lfx.linuxfoundation.org","from_display_name":"LFX Events"}'
+  '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi","from":"newsletter@lfx.linuxfoundation.org","from_display_name":"LFX Newsletter"}'
 ```
 
 ### Configuring the sender address
@@ -245,8 +245,8 @@ func main() {
 		Subject:         "You've been added",
 		HTML:            "<p>Hello</p>",
 		Text:            "Hello",
-		From:            "events@lfx.linuxfoundation.org", // optional
-		FromDisplayName: "LFX Events",                     // optional
+		From:            "newsletter@lfx.linuxfoundation.org", // optional
+		FromDisplayName: "LFX Newsletter",                     // optional
 		GroupID:         "my-batch-id",
 	}
 	data, _ := json.Marshal(req)
