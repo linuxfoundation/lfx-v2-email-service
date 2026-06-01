@@ -68,7 +68,7 @@ nats req lfx.email-service.send_email \
   '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi","from":"newsletter@lfx.linuxfoundation.org","from_display_name":"LFX Newsletter"}'
 ```
 
-### Configuring the sender address
+#### Configuring the sender address
 
 The `from` field lets callers send from any address whose domain is in the service's
 allowlist. The allowlist is configured via the `SMTP_ALLOWED_FROM_DOMAINS` env var
