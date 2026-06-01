@@ -96,7 +96,7 @@ make check          # gofmt check + lint + license-check (does not run tests)
 
 > **CRITICAL — while the branch is pre-PR, post-commit review is mandatory.** After every commit on the local branch, launch `lfx-skills:lfx-general-code-reviewer`, `lfx-skills:lfx-email-service-code-reviewer`, and `lfx-skills:lfx-email-service-learnings-reviewer` subagents via the Agent tool with `run_in_background: true` — then keep working while they run. If Claude displays plugin agents without the `lfx-skills:` namespace, use the equivalent displayed general, email-service, and learnings reviewer names. Before opening a PR, every running review must return clean (or remaining findings explicitly documented as trade-offs), the **full-branch sweep** must run clean if the branch has more than one commit (`branch` arg), AND `/email-service-pr-readiness` must clear every Critical finding before `/email-service-preflight` runs.
 >
-> **Once the PR is open, do NOT invoke these pre-PR reviewers on iteration commits.** CodeRabbit + Copilot auto-trigger on every push and own the audit surface from that point. The general, email-service, and learnings reviewers are pre-PR insurance only.
+> **Once the PR is open, do NOT invoke these pre-PR reviewers on iteration commits.** Copilot + `github-license-compliance[bot]` auto-trigger on every push and own the audit surface from that point (CodeRabbit is not enabled on this repo). The general, email-service, and learnings reviewers are pre-PR insurance only.
 
 ### Post-commit (pre-PR phase, after every commit, asynchronous)
 
@@ -119,7 +119,7 @@ When the work is done and no more code commits are planned:
 
 ### Post-PR iteration (responding to bot feedback on an open PR)
 
-1. Wait for CodeRabbit + Copilot to comment after each push.
+1. Wait for Copilot (and `github-license-compliance[bot]`) to comment after each push.
 2. Triage every Critical and reasonable Important finding against current code.
 3. Roll fixes into a `fix(review): ...` commit.
 4. Push. Repeat until clean.
