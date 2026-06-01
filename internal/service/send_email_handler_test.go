@@ -94,6 +94,45 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			wantSent:    false,
 			wantErrResp: true,
 		},
+		{
+			name:        "custom from on allowed domain",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", From: "events@lfx.linuxfoundation.org"},
+			emailID:     "email-uuid-3",
+			groupID:     "group-uuid-3",
+			wantSent:    true,
+			wantEmailID: "email-uuid-3",
+			wantGroupID: "group-uuid-3",
+		},
+		{
+			name:        "custom from on disallowed domain",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", From: "attacker@evil.com"},
+			wantSent:    false,
+			wantErrResp: true,
+		},
+		{
+			name:        "malformed from address",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", From: "not-an-email"},
+			wantSent:    false,
+			wantErrResp: true,
+		},
+		{
+			name:        "custom from_display_name passed through to sender",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", From: "events@lfx.linuxfoundation.org", FromDisplayName: "LFX Events"},
+			emailID:     "email-uuid-4",
+			groupID:     "group-uuid-4",
+			wantSent:    true,
+			wantEmailID: "email-uuid-4",
+			wantGroupID: "group-uuid-4",
+		},
+		{
+			name:        "from omitted uses service default",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"},
+			emailID:     "email-uuid-5",
+			groupID:     "group-uuid-5",
+			wantSent:    true,
+			wantEmailID: "email-uuid-5",
+			wantGroupID: "group-uuid-5",
+		},
 	}
 
 	for _, tc := range tests {
@@ -101,7 +140,7 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			t.Parallel()
 
 			sender := &mockSender{err: tc.senderErr, emailID: tc.emailID, groupID: tc.groupID}
-			handler := service.NewSendEmailHandler(sender, nil, nil)
+			handler := service.NewSendEmailHandler(sender, nil, nil, []string{"lfx.linuxfoundation.org"})
 
 			var data []byte
 			switch v := tc.payload.(type) {
@@ -151,7 +190,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		recipientsKV := mocks.NewKeyValue()
 		groupIndexKV := mocks.NewKeyValue()
 		sender := &mockSender{emailID: "email-1", groupID: "group-1"}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV)
+		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"})
 
 		req := api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-1"}
 		data, err := json.Marshal(req)
@@ -178,7 +217,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		recipientsKV := mocks.NewKeyValue()
 		groupIndexKV := mocks.NewKeyValue()
 		sender := &mockSender{emailID: "email-2", groupID: "group-2"}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV)
+		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"})
 
 		req := api.SendEmailRequest{To: "bob@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-2"}
 		data, _ := json.Marshal(req)
@@ -201,7 +240,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		for i, id := range []string{"email-a", "email-b"} {
 			_ = i
 			sender := &mockSender{emailID: id, groupID: "group-3"}
-			handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV)
+			handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"})
 			req := api.SendEmailRequest{To: "c@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-3"}
 			data, _ := json.Marshal(req)
 			handler.HandleData(context.Background(), data, func([]byte) error { return nil })
@@ -221,7 +260,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		recipientsKV := mocks.NewKeyValue()
 		groupIndexKV := mocks.NewKeyValue()
 		sender := &mockSender{emailID: "", groupID: ""}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV)
+		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"})
 
 		req := api.SendEmailRequest{To: "d@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
@@ -237,7 +276,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		recipientsKV := mocks.NewKeyValue()
 		groupIndexKV := mocks.NewKeyValue()
 		sender := &mockSender{emailID: "email-nogroupid", groupID: ""}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV)
+		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"})
 
 		req := api.SendEmailRequest{To: "f@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
@@ -256,7 +295,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		recipientsKV := mocks.NewKeyValue()
 		groupIndexKV := mocks.NewKeyValue()
 		sender := &mockSender{emailID: "email-x", groupID: "group-x", err: errors.New("smtp down")}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV)
+		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"})
 
 		req := api.SendEmailRequest{To: "e@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)

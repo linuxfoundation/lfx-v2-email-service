@@ -318,7 +318,7 @@ make helm-install-local
 | `EMAIL_ENABLED` | `false` | Set `true` to enable SMTP delivery; when `false` requests succeed but delivery is skipped via `NoOpSender` |
 | `SMTP_HOST` | `localhost` | SMTP server hostname |
 | `SMTP_PORT` | `587` | SMTP server port (STARTTLS) |
-| `SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | Envelope From address |
+| `DEFAULT_SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | Envelope From address |
 | `SMTP_USERNAME` | _(empty)_ | SMTP credential (from Kubernetes Secret in production) |
 | `SMTP_PASSWORD` | _(empty)_ | SMTP credential (from Kubernetes Secret in production) |
 | `SES_CONFIGURATION_SET` | _(empty)_ | SES configuration set name. When set, `X-SES-CONFIGURATION-SET` is added to every outbound email to route engagement events. Omitted when empty. |

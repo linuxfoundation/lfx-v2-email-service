@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/mail"
+	"strings"
 	"time"
 
 	natsgo "github.com/nats-io/nats.go"
@@ -21,15 +23,29 @@ import (
 
 // SendEmailHandler handles inbound NATS requests on the send_email subject.
 type SendEmailHandler struct {
-	sender       domain.Sender
-	recipientsKV natsgo.KeyValue
-	groupIndexKV natsgo.KeyValue
+	sender             domain.Sender
+	recipientsKV       natsgo.KeyValue
+	groupIndexKV       natsgo.KeyValue
+	allowedFromDomains []string // lower-cased; empty slice = reject any explicit From
 }
 
 // NewSendEmailHandler creates a SendEmailHandler.
 // recipientsKV and groupIndexKV may be nil; tracking is skipped when either is absent.
-func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo.KeyValue) *SendEmailHandler {
-	return &SendEmailHandler{sender: sender, recipientsKV: recipientsKV, groupIndexKV: groupIndexKV}
+// allowedFromDomains is the list of permitted domains for the per-message From override;
+// values are stored lower-cased. An empty slice means no domain is allowed (default-only mode).
+func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo.KeyValue, allowedFromDomains []string) *SendEmailHandler {
+	normalized := make([]string, 0, len(allowedFromDomains))
+	for _, d := range allowedFromDomains {
+		if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
+			normalized = append(normalized, d)
+		}
+	}
+	return &SendEmailHandler{
+		sender:             sender,
+		recipientsKV:       recipientsKV,
+		groupIndexKV:       groupIndexKV,
+		allowedFromDomains: normalized,
+	}
 }
 
 // Handle processes a single NATS message.
@@ -55,6 +71,35 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		)
 		replyError(ctx, respond, "to, subject, html, and text are required")
 		return
+	}
+
+	// Validate per-message From override when provided.
+	if req.From != "" {
+		addr, err := mail.ParseAddress(req.From)
+		if err != nil {
+			slog.WarnContext(ctx, "send email request has invalid from address", "from", req.From, logging.ErrKey, err)
+			replyError(ctx, respond, "invalid from address")
+			return
+		}
+		parts := strings.SplitN(addr.Address, "@", 2)
+		if len(parts) != 2 {
+			slog.WarnContext(ctx, "send email request from address missing domain", "from", req.From)
+			replyError(ctx, respond, "invalid from address")
+			return
+		}
+		domain := strings.ToLower(parts[1])
+		allowed := false
+		for _, d := range h.allowedFromDomains {
+			if d == domain {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			slog.WarnContext(ctx, "send email request from domain not in allowlist", "domain", domain)
+			replyError(ctx, respond, "from address domain not allowed")
+			return
+		}
 	}
 
 	ctx = logging.AppendCtx(ctx, slog.String("recipient", redaction.RedactEmail(req.To)))

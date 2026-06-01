@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Version, BuildTime, and GitCommit are injected at build time via -ldflags.
@@ -27,11 +28,13 @@ type environment struct {
 }
 
 type smtpConfig struct {
-	Host     string
-	Port     int
-	From     string
-	Username string
-	Password string
+	Host               string
+	Port               int
+	From               string
+	FromDisplayName    string   // display name for the From header; default "LFX Self Serve"
+	AllowedFromDomains []string // lower-cased domains permitted for per-message From override
+	Username           string
+	Password           string
 }
 
 func parseEnv() environment {
@@ -65,9 +68,28 @@ func parseEnv() environment {
 		}
 	}
 
-	smtpFrom := os.Getenv("SMTP_FROM")
+	smtpFrom := os.Getenv("DEFAULT_SMTP_FROM")
 	if smtpFrom == "" {
 		smtpFrom = "noreply@lfx.linuxfoundation.org"
+	}
+
+	smtpFromDisplayName := os.Getenv("DEFAULT_SMTP_FROM_DISPLAY_NAME")
+	if smtpFromDisplayName == "" {
+		smtpFromDisplayName = "LFX Self Serve"
+	}
+
+	// SMTP_ALLOWED_FROM_DOMAINS is a comma-separated list of domains (e.g.
+	// "lfx.linuxfoundation.org,linuxfoundation.org"). Defaults to
+	// "lfx.linuxfoundation.org". Set to "" to disable per-message From overrides.
+	allowedDomainsRaw := os.Getenv("SMTP_ALLOWED_FROM_DOMAINS")
+	if allowedDomainsRaw == "" {
+		allowedDomainsRaw = "lfx.linuxfoundation.org"
+	}
+	var allowedFromDomains []string
+	for _, d := range strings.Split(allowedDomainsRaw, ",") {
+		if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
+			allowedFromDomains = append(allowedFromDomains, d)
+		}
 	}
 
 	return environment{
@@ -78,11 +100,13 @@ func parseEnv() environment {
 		SESConfigurationSet: os.Getenv("SES_CONFIGURATION_SET"),
 		SESEngagementSQSURL: os.Getenv("SES_ENGAGEMENT_SQS_QUEUE_URL"),
 		SMTP: smtpConfig{
-			Host:     smtpHost,
-			Port:     smtpPort,
-			From:     smtpFrom,
-			Username: os.Getenv("SMTP_USERNAME"),
-			Password: os.Getenv("SMTP_PASSWORD"),
+			Host:               smtpHost,
+			Port:               smtpPort,
+			From:               smtpFrom,
+			FromDisplayName:    smtpFromDisplayName,
+			AllowedFromDomains: allowedFromDomains,
+			Username:           os.Getenv("SMTP_USERNAME"),
+			Password:           os.Getenv("SMTP_PASSWORD"),
 		},
 	}
 }

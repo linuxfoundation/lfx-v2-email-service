@@ -4,9 +4,13 @@ Development guide for Claude instances working on this service.
 
 ## Service Overview
 
-Thin NATS request/reply relay. Receives pre-rendered `{to, subject, html, text}`
+Thin NATS request/reply relay. Receives pre-rendered `{to, subject, html, text, from?, from_display_name?}`
 payloads and delivers them via Amazon SES SMTP. No templates, no template registry —
 callers are responsible for rendering their own content.
+
+The optional `from` field lets callers override the sender address per message; the domain
+must be in `SMTP_ALLOWED_FROM_DOMAINS` (default: `lfx.linuxfoundation.org`). The optional
+`from_display_name` overrides the display name in the From header (default: `"LFX Self Serve"`).
 
 **Technologies:** Go 1.24, NATS (`nats.go`), `net/smtp`, Kubernetes/Helm
 
@@ -75,8 +79,13 @@ SMTP_HOST=localhost SMTP_PORT=1025 EMAIL_ENABLED=true \
 ### Send a test message
 
 ```bash
+# Default sender
 nats req lfx.email-service.send_email \
   '{"to":"test@example.com","subject":"Hello","html":"<p>Hi</p>","text":"Hi"}'
+
+# Custom from address + display name
+nats req lfx.email-service.send_email \
+  '{"to":"test@example.com","subject":"Hello","html":"<p>Hi</p>","text":"Hi","from":"events@lfx.linuxfoundation.org","from_display_name":"LFX Events"}'
 ```
 
 ## NATS Subjects
@@ -109,7 +118,9 @@ The `group_id` is optional in `SendEmailRequest` — if not provided the email s
 | `EMAIL_ENABLED` | `false` | `true`/`t`/`1` → SMTPSender; anything else → NoOpSender |
 | `SMTP_HOST` | `localhost` | |
 | `SMTP_PORT` | `587` | STARTTLS |
-| `SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | |
+| `DEFAULT_SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | service-level default sender address |
+| `DEFAULT_SMTP_FROM_DISPLAY_NAME` | `LFX Self Serve` | display name in the From header when no per-message `from_display_name` is set |
+| `SMTP_ALLOWED_FROM_DOMAINS` | `lfx.linuxfoundation.org` | comma-separated list of domains permitted for per-message `from` overrides; set to `""` to block all per-message overrides |
 | `SMTP_USERNAME` | _(empty)_ | From K8s Secret in production |
 | `SMTP_PASSWORD` | _(empty)_ | From K8s Secret in production |
 | `SES_EVENTING_ENABLED` | `false` | `true`/`t`/`1` → start the SQS engagement event poller; fatal at startup if AWS config fails to load |
