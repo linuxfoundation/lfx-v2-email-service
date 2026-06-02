@@ -60,7 +60,10 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from, fromDisplayN
 	if parsed, err := mail.ParseAddress(from); err == nil {
 		fromAddr = parsed.Address
 	}
-	b.WriteString(fmt.Sprintf("From: %s <%s>\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(fromDisplayName)), sanitizeHeaderValue(fromAddr)))
+	// Use mail.Address.String() to produce a properly RFC 5322-encoded From header.
+	// This quotes display names that contain commas or other special characters,
+	// preventing them from being mis-parsed as a mailbox list.
+	b.WriteString(fmt.Sprintf("From: %s\r\n", (&mail.Address{Name: sanitizeHeaderValue(fromDisplayName), Address: sanitizeHeaderValue(fromAddr)}).String()))
 	b.WriteString(fmt.Sprintf("To: %s\r\n", sanitizeHeaderValue(to)))
 	if replyTo != "" {
 		replyToAddr := replyTo

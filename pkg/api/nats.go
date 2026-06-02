@@ -48,7 +48,9 @@ const (
 //
 // ReplyTo is optional. When set, it is written as the Reply-To SMTP header so
 // that mail client replies are directed to this address instead of the From address.
-// Must be a valid email address; no domain restriction applies.
+// Must be a valid email address whose domain is in the service's reply-to allowlist
+// (SMTP_ALLOWED_REPLY_TO_DOMAINS, default: "linuxfoundation.org"). Subdomain suffix
+// matching applies, so "linuxfoundation.org" also permits "lfx.linuxfoundation.org".
 type SendEmailRequest struct {
 	To              string `json:"to"`
 	Subject         string `json:"subject"`

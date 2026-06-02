@@ -22,7 +22,7 @@ complaints) in NATS KV.
 | `text` | string | yes | Plain-text body — shown by clients that don't render HTML |
 | `from` | string | no | Sender address (e.g. `newsletter@lfx.linuxfoundation.org`). When omitted the service default (`DEFAULT_SMTP_FROM`) is used. The domain must be in the service's allowed list — see [Configuring the sender address](#configuring-the-sender-address). |
 | `from_display_name` | string | no | Display name shown in the From header (e.g. `LFX Newsletter`). When omitted the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default: `"LFX Self Serve"`) is used. |
-| `reply_to` | string | no | Email address set on the SMTP `Reply-To` header. When set, mail client replies go to this address instead of the `From` address. The domain must be `linuxfoundation.org` or any subdomain (e.g. `lfx.linuxfoundation.org`). Configurable via `SMTP_ALLOWED_REPLY_TO_DOMAINS`. Omitted from the message when not provided. |
+| `reply_to` | string | no | Email address set on the SMTP `Reply-To` header. When set, mail client replies go to this address instead of the `From` address. The domain must be in the service's reply-to allowlist (`SMTP_ALLOWED_REPLY_TO_DOMAINS`, default: `linuxfoundation.org`). Subdomain suffix matching applies — the default permits `@linuxfoundation.org` and `@*.linuxfoundation.org`. Omitted from the message when not provided. |
 | `group_id` | string | no | Caller-supplied ID grouping related emails (e.g. an invite batch). Use it to query aggregate engagement counts via [`lfx.email-service.get_email_engagement_analytics`](#query-group-engagement-analytics). If omitted, a UUID is generated and returned but is not meaningful for analytics. |
 
 ```json

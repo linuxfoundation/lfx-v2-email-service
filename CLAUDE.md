@@ -4,14 +4,16 @@ Development guide for Claude instances working on this service.
 
 ## Service Overview
 
-Thin NATS request/reply relay. Receives pre-rendered `{to, subject, html, text, from?, from_display_name?}`
+Thin NATS request/reply relay. Receives pre-rendered `{to, subject, html, text, from?, from_display_name?, reply_to?}`
 payloads and delivers them via Amazon SES SMTP. No templates, no template registry —
 callers are responsible for rendering their own content.
 
 The optional `from` field lets callers override the sender address per message; the domain
 must be in `SMTP_ALLOWED_FROM_DOMAINS` (default: `lfx.linuxfoundation.org`). The optional
 `from_display_name` overrides the display name in the From header (default: `"LFX Self Serve"`).
-The optional `reply_to` field sets the SMTP `Reply-To` header; the domain must be `linuxfoundation.org` or a subdomain (configurable via `SMTP_ALLOWED_REPLY_TO_DOMAINS`, subdomain suffix matching).
+The optional `reply_to` field sets the SMTP `Reply-To` header; the domain must be in the
+reply-to allowlist (`SMTP_ALLOWED_REPLY_TO_DOMAINS`, default: `linuxfoundation.org`, subdomain
+suffix matching — so `lfx.linuxfoundation.org` is also permitted).
 
 **Technologies:** Go 1.24, NATS (`nats.go`), `net/smtp`, Kubernetes/Helm
 
