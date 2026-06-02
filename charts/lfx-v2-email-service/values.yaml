@@ -72,6 +72,10 @@ app:
     # to use in the per-message `from` field. Requests with a `from` domain not in this list
     # are rejected. Defaults to "lfx.linuxfoundation.org".
     smtpAllowedFromDomains: "lfx.linuxfoundation.org"
+    # smtpAllowedReplyToDomains is a comma-separated list of base domains permitted for the
+    # per-message `reply_to` field. Subdomain suffix matching applies, so "linuxfoundation.org"
+    # also permits "lfx.linuxfoundation.org". Defaults to "linuxfoundation.org".
+    smtpAllowedReplyToDomains: "linuxfoundation.org"
     # smtpSecretName is the name of the Kubernetes Secret containing SMTP credentials.
     # The Secret must have keys: smtp-username, smtp-password.
     # Set to "" to skip injecting SMTP_USERNAME/SMTP_PASSWORD entirely — suitable for

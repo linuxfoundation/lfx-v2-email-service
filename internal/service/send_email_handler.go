@@ -23,28 +23,35 @@ import (
 
 // SendEmailHandler handles inbound NATS requests on the send_email subject.
 type SendEmailHandler struct {
-	sender             domain.Sender
-	recipientsKV       natsgo.KeyValue
-	groupIndexKV       natsgo.KeyValue
-	allowedFromDomains []string // lower-cased; empty slice = reject any explicit From
+	sender                domain.Sender
+	recipientsKV          natsgo.KeyValue
+	groupIndexKV          natsgo.KeyValue
+	allowedFromDomains    []string // lower-cased exact match; empty slice = reject any explicit From
+	allowedReplyToDomains []string // lower-cased base domains; subdomain suffix matching applies
 }
 
 // NewSendEmailHandler creates a SendEmailHandler.
 // recipientsKV and groupIndexKV may be nil; tracking is skipped when either is absent.
 // allowedFromDomains is the list of permitted domains for the per-message From override;
 // values are stored lower-cased. An empty slice means no domain is allowed (default-only mode).
-func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo.KeyValue, allowedFromDomains []string) *SendEmailHandler {
-	normalized := make([]string, 0, len(allowedFromDomains))
-	for _, d := range allowedFromDomains {
-		if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
-			normalized = append(normalized, d)
+// allowedReplyToDomains is the list of permitted base domains for reply_to; subdomain
+// suffix matching is applied, so "linuxfoundation.org" also permits "lfx.linuxfoundation.org".
+func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo.KeyValue, allowedFromDomains, allowedReplyToDomains []string) *SendEmailHandler {
+	normalize := func(domains []string) []string {
+		out := make([]string, 0, len(domains))
+		for _, d := range domains {
+			if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
+				out = append(out, d)
+			}
 		}
+		return out
 	}
 	return &SendEmailHandler{
-		sender:             sender,
-		recipientsKV:       recipientsKV,
-		groupIndexKV:       groupIndexKV,
-		allowedFromDomains: normalized,
+		sender:                sender,
+		recipientsKV:          recipientsKV,
+		groupIndexKV:          groupIndexKV,
+		allowedFromDomains:    normalize(allowedFromDomains),
+		allowedReplyToDomains: normalize(allowedReplyToDomains),
 	}
 }
 
@@ -103,10 +110,27 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	}
 
 	if req.ReplyTo != "" {
-		if _, err := mail.ParseAddress(req.ReplyTo); err != nil {
+		addr, err := mail.ParseAddress(req.ReplyTo)
+		if err != nil {
 			slog.WarnContext(ctx, "send email request has invalid reply_to address", "reply_to", redaction.RedactEmail(req.ReplyTo), logging.ErrKey, err)
 			replyError(ctx, respond, "invalid reply_to address")
 			return
+		}
+		parts := strings.SplitN(addr.Address, "@", 2)
+		if len(parts) == 2 {
+			domain := strings.ToLower(parts[1])
+			allowed := false
+			for _, d := range h.allowedReplyToDomains {
+				if domain == d || strings.HasSuffix(domain, "."+d) {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				slog.WarnContext(ctx, "send email request reply_to domain not in allowlist", "domain", domain)
+				replyError(ctx, respond, "reply_to address domain not allowed")
+				return
+			}
 		}
 	}
 

@@ -22,7 +22,7 @@ complaints) in NATS KV.
 | `text` | string | yes | Plain-text body — shown by clients that don't render HTML |
 | `from` | string | no | Sender address (e.g. `newsletter@lfx.linuxfoundation.org`). When omitted the service default (`DEFAULT_SMTP_FROM`) is used. The domain must be in the service's allowed list — see [Configuring the sender address](#configuring-the-sender-address). |
 | `from_display_name` | string | no | Display name shown in the From header (e.g. `LFX Newsletter`). When omitted the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default: `"LFX Self Serve"`) is used. |
-| `reply_to` | string | no | Email address set on the SMTP `Reply-To` header. When set, mail client replies go to this address instead of the `From` address. Must be a valid email address; no domain restriction applies. Omitted from the message when not provided. |
+| `reply_to` | string | no | Email address set on the SMTP `Reply-To` header. When set, mail client replies go to this address instead of the `From` address. The domain must be `linuxfoundation.org` or any subdomain (e.g. `lfx.linuxfoundation.org`). Configurable via `SMTP_ALLOWED_REPLY_TO_DOMAINS`. Omitted from the message when not provided. |
 | `group_id` | string | no | Caller-supplied ID grouping related emails (e.g. an invite batch). Use it to query aggregate engagement counts via [`lfx.email-service.get_email_engagement_analytics`](#query-group-engagement-analytics). If omitted, a UUID is generated and returned but is not meaningful for analytics. |
 
 ```json
@@ -58,6 +58,7 @@ MIME header. Store it if you want to query delivery/open status later.
 | `invalid from address` | `from` field is not a valid email address |
 | `from address domain not allowed` | `from` domain is not in the service's allowed list |
 | `invalid reply_to address` | `reply_to` field is not a valid email address |
+| `reply_to address domain not allowed` | `reply_to` domain is not in the service's allowed list |
 | `email delivery failed` | Service accepted the request but SMTP delivery failed |
 
 **Examples (NATS CLI):**
@@ -355,6 +356,7 @@ make helm-install-local
 | `DEFAULT_SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | Default envelope From address (falls back to legacy `SMTP_FROM` if unset) |
 | `DEFAULT_SMTP_FROM_DISPLAY_NAME` | `LFX Self Serve` | Default display name in the From header; overridable per message via `from_display_name` |
 | `SMTP_ALLOWED_FROM_DOMAINS` | `lfx.linuxfoundation.org` | Comma-separated domains permitted for per-message `from` overrides; set to `""` to disable overrides entirely |
+| `SMTP_ALLOWED_REPLY_TO_DOMAINS` | `linuxfoundation.org` | Comma-separated base domains permitted for `reply_to`; subdomains are also permitted (e.g. `linuxfoundation.org` allows `lfx.linuxfoundation.org`); set to `""` to disable |
 | `SMTP_USERNAME` | _(empty)_ | SMTP credential (from Kubernetes Secret in production) |
 | `SMTP_PASSWORD` | _(empty)_ | SMTP credential (from Kubernetes Secret in production) |
 | `SES_CONFIGURATION_SET` | _(empty)_ | SES configuration set name. When set, `X-SES-CONFIGURATION-SET` is added to every outbound email to route engagement events. Omitted when empty. |

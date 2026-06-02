@@ -54,6 +54,8 @@ spec:
             {{- end }}
             - name: SMTP_ALLOWED_FROM_DOMAINS
               value: {{ .Values.app.email.smtpAllowedFromDomains | quote }}
+            - name: SMTP_ALLOWED_REPLY_TO_DOMAINS
+              value: {{ .Values.app.email.smtpAllowedReplyToDomains | quote }}
             {{- if .Values.app.email.smtpSecretName }}
             - name: SMTP_USERNAME
               valueFrom:
