@@ -22,6 +22,7 @@ complaints) in NATS KV.
 | `text` | string | yes | Plain-text body — shown by clients that don't render HTML |
 | `from` | string | no | Sender address (e.g. `newsletter@lfx.linuxfoundation.org`). When omitted the service default (`DEFAULT_SMTP_FROM`) is used. The domain must be in the service's allowed list — see [Configuring the sender address](#configuring-the-sender-address). |
 | `from_display_name` | string | no | Display name shown in the From header (e.g. `LFX Newsletter`). When omitted the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default: `"LFX Self Serve"`) is used. |
+| `reply_to` | string | no | Email address set on the SMTP `Reply-To` header. When set, mail client replies go to this address instead of the `From` address. Must be a valid email address; no domain restriction applies. Omitted from the message when not provided. |
 | `group_id` | string | no | Caller-supplied ID grouping related emails (e.g. an invite batch). Use it to query aggregate engagement counts via [`lfx.email-service.get_email_engagement_analytics`](#query-group-engagement-analytics). If omitted, a UUID is generated and returned but is not meaningful for analytics. |
 
 ```json
@@ -32,6 +33,7 @@ complaints) in NATS KV.
   "text": "You've been added as a Writer on Demo Project.",
   "from": "newsletter@lfx.linuxfoundation.org",
   "from_display_name": "LFX Newsletter",
+  "reply_to": "support@lfx.linuxfoundation.org",
   "group_id": "invite-batch-abc123"
 }
 ```
@@ -55,6 +57,7 @@ MIME header. Store it if you want to query delivery/open status later.
 | `to, subject, html, and text are required` | One or more required fields are missing |
 | `invalid from address` | `from` field is not a valid email address |
 | `from address domain not allowed` | `from` domain is not in the service's allowed list |
+| `invalid reply_to address` | `reply_to` field is not a valid email address |
 | `email delivery failed` | Service accepted the request but SMTP delivery failed |
 
 **Examples (NATS CLI):**

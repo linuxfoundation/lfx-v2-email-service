@@ -131,6 +131,21 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			wantFromDisplayName: "LFX Events",
 		},
 		{
+			name:        "valid reply_to passed through to sender",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", ReplyTo: "support@lfx.linuxfoundation.org"},
+			emailID:     "email-uuid-6",
+			groupID:     "group-uuid-6",
+			wantSent:    true,
+			wantEmailID: "email-uuid-6",
+			wantGroupID: "group-uuid-6",
+		},
+		{
+			name:        "malformed reply_to address",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", ReplyTo: "not-an-email"},
+			wantSent:    false,
+			wantErrResp: true,
+		},
+		{
 			// The handler passes From/FromDisplayName through unchanged; defaults
 			// are resolved later in the SMTP sender, not here.
 			name:        "from omitted — sender called with empty from field",

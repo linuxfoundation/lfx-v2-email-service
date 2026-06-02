@@ -23,6 +23,7 @@ func TestBuildEmailMessage_Headers(t *testing.T) {
 		"LFX Self Serve",
 		"",
 		"",
+		"",
 	)
 
 	assert.Contains(t, msg, "From: LFX Self Serve <noreply@lfx.linuxfoundation.org>")
@@ -37,20 +38,20 @@ func TestBuildEmailMessage_Headers(t *testing.T) {
 func TestBuildEmailMessage_ConfigurationSetHeader(t *testing.T) {
 	t.Parallel()
 
-	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "my-config-set", "")
+	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "", "my-config-set", "")
 	assert.Contains(t, msg, "X-SES-CONFIGURATION-SET: my-config-set")
 
-	msgNoSet := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "", "")
+	msgNoSet := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "", "", "")
 	assert.NotContains(t, msgNoSet, "X-SES-CONFIGURATION-SET")
 }
 
 func TestBuildEmailMessage_TrackingIDHeader(t *testing.T) {
 	t.Parallel()
 
-	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "", "group-uuid/email-uuid")
+	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "", "", "group-uuid/email-uuid")
 	assert.Contains(t, msg, "X-LFX-TRACKING-ID: group-uuid/email-uuid")
 
-	msgNoTracking := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "", "")
+	msgNoTracking := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "", "", "")
 	assert.NotContains(t, msgNoTracking, "X-LFX-TRACKING-ID")
 }
 
@@ -60,7 +61,7 @@ func TestBuildEmailMessage_BothParts(t *testing.T) {
 	htmlBody := "<p>Hello Bob</p>"
 	textBody := "Hello Bob"
 
-	msg := buildEmailMessage("bob@example.com", "Subject", htmlBody, textBody, "from@example.com", "LFX Self Serve", "", "")
+	msg := buildEmailMessage("bob@example.com", "Subject", htmlBody, textBody, "from@example.com", "LFX Self Serve", "", "", "")
 
 	assert.Contains(t, msg, "Content-Type: text/plain; charset=UTF-8")
 	assert.Contains(t, msg, "Content-Type: text/html; charset=UTF-8")
@@ -71,7 +72,7 @@ func TestBuildEmailMessage_BothParts(t *testing.T) {
 func TestBuildEmailMessage_BoundaryPresent(t *testing.T) {
 	t.Parallel()
 
-	msg := buildEmailMessage("to@example.com", "Sub", "<b>x</b>", "x", "from@example.com", "LFX Self Serve", "", "")
+	msg := buildEmailMessage("to@example.com", "Sub", "<b>x</b>", "x", "from@example.com", "LFX Self Serve", "", "", "")
 
 	contentTypeLine := ""
 	for _, line := range strings.Split(msg, "\r\n") {
@@ -106,6 +107,7 @@ func TestBuildEmailMessage_CustomFromDisplayName(t *testing.T) {
 		"LFX Events",
 		"",
 		"",
+		"",
 	)
 
 	assert.Contains(t, msg, "events@lfx.linuxfoundation.org")
@@ -123,6 +125,7 @@ func TestBuildEmailMessage_DefaultFromDisplayName(t *testing.T) {
 		"Hi",
 		"noreply@lfx.linuxfoundation.org",
 		"LFX Self Serve",
+		"",
 		"",
 		"",
 	)
@@ -145,10 +148,25 @@ func TestBuildEmailMessage_FromDisplayName_InjectionStripped(t *testing.T) {
 		"Evil\r\nBcc: attacker@evil.com",
 		"",
 		"",
+		"",
 	)
 
 	// The injected header prefix must not appear as a literal CRLF sequence.
 	assert.NotContains(t, msg, "\r\nBcc:")
+}
+
+func TestBuildEmailMessage_ReplyToHeader(t *testing.T) {
+	t.Parallel()
+
+	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "support@lfx.linuxfoundation.org", "", "")
+	assert.Contains(t, msg, "Reply-To: support@lfx.linuxfoundation.org")
+}
+
+func TestBuildEmailMessage_ReplyToOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "", "", "")
+	assert.NotContains(t, msg, "Reply-To:")
 }
 
 func TestGenerateMessageID_ContainsDomain(t *testing.T) {

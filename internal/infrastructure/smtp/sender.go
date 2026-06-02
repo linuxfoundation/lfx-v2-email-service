@@ -73,7 +73,7 @@ func (s *SMTPSender) Send(ctx context.Context, req api.SendEmailRequest) (emailI
 	sendCtx, cancel := context.WithTimeout(ctx, smtpTimeout)
 	defer cancel()
 
-	msg := buildEmailMessage(req.To, req.Subject, req.HTML, req.Text, fromAddr, fromDisplayName, s.cfg.ConfigurationSet, trackingID)
+	msg := buildEmailMessage(req.To, req.Subject, req.HTML, req.Text, fromAddr, fromDisplayName, req.ReplyTo, s.cfg.ConfigurationSet, trackingID)
 	if err := sendMessage(sendCtx, req.To, fromAddr, msg, s.cfg); err != nil {
 		return "", "", fmt.Errorf("smtp send: %w", err)
 	}

@@ -102,6 +102,14 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		}
 	}
 
+	if req.ReplyTo != "" {
+		if _, err := mail.ParseAddress(req.ReplyTo); err != nil {
+			slog.WarnContext(ctx, "send email request has invalid reply_to address", "reply_to", redaction.RedactEmail(req.ReplyTo), logging.ErrKey, err)
+			replyError(ctx, respond, "invalid reply_to address")
+			return
+		}
+	}
+
 	ctx = logging.AppendCtx(ctx, slog.String("recipient", redaction.RedactEmail(req.To)))
 	ctx = logging.AppendCtx(ctx, slog.String("subject", req.Subject))
 

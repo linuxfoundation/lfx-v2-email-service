@@ -47,7 +47,9 @@ func sanitizeHeaderValue(v string) string {
 // trackingID, when non-empty, adds an X-LFX-TRACKING-ID header in the form group_id/email_id
 // so the SQS poller can correlate SES events back to the KV record.
 // fromDisplayName is the display name shown in the From header (e.g. "LFX Self Serve").
-func buildEmailMessage(to, subject, htmlContent, textContent, from, fromDisplayName, configurationSet, trackingID string) string {
+// replyTo, when non-empty, sets the Reply-To header to direct mail-client replies to
+// a different address than From.
+func buildEmailMessage(to, subject, htmlContent, textContent, from, fromDisplayName, replyTo, configurationSet, trackingID string) string {
 	messageID := generateMessageID(from)
 	boundary := generateBoundary()
 	var b strings.Builder
@@ -60,6 +62,13 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from, fromDisplayN
 	}
 	b.WriteString(fmt.Sprintf("From: %s <%s>\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(fromDisplayName)), sanitizeHeaderValue(fromAddr)))
 	b.WriteString(fmt.Sprintf("To: %s\r\n", sanitizeHeaderValue(to)))
+	if replyTo != "" {
+		replyToAddr := replyTo
+		if parsed, err := mail.ParseAddress(replyTo); err == nil {
+			replyToAddr = parsed.Address
+		}
+		b.WriteString(fmt.Sprintf("Reply-To: %s\r\n", sanitizeHeaderValue(replyToAddr)))
+	}
 	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(subject))))
 	b.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
 	b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))

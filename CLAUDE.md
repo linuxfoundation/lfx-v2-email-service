@@ -11,6 +11,7 @@ callers are responsible for rendering their own content.
 The optional `from` field lets callers override the sender address per message; the domain
 must be in `SMTP_ALLOWED_FROM_DOMAINS` (default: `lfx.linuxfoundation.org`). The optional
 `from_display_name` overrides the display name in the From header (default: `"LFX Self Serve"`).
+The optional `reply_to` field sets the SMTP `Reply-To` header (no domain restriction).
 
 **Technologies:** Go 1.24, NATS (`nats.go`), `net/smtp`, Kubernetes/Helm
 

@@ -45,6 +45,10 @@ const (
 // FromDisplayName is optional. When set, it is used as the display name in the
 // From header (e.g. "My Team <from@lfx.linuxfoundation.org>"). Defaults to the
 // service-level DEFAULT_SMTP_FROM_DISPLAY_NAME (default: "LFX Self Serve").
+//
+// ReplyTo is optional. When set, it is written as the Reply-To SMTP header so
+// that mail client replies are directed to this address instead of the From address.
+// Must be a valid email address; no domain restriction applies.
 type SendEmailRequest struct {
 	To              string `json:"to"`
 	Subject         string `json:"subject"`
@@ -52,6 +56,7 @@ type SendEmailRequest struct {
 	Text            string `json:"text"`
 	From            string `json:"from,omitempty"`              // bare address; empty → service default
 	FromDisplayName string `json:"from_display_name,omitempty"` // display name; empty → service default
+	ReplyTo         string `json:"reply_to,omitempty"`          // Reply-To header address; omitted when empty
 	GroupID         string `json:"group_id,omitempty"`
 }
 
