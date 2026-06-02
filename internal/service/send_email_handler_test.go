@@ -46,6 +46,7 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 		wantGroupID         string
 		wantFrom            string // assert sender received this From value
 		wantFromDisplayName string // assert sender received this FromDisplayName value
+		wantReplyTo         string // assert sender received this ReplyTo value
 	}{
 		{
 			name:        "happy path — ids returned",
@@ -139,6 +140,7 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			wantSent:    true,
 			wantEmailID: "email-uuid-6",
 			wantGroupID: "group-uuid-6",
+			wantReplyTo: "support@lfx.linuxfoundation.org",
 		},
 		{
 			// exact base domain is also permitted
@@ -149,6 +151,7 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			wantSent:    true,
 			wantEmailID: "email-uuid-7",
 			wantGroupID: "group-uuid-7",
+			wantReplyTo: "noreply@linuxfoundation.org",
 		},
 		{
 			name:        "reply_to on disallowed domain",
@@ -221,6 +224,9 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			if tc.wantFrom != "" || tc.wantSent {
 				assert.Equal(t, tc.wantFrom, sender.req.From, "sender received wrong From")
 				assert.Equal(t, tc.wantFromDisplayName, sender.req.FromDisplayName, "sender received wrong FromDisplayName")
+			}
+			if tc.wantReplyTo != "" {
+				assert.Equal(t, tc.wantReplyTo, sender.req.ReplyTo, "sender received wrong ReplyTo")
 			}
 		})
 	}
