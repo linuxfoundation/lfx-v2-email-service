@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/mail"
+	"strings"
 	"time"
 
 	natsgo "github.com/nats-io/nats.go"
@@ -21,15 +23,36 @@ import (
 
 // SendEmailHandler handles inbound NATS requests on the send_email subject.
 type SendEmailHandler struct {
-	sender       domain.Sender
-	recipientsKV natsgo.KeyValue
-	groupIndexKV natsgo.KeyValue
+	sender                domain.Sender
+	recipientsKV          natsgo.KeyValue
+	groupIndexKV          natsgo.KeyValue
+	allowedFromDomains    []string // lower-cased exact match; empty slice = reject any explicit From
+	allowedReplyToDomains []string // lower-cased base domains; subdomain suffix matching applies
 }
 
 // NewSendEmailHandler creates a SendEmailHandler.
 // recipientsKV and groupIndexKV may be nil; tracking is skipped when either is absent.
-func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo.KeyValue) *SendEmailHandler {
-	return &SendEmailHandler{sender: sender, recipientsKV: recipientsKV, groupIndexKV: groupIndexKV}
+// allowedFromDomains is the list of permitted domains for the per-message From override;
+// values are stored lower-cased. An empty slice means no domain is allowed (default-only mode).
+// allowedReplyToDomains is the list of permitted base domains for reply_to; subdomain
+// suffix matching is applied, so "linuxfoundation.org" also permits "lfx.linuxfoundation.org".
+func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo.KeyValue, allowedFromDomains, allowedReplyToDomains []string) *SendEmailHandler {
+	normalize := func(domains []string) []string {
+		out := make([]string, 0, len(domains))
+		for _, d := range domains {
+			if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
+				out = append(out, d)
+			}
+		}
+		return out
+	}
+	return &SendEmailHandler{
+		sender:                sender,
+		recipientsKV:          recipientsKV,
+		groupIndexKV:          groupIndexKV,
+		allowedFromDomains:    normalize(allowedFromDomains),
+		allowedReplyToDomains: normalize(allowedReplyToDomains),
+	}
 }
 
 // Handle processes a single NATS message.
@@ -55,6 +78,60 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		)
 		replyError(ctx, respond, "to, subject, html, and text are required")
 		return
+	}
+
+	// Validate per-message From override when provided.
+	if req.From != "" {
+		addr, err := mail.ParseAddress(req.From)
+		if err != nil {
+			slog.WarnContext(ctx, "send email request has invalid from address", "from", redaction.RedactEmail(req.From), logging.ErrKey, err)
+			replyError(ctx, respond, "invalid from address")
+			return
+		}
+		parts := strings.SplitN(addr.Address, "@", 2)
+		if len(parts) != 2 {
+			slog.WarnContext(ctx, "send email request from address missing domain", "from", redaction.RedactEmail(req.From))
+			replyError(ctx, respond, "invalid from address")
+			return
+		}
+		domain := strings.ToLower(parts[1])
+		allowed := false
+		for _, d := range h.allowedFromDomains {
+			if d == domain {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			slog.WarnContext(ctx, "send email request from domain not in allowlist", "domain", domain)
+			replyError(ctx, respond, "from address domain not allowed")
+			return
+		}
+	}
+
+	if req.ReplyTo != "" {
+		addr, err := mail.ParseAddress(req.ReplyTo)
+		if err != nil {
+			slog.WarnContext(ctx, "send email request has invalid reply_to address", "reply_to", redaction.RedactEmail(req.ReplyTo), logging.ErrKey, err)
+			replyError(ctx, respond, "invalid reply_to address")
+			return
+		}
+		parts := strings.SplitN(addr.Address, "@", 2)
+		if len(parts) == 2 {
+			domain := strings.ToLower(parts[1])
+			allowed := false
+			for _, d := range h.allowedReplyToDomains {
+				if domain == d || strings.HasSuffix(domain, "."+d) {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				slog.WarnContext(ctx, "send email request reply_to domain not in allowlist", "domain", domain)
+				replyError(ctx, respond, "reply_to address domain not allowed")
+				return
+			}
+		}
 	}
 
 	ctx = logging.AppendCtx(ctx, slog.String("recipient", redaction.RedactEmail(req.To)))
