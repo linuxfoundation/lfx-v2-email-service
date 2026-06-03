@@ -91,9 +91,15 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	// non-prod filtering as a delivery failure.
 	if len(h.allowedRecipientDomains) > 0 {
 		allowed := false
-		if addr, err := mail.ParseAddress(req.To); err == nil {
-			if parts := strings.SplitN(addr.Address, "@", 2); len(parts) == 2 {
-				domain := strings.ToLower(parts[1])
+		addr, parseErr := mail.ParseAddress(req.To)
+		if parseErr != nil {
+			slog.WarnContext(ctx, "send email request has malformed recipient address, skipping send",
+				"to", redaction.RedactEmail(req.To), logging.ErrKey, parseErr)
+		} else {
+			// Use LastIndex so that RFC-valid quoted local parts containing "@" don't
+			// cause mis-classification; the domain is always after the final "@".
+			if at := strings.LastIndex(addr.Address, "@"); at >= 0 {
+				domain := strings.ToLower(addr.Address[at+1:])
 				for _, d := range h.allowedRecipientDomains {
 					if domain == d || strings.HasSuffix(domain, "."+d) {
 						allowed = true
@@ -101,10 +107,12 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 					}
 				}
 			}
+			if !allowed {
+				slog.WarnContext(ctx, "send email request recipient domain not in allowlist, skipping send",
+					"to", redaction.RedactEmail(req.To))
+			}
 		}
 		if !allowed {
-			slog.WarnContext(ctx, "send email request recipient domain not in allowlist, skipping send",
-				"to", redaction.RedactEmail(req.To))
 			resp, _ := json.Marshal(api.SendEmailResponse{})
 			if err := respond(resp); err != nil {
 				slog.WarnContext(ctx, "failed to respond to NATS request", logging.ErrKey, err)
