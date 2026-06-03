@@ -23,11 +23,12 @@ import (
 
 // SendEmailHandler handles inbound NATS requests on the send_email subject.
 type SendEmailHandler struct {
-	sender                domain.Sender
-	recipientsKV          natsgo.KeyValue
-	groupIndexKV          natsgo.KeyValue
-	allowedFromDomains    []string // lower-cased exact match; empty slice = reject any explicit From
-	allowedReplyToDomains []string // lower-cased base domains; subdomain suffix matching applies
+	sender                  domain.Sender
+	recipientsKV            natsgo.KeyValue
+	groupIndexKV            natsgo.KeyValue
+	allowedFromDomains      []string // lower-cased exact match; empty slice = reject any explicit From
+	allowedReplyToDomains   []string // lower-cased base domains; subdomain suffix matching applies
+	allowedRecipientDomains []string // lower-cased base domains; subdomain suffix matching applies; empty = permit all
 }
 
 // NewSendEmailHandler creates a SendEmailHandler.
@@ -36,7 +37,10 @@ type SendEmailHandler struct {
 // values are stored lower-cased. An empty slice means no domain is allowed (default-only mode).
 // allowedReplyToDomains is the list of permitted base domains for reply_to; subdomain
 // suffix matching is applied, so "linuxfoundation.org" also permits "lfx.linuxfoundation.org".
-func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo.KeyValue, allowedFromDomains, allowedReplyToDomains []string) *SendEmailHandler {
+// allowedRecipientDomains is the list of permitted base domains for the recipient address;
+// subdomain suffix matching applies. An empty slice means all recipient domains are permitted
+// (the production default). Set in non-prod to prevent test mail reaching real users.
+func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo.KeyValue, allowedFromDomains, allowedReplyToDomains, allowedRecipientDomains []string) *SendEmailHandler {
 	normalize := func(domains []string) []string {
 		out := make([]string, 0, len(domains))
 		for _, d := range domains {
@@ -47,11 +51,12 @@ func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo
 		return out
 	}
 	return &SendEmailHandler{
-		sender:                sender,
-		recipientsKV:          recipientsKV,
-		groupIndexKV:          groupIndexKV,
-		allowedFromDomains:    normalize(allowedFromDomains),
-		allowedReplyToDomains: normalize(allowedReplyToDomains),
+		sender:                  sender,
+		recipientsKV:            recipientsKV,
+		groupIndexKV:            groupIndexKV,
+		allowedFromDomains:      normalize(allowedFromDomains),
+		allowedReplyToDomains:   normalize(allowedReplyToDomains),
+		allowedRecipientDomains: normalize(allowedRecipientDomains),
 	}
 }
 
@@ -78,6 +83,42 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		)
 		replyError(ctx, respond, "to, subject, html, and text are required")
 		return
+	}
+
+	// Recipient domain allowlist. Empty = permit all (production default). Set in non-prod
+	// to prevent test mail from reaching real users' personal addresses. A blocked recipient
+	// returns an empty success response (not an error) so callers don't treat expected
+	// non-prod filtering as a delivery failure.
+	if len(h.allowedRecipientDomains) > 0 {
+		allowed := false
+		addr, parseErr := mail.ParseAddress(req.To)
+		if parseErr != nil {
+			slog.WarnContext(ctx, "send email request has malformed recipient address, skipping send",
+				"to", redaction.RedactEmail(req.To), logging.ErrKey, parseErr)
+		} else {
+			// Use LastIndex so that RFC-valid quoted local parts containing "@" don't
+			// cause mis-classification; the domain is always after the final "@".
+			if at := strings.LastIndex(addr.Address, "@"); at >= 0 {
+				domain := strings.ToLower(addr.Address[at+1:])
+				for _, d := range h.allowedRecipientDomains {
+					if domain == d || strings.HasSuffix(domain, "."+d) {
+						allowed = true
+						break
+					}
+				}
+			}
+			if !allowed {
+				slog.WarnContext(ctx, "send email request recipient domain not in allowlist, skipping send",
+					"to", redaction.RedactEmail(req.To))
+			}
+		}
+		if !allowed {
+			resp, _ := json.Marshal(api.SendEmailResponse{})
+			if err := respond(resp); err != nil {
+				slog.WarnContext(ctx, "failed to respond to NATS request", logging.ErrKey, err)
+			}
+			return
+		}
 	}
 
 	// Validate per-message From override when provided.

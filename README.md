@@ -357,6 +357,7 @@ make helm-install-local
 | `DEFAULT_SMTP_FROM_DISPLAY_NAME` | `LFX Self Serve` | Default display name in the From header; overridable per message via `from_display_name` |
 | `SMTP_ALLOWED_FROM_DOMAINS` | `lfx.linuxfoundation.org` | Comma-separated domains permitted for per-message `from` overrides; set to `""` to disable overrides entirely |
 | `SMTP_ALLOWED_REPLY_TO_DOMAINS` | `linuxfoundation.org` | Comma-separated base domains permitted for `reply_to`; subdomains are also permitted (e.g. `linuxfoundation.org` allows `lfx.linuxfoundation.org`); set to `""` to disable |
+| `SMTP_ALLOWED_RECIPIENT_DOMAINS` | _(empty — permit all)_ | Comma-separated base domains permitted as recipients (subdomain suffix matching applies). When empty all recipient domains are permitted (production default). Set in non-prod (e.g. `linuxfoundation.org`) to prevent test mail from reaching real users' personal addresses. |
 | `SMTP_USERNAME` | _(empty)_ | SMTP credential (from Kubernetes Secret in production) |
 | `SMTP_PASSWORD` | _(empty)_ | SMTP credential (from Kubernetes Secret in production) |
 | `SES_CONFIGURATION_SET` | _(empty)_ | SES configuration set name. When set, `X-SES-CONFIGURATION-SET` is added to every outbound email to route engagement events. Omitted when empty. |

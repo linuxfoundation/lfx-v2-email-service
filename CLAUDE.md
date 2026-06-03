@@ -15,6 +15,11 @@ The optional `reply_to` field sets the SMTP `Reply-To` header; the domain must b
 reply-to allowlist (`SMTP_ALLOWED_REPLY_TO_DOMAINS`, default: `linuxfoundation.org`, subdomain
 suffix matching — so `lfx.linuxfoundation.org` is also permitted).
 
+Recipient domain filtering is centralized here via `SMTP_ALLOWED_RECIPIENT_DOMAINS` (default:
+empty = permit all). Set in non-prod environments to prevent test notifications from reaching
+real users' personal addresses. Subdomain suffix matching applies; a blocked recipient returns an
+empty success response so callers don't log expected non-prod filtering as a delivery failure.
+
 **Technologies:** Go 1.24, NATS (`nats.go`), `net/smtp`, Kubernetes/Helm
 
 ## Architecture
@@ -125,6 +130,7 @@ The `group_id` is optional in `SendEmailRequest` — if not provided the email s
 | `DEFAULT_SMTP_FROM_DISPLAY_NAME` | `LFX Self Serve` | display name in the From header when no per-message `from_display_name` is set |
 | `SMTP_ALLOWED_FROM_DOMAINS` | `lfx.linuxfoundation.org` | comma-separated list of domains permitted for per-message `from` overrides; set to `""` to block all per-message overrides |
 | `SMTP_ALLOWED_REPLY_TO_DOMAINS` | `linuxfoundation.org` | comma-separated base domains for `reply_to`; subdomains also permitted; set to `""` to block |
+| `SMTP_ALLOWED_RECIPIENT_DOMAINS` | _(empty — permit all)_ | comma-separated base domains permitted as recipients (subdomain suffix matching); empty = permit all (production default); set in non-prod to block real users |
 | `SMTP_USERNAME` | _(empty)_ | From K8s Secret in production |
 | `SMTP_PASSWORD` | _(empty)_ | From K8s Secret in production |
 | `SES_EVENTING_ENABLED` | `false` | `true`/`t`/`1` → start the SQS engagement event poller; fatal at startup if AWS config fails to load |

@@ -1,0 +1,3 @@
+# False-positive suppressions — fingerprint format: <commit>:<file>:<ruleID>:<line>
+545d3cab6d6cc4ddddd2ebcf2a5a3a29e59aa4d7:CLAUDE.md:generic-api-key:42
+6885a01ef3badca3a8db31461e9069dd92bac24b:.gitleaksignore:generic-api-key:4

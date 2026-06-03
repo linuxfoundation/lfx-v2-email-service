@@ -184,7 +184,7 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			t.Parallel()
 
 			sender := &mockSender{err: tc.senderErr, emailID: tc.emailID, groupID: tc.groupID}
-			handler := service.NewSendEmailHandler(sender, nil, nil, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"})
+			handler := service.NewSendEmailHandler(sender, nil, nil, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 			var data []byte
 			switch v := tc.payload.(type) {
@@ -241,7 +241,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		recipientsKV := mocks.NewKeyValue()
 		groupIndexKV := mocks.NewKeyValue()
 		sender := &mockSender{emailID: "email-1", groupID: "group-1"}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"})
+		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 		req := api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-1"}
 		data, err := json.Marshal(req)
@@ -268,7 +268,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		recipientsKV := mocks.NewKeyValue()
 		groupIndexKV := mocks.NewKeyValue()
 		sender := &mockSender{emailID: "email-2", groupID: "group-2"}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"})
+		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 		req := api.SendEmailRequest{To: "bob@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-2"}
 		data, _ := json.Marshal(req)
@@ -291,7 +291,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		for i, id := range []string{"email-a", "email-b"} {
 			_ = i
 			sender := &mockSender{emailID: id, groupID: "group-3"}
-			handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"})
+			handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 			req := api.SendEmailRequest{To: "c@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-3"}
 			data, _ := json.Marshal(req)
 			handler.HandleData(context.Background(), data, func([]byte) error { return nil })
@@ -311,7 +311,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		recipientsKV := mocks.NewKeyValue()
 		groupIndexKV := mocks.NewKeyValue()
 		sender := &mockSender{emailID: "", groupID: ""}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"})
+		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 		req := api.SendEmailRequest{To: "d@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
@@ -327,7 +327,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		recipientsKV := mocks.NewKeyValue()
 		groupIndexKV := mocks.NewKeyValue()
 		sender := &mockSender{emailID: "email-nogroupid", groupID: ""}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"})
+		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 		req := api.SendEmailRequest{To: "f@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
@@ -346,7 +346,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		recipientsKV := mocks.NewKeyValue()
 		groupIndexKV := mocks.NewKeyValue()
 		sender := &mockSender{emailID: "email-x", groupID: "group-x", err: errors.New("smtp down")}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"})
+		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 		req := api.SendEmailRequest{To: "e@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
@@ -354,5 +354,109 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 
 		_, err := recipientsKV.Get("email-x")
 		assert.Error(t, err, "no record should be written on send error")
+	})
+}
+
+func TestSendEmailHandler_RecipientDomainAllowlist(t *testing.T) {
+	t.Parallel()
+
+	baseReq := api.SendEmailRequest{To: "user@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"}
+	validReqLFX := api.SendEmailRequest{To: "user@linuxfoundation.org", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"}
+	subdomainReq := api.SendEmailRequest{To: "user@sub.linuxfoundation.org", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"}
+	malformedToReq := api.SendEmailRequest{To: "not-an-email", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"}
+
+	makeHandler := func(recipientDomains []string) (*service.SendEmailHandler, *mockSender) {
+		s := &mockSender{emailID: "email-r", groupID: "group-r"}
+		h := service.NewSendEmailHandler(s, nil, nil, nil, nil, recipientDomains)
+		return h, s
+	}
+
+	respond := func(responded *[]byte) func([]byte) error {
+		return func(d []byte) error {
+			*responded = d
+			return nil
+		}
+	}
+
+	t.Run("empty allowlist permits any recipient", func(t *testing.T) {
+		t.Parallel()
+		h, s := makeHandler(nil)
+		var resp []byte
+		data, _ := json.Marshal(baseReq)
+		h.HandleData(context.Background(), data, respond(&resp))
+		assert.True(t, s.called, "sender should be called when allowlist is empty")
+		var r api.SendEmailResponse
+		require.NoError(t, json.Unmarshal(resp, &r))
+		assert.Equal(t, "email-r", r.EmailID)
+	})
+
+	t.Run("exact domain match is permitted", func(t *testing.T) {
+		t.Parallel()
+		h, s := makeHandler([]string{"linuxfoundation.org"})
+		var resp []byte
+		data, _ := json.Marshal(validReqLFX)
+		h.HandleData(context.Background(), data, respond(&resp))
+		assert.True(t, s.called, "sender should be called for exact domain match")
+		var r api.SendEmailResponse
+		require.NoError(t, json.Unmarshal(resp, &r))
+		assert.Equal(t, "email-r", r.EmailID)
+	})
+
+	t.Run("subdomain of allowed base domain is permitted", func(t *testing.T) {
+		t.Parallel()
+		h, s := makeHandler([]string{"linuxfoundation.org"})
+		var resp []byte
+		data, _ := json.Marshal(subdomainReq)
+		h.HandleData(context.Background(), data, respond(&resp))
+		assert.True(t, s.called, "sender should be called for subdomain of allowed base domain")
+		var r api.SendEmailResponse
+		require.NoError(t, json.Unmarshal(resp, &r))
+		assert.Equal(t, "email-r", r.EmailID)
+	})
+
+	t.Run("non-matching domain is skipped — empty success response, no send", func(t *testing.T) {
+		t.Parallel()
+		h, s := makeHandler([]string{"linuxfoundation.org"})
+		var resp []byte
+		data, _ := json.Marshal(baseReq) // to: user@example.com
+		h.HandleData(context.Background(), data, respond(&resp))
+		assert.False(t, s.called, "sender must not be called for blocked recipient domain")
+		// Response must be a valid (empty) SendEmailResponse, not an error.
+		var r api.SendEmailResponse
+		require.NoError(t, json.Unmarshal(resp, &r), "response should be a valid SendEmailResponse")
+		assert.Empty(t, r.EmailID, "email_id should be empty for blocked recipient")
+		var errR api.SendEmailErrorResponse
+		_ = json.Unmarshal(resp, &errR)
+		assert.Empty(t, errR.Error, "response must not be an error reply")
+	})
+
+	t.Run("case-insensitive domain matching", func(t *testing.T) {
+		t.Parallel()
+		h, s := makeHandler([]string{"LinuxFoundation.ORG"})
+		var resp []byte
+		data, _ := json.Marshal(validReqLFX) // to: user@linuxfoundation.org (lower)
+		h.HandleData(context.Background(), data, respond(&resp))
+		assert.True(t, s.called, "domain matching must be case-insensitive")
+	})
+
+	t.Run("malformed to address with active allowlist is skipped", func(t *testing.T) {
+		t.Parallel()
+		h, s := makeHandler([]string{"linuxfoundation.org"})
+		var resp []byte
+		data, _ := json.Marshal(malformedToReq)
+		h.HandleData(context.Background(), data, respond(&resp))
+		assert.False(t, s.called, "sender must not be called for unparseable recipient address")
+		var r api.SendEmailResponse
+		require.NoError(t, json.Unmarshal(resp, &r))
+		assert.Empty(t, r.EmailID)
+	})
+
+	t.Run("multiple allowed domains — match on second entry", func(t *testing.T) {
+		t.Parallel()
+		h, s := makeHandler([]string{"example.org", "linuxfoundation.org"})
+		var resp []byte
+		data, _ := json.Marshal(validReqLFX) // linuxfoundation.org is second entry
+		h.HandleData(context.Background(), data, respond(&resp))
+		assert.True(t, s.called, "sender should be called when domain matches any entry in the allowlist")
 	})
 }
