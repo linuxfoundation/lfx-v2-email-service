@@ -28,14 +28,15 @@ type environment struct {
 }
 
 type smtpConfig struct {
-	Host                  string
-	Port                  int
-	From                  string
-	FromDisplayName       string   // display name for the From header; default "LFX Self Serve"
-	AllowedFromDomains    []string // lower-cased exact-match domains permitted for per-message From override
-	AllowedReplyToDomains []string // lower-cased base domains permitted for reply_to (subdomain suffix matching)
-	Username              string
-	Password              string
+	Host                    string
+	Port                    int
+	From                    string
+	FromDisplayName         string   // display name for the From header; default "LFX Self Serve"
+	AllowedFromDomains      []string // lower-cased exact-match domains permitted for per-message From override
+	AllowedReplyToDomains   []string // lower-cased base domains permitted for reply_to (subdomain suffix matching)
+	AllowedRecipientDomains []string // lower-cased base domains permitted as recipients (subdomain suffix matching); empty = permit all
+	Username                string
+	Password                string
 }
 
 func parseEnv() environment {
@@ -116,6 +117,18 @@ func parseEnv() environment {
 		}
 	}
 
+	// SMTP_ALLOWED_RECIPIENT_DOMAINS is a comma-separated list of base domains permitted
+	// as recipients (subdomain suffix matching applies, so "linuxfoundation.org" also permits
+	// "lfx.linuxfoundation.org"). When unset or empty, all recipient domains are permitted
+	// (production-safe default). Set in non-prod environments to prevent test mail from
+	// reaching real users' personal addresses.
+	var allowedRecipientDomains []string
+	for _, d := range strings.Split(os.Getenv("SMTP_ALLOWED_RECIPIENT_DOMAINS"), ",") {
+		if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
+			allowedRecipientDomains = append(allowedRecipientDomains, d)
+		}
+	}
+
 	return environment{
 		NatsURL:             natsURL,
 		Port:                port,
@@ -124,14 +137,15 @@ func parseEnv() environment {
 		SESConfigurationSet: os.Getenv("SES_CONFIGURATION_SET"),
 		SESEngagementSQSURL: os.Getenv("SES_ENGAGEMENT_SQS_QUEUE_URL"),
 		SMTP: smtpConfig{
-			Host:                  smtpHost,
-			Port:                  smtpPort,
-			From:                  smtpFrom,
-			FromDisplayName:       smtpFromDisplayName,
-			AllowedFromDomains:    allowedFromDomains,
-			AllowedReplyToDomains: allowedReplyToDomains,
-			Username:              os.Getenv("SMTP_USERNAME"),
-			Password:              os.Getenv("SMTP_PASSWORD"),
+			Host:                    smtpHost,
+			Port:                    smtpPort,
+			From:                    smtpFrom,
+			FromDisplayName:         smtpFromDisplayName,
+			AllowedFromDomains:      allowedFromDomains,
+			AllowedReplyToDomains:   allowedReplyToDomains,
+			AllowedRecipientDomains: allowedRecipientDomains,
+			Username:                os.Getenv("SMTP_USERNAME"),
+			Password:                os.Getenv("SMTP_PASSWORD"),
 		},
 	}
 }

@@ -76,6 +76,11 @@ app:
     # per-message `reply_to` field. Subdomain suffix matching applies, so "linuxfoundation.org"
     # also permits "lfx.linuxfoundation.org". Defaults to "linuxfoundation.org".
     smtpAllowedReplyToDomains: "linuxfoundation.org"
+    # smtpAllowedRecipientDomains is a comma-separated list of base domains permitted as
+    # recipients (subdomain suffix matching applies). Empty = permit all recipients (production
+    # default). Set in non-prod (e.g. "linuxfoundation.org") to prevent test mail from reaching
+    # real users' personal addresses.
+    smtpAllowedRecipientDomains: ""
     # smtpSecretName is the name of the Kubernetes Secret containing SMTP credentials.
     # The Secret must have keys: smtp-username, smtp-password.
     # Set to "" to skip injecting SMTP_USERNAME/SMTP_PASSWORD entirely — suitable for

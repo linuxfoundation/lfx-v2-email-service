@@ -70,9 +70,10 @@ func main() {
 
 	slog.Info("from address allowlist configured", "allowed_domains", env.SMTP.AllowedFromDomains)
 	slog.Info("reply_to address allowlist configured", "allowed_domains", env.SMTP.AllowedReplyToDomains)
+	slog.Info("recipient address allowlist configured", "allowed_domains", env.SMTP.AllowedRecipientDomains)
 
 	wg.Add(2) // HTTP server + NATS drain
-	if err := subscribeHandlers(ctx, nc, sender, recipientsKV, groupIndexKV, env.SMTP.AllowedFromDomains, env.SMTP.AllowedReplyToDomains, &wg, done); err != nil {
+	if err := subscribeHandlers(ctx, nc, sender, recipientsKV, groupIndexKV, env.SMTP.AllowedFromDomains, env.SMTP.AllowedReplyToDomains, env.SMTP.AllowedRecipientDomains, &wg, done); err != nil {
 		slog.Error("failed to subscribe NATS handlers", logging.ErrKey, err)
 		cancel()
 		os.Exit(1)
@@ -197,6 +198,7 @@ func subscribeHandlers(
 	recipientsKV, groupIndexKV natsgo.KeyValue,
 	allowedFromDomains []string,
 	allowedReplyToDomains []string,
+	allowedRecipientDomains []string,
 	wg *sync.WaitGroup,
 	done chan os.Signal,
 ) error {
@@ -214,7 +216,7 @@ func subscribeHandlers(
 		wg.Done()
 	})
 
-	sendHandler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, allowedFromDomains, allowedReplyToDomains)
+	sendHandler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, allowedFromDomains, allowedReplyToDomains, allowedRecipientDomains)
 	if _, err := nc.QueueSubscribe(api.SendEmailSubject, api.QueueGroup, func(msg *natsgo.Msg) {
 		sendHandler.Handle(msgCtx, msg)
 	}); err != nil {
