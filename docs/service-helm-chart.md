@@ -34,7 +34,11 @@ This service does not expose a public HTTP API through Gateway/Heimdall. Its bus
 | `app.email.enabled` | `EMAIL_ENABLED` | `false` uses `NoOpSender`. |
 | `app.email.smtpHost` | `SMTP_HOST` | SMTP hostname. |
 | `app.email.smtpPort` | `SMTP_PORT` | SMTP port. |
-| `app.email.smtpFrom` | `SMTP_FROM` | Envelope sender address. |
+| `app.email.smtpFrom` | `DEFAULT_SMTP_FROM` | Service-level default sender address (legacy `SMTP_FROM` is still read as a fallback). |
+| `app.email.smtpFromDisplayName` | `DEFAULT_SMTP_FROM_DISPLAY_NAME` | Default From-header display name when no per-message `from_display_name` is set. |
+| `app.email.smtpAllowedFromDomains` | `SMTP_ALLOWED_FROM_DOMAINS` | Comma-separated domains permitted for per-message `from` overrides. |
+| `app.email.smtpAllowedReplyToDomains` | `SMTP_ALLOWED_REPLY_TO_DOMAINS` | Comma-separated base domains permitted for `reply_to` (subdomain suffix matching). |
+| `app.email.smtpAllowedRecipientDomains` | `SMTP_ALLOWED_RECIPIENT_DOMAINS` | Comma-separated base domains permitted as recipients; empty = permit all (set in non-prod). |
 | `app.email.smtpSecretName` | `SMTP_USERNAME`, `SMTP_PASSWORD` | Secret keys must be `smtp-username` and `smtp-password`. |
 | `app.ses.eventingEnabled` | `SES_EVENTING_ENABLED` | Starts the SQS engagement poller. |
 | `app.ses.engagementSecretName` | `SES_CONFIGURATION_SET`, `SES_ENGAGEMENT_SQS_QUEUE_URL` | Secret keys must be `ses_configuration_set_name` and `sqs_queue_url`. |

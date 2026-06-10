@@ -41,6 +41,9 @@ Request: `api.SendEmailRequest`
 | `subject` | yes | Email subject. |
 | `html` | yes | Pre-rendered HTML body. |
 | `text` | yes | Pre-rendered plain-text body. |
+| `from` | no | Sender address override. The domain must be an exact match in `SMTP_ALLOWED_FROM_DOMAINS` (default: `lfx.linuxfoundation.org`). If omitted, the service default (`DEFAULT_SMTP_FROM`) is used. |
+| `from_display_name` | no | Display name in the From header. If omitted, the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default `"LFX Self Serve"`) is used. |
+| `reply_to` | no | Sets the SMTP `Reply-To` header. The domain must be in `SMTP_ALLOWED_REPLY_TO_DOMAINS` (default: `linuxfoundation.org`); subdomain suffix matching applies, so the default also permits `lfx.linuxfoundation.org`. |
 | `group_id` | no | Caller-supplied correlation ID for a batch or campaign. If omitted, the service generates one. |
 
 Success reply: `api.SendEmailResponse`
@@ -56,9 +59,22 @@ Error reply: `api.SendEmailErrorResponse`
 | --- | --- |
 | `invalid request payload` | Request body is not valid JSON. |
 | `to, subject, html, and text are required` | One or more required fields are empty. |
+| `invalid from address` | `from` is set but is not a parseable email address. |
+| `from address domain not allowed` | `from` domain is not in `SMTP_ALLOWED_FROM_DOMAINS`. |
+| `invalid reply_to address` | `reply_to` is set but is not a parseable email address. |
+| `reply_to address domain not allowed` | `reply_to` domain is not in `SMTP_ALLOWED_REPLY_TO_DOMAINS`. |
 | `email delivery failed` | SMTP delivery failed after the service accepted the request. |
 
 When `EMAIL_ENABLED=false`, the service uses `NoOpSender`: the request still succeeds and returns generated IDs, but no SMTP message is sent.
+
+### Recipient domain filtering
+
+When `SMTP_ALLOWED_RECIPIENT_DOMAINS` is non-empty (non-prod environments), a recipient whose
+domain is not in the list (subdomain suffix matching applies) is **not** an error: the service
+skips the send and replies with an empty `SendEmailResponse` (`email_id` and `group_id` both
+empty), so callers do not treat expected non-prod filtering as a delivery failure. No tracking
+records are written for skipped sends. When the variable is empty (production default), all
+recipient domains are permitted.
 
 ## Get Email Status
 

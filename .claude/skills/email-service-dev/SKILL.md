@@ -67,6 +67,8 @@ Keep implementation details in `internal/`. Anything callers import belongs in `
 - The service accepts already-rendered content and sends via `net/smtp`.
 - `EMAIL_ENABLED=false` selects `NoOpSender`, which returns successful IDs without sending SMTP mail.
 - `SMTPSender.Send` creates both `email_id` and `group_id`, builds a MIME multipart message, and applies a 30-second timeout around the blocking SMTP call.
+- Domain allowlist validation happens in `SendEmailHandler`, not in the sender: per-message `from` requires an exact-match domain in `SMTP_ALLOWED_FROM_DOMAINS`; `reply_to` requires a suffix-match domain in `SMTP_ALLOWED_REPLY_TO_DOMAINS`. Disallowed values return documented error replies.
+- Recipient filtering (`SMTP_ALLOWED_RECIPIENT_DOMAINS`, empty = permit all) also happens in the handler. A blocked recipient is not an error: the handler replies with an empty `SendEmailResponse` and writes no tracking records. Preserve this empty-success semantic.
 - The MIME builder strips CR/LF from header values. Preserve this when changing headers.
 - `SES_CONFIGURATION_SET`, when non-empty, adds `X-SES-CONFIGURATION-SET`.
 - `X-LFX-TRACKING-ID` is `group_id/email_id`. The SQS engagement handler extracts the part after the last `/`.
