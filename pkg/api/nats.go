@@ -36,12 +36,30 @@ const (
 
 // SendEmailRequest is the JSON payload published to SendEmailSubject.
 // Callers render the HTML and plain-text bodies before publishing.
+//
+// From is optional. When set, the email is sent from that address instead of
+// the service-level default (DEFAULT_SMTP_FROM). The domain must be in the service's
+// allowed domain list (SMTP_ALLOWED_FROM_DOMAINS); a disallowed domain is
+// rejected with an error response.
+//
+// FromDisplayName is optional. When set, it is used as the display name in the
+// From header (e.g. "My Team <from@lfx.linuxfoundation.org>"). Defaults to the
+// service-level DEFAULT_SMTP_FROM_DISPLAY_NAME (default: "LFX Self Serve").
+//
+// ReplyTo is optional. When set, it is written as the Reply-To SMTP header so
+// that mail client replies are directed to this address instead of the From address.
+// Must be a valid email address whose domain is in the service's reply-to allowlist
+// (SMTP_ALLOWED_REPLY_TO_DOMAINS, default: "linuxfoundation.org"). Subdomain suffix
+// matching applies, so "linuxfoundation.org" also permits "lfx.linuxfoundation.org".
 type SendEmailRequest struct {
-	To      string `json:"to"`
-	Subject string `json:"subject"`
-	HTML    string `json:"html"`
-	Text    string `json:"text"`
-	GroupID string `json:"group_id,omitempty"`
+	To              string `json:"to"`
+	Subject         string `json:"subject"`
+	HTML            string `json:"html"`
+	Text            string `json:"text"`
+	From            string `json:"from,omitempty"`              // bare address; empty → service default
+	FromDisplayName string `json:"from_display_name,omitempty"` // display name; empty → service default
+	ReplyTo         string `json:"reply_to,omitempty"`          // Reply-To header address; omitted when empty
+	GroupID         string `json:"group_id,omitempty"`
 }
 
 // SendEmailResponse is the JSON payload returned in the NATS reply on success.

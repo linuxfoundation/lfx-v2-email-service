@@ -20,6 +20,9 @@ complaints) in NATS KV.
 | `subject` | string | yes | Email subject line |
 | `html` | string | yes | HTML body — callers render this before publishing |
 | `text` | string | yes | Plain-text body — shown by clients that don't render HTML |
+| `from` | string | no | Sender address (e.g. `newsletter@lfx.linuxfoundation.org`). When omitted the service default (`DEFAULT_SMTP_FROM`) is used. The domain must be in the service's allowed list — see [Configuring the sender address](#configuring-the-sender-address). |
+| `from_display_name` | string | no | Display name shown in the From header (e.g. `LFX Newsletter`). When omitted the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default: `"LFX Self Serve"`) is used. |
+| `reply_to` | string | no | Email address set on the SMTP `Reply-To` header. When set, mail client replies go to this address instead of the `From` address. The domain must be in the service's reply-to allowlist (`SMTP_ALLOWED_REPLY_TO_DOMAINS`, default: `linuxfoundation.org`). Subdomain suffix matching applies — the default permits `@linuxfoundation.org` and `@*.linuxfoundation.org`. Omitted from the message when not provided. |
 | `group_id` | string | no | Caller-supplied ID grouping related emails (e.g. an invite batch). Use it to query aggregate engagement counts via [`lfx.email-service.get_email_engagement_analytics`](#query-group-engagement-analytics). If omitted, a UUID is generated and returned but is not meaningful for analytics. |
 
 ```json
@@ -28,6 +31,9 @@ complaints) in NATS KV.
   "subject": "You've been added as a Writer on Demo Project",
   "html": "<html>...</html>",
   "text": "You've been added as a Writer on Demo Project.",
+  "from": "newsletter@lfx.linuxfoundation.org",
+  "from_display_name": "LFX Newsletter",
+  "reply_to": "support@lfx.linuxfoundation.org",
   "group_id": "invite-batch-abc123"
 }
 ```
@@ -49,13 +55,39 @@ MIME header. Store it if you want to query delivery/open status later.
 |---|---|
 | `invalid request payload` | Request body is not valid JSON |
 | `to, subject, html, and text are required` | One or more required fields are missing |
+| `invalid from address` | `from` field is not a valid email address |
+| `from address domain not allowed` | `from` domain is not in the service's allowed list |
+| `invalid reply_to address` | `reply_to` field is not a valid email address |
+| `reply_to address domain not allowed` | `reply_to` domain is not in the service's allowed list |
 | `email delivery failed` | Service accepted the request but SMTP delivery failed |
 
-**Example (NATS CLI):**
+**Examples (NATS CLI):**
 ```bash
+# Default sender ("LFX Self Serve <noreply@lfx.linuxfoundation.org>")
 nats req lfx.email-service.send_email \
   '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi"}'
+
+# Custom sender address and display name
+nats req lfx.email-service.send_email \
+  '{"to":"alice@example.com","subject":"Test","html":"<p>Hi</p>","text":"Hi","from":"newsletter@lfx.linuxfoundation.org","from_display_name":"LFX Newsletter"}'
 ```
+
+#### Configuring the sender address
+
+The `from` field lets callers send from any address whose domain is in the service's
+allowlist. The allowlist is configured via the `SMTP_ALLOWED_FROM_DOMAINS` env var
+(comma-separated, default: `lfx.linuxfoundation.org`).
+
+| Scenario | Behaviour |
+|---|---|
+| `from` omitted | Service default (`DEFAULT_SMTP_FROM`) is used |
+| `from` domain is in the allowlist | Email is sent from the specified address |
+| `from` domain is **not** in the allowlist | Request is rejected — `{"error":"from address domain not allowed"}` |
+| `from_display_name` omitted | Service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default: `"LFX Self Serve"`) is used |
+
+> **Note:** Because delivery goes through Amazon SES, the `from` domain must also be
+> a verified SES sending identity. Contact the platform team to add a new domain to
+> both the SES configuration and `SMTP_ALLOWED_FROM_DOMAINS`.
 
 ### Query email status
 
@@ -210,13 +242,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Send an email.
+	// Send an email with a custom sender address and display name.
+	// From and FromDisplayName are optional — omit them to use the service defaults.
 	req := emailapi.SendEmailRequest{
-		To:      "user@example.com",
-		Subject: "You've been added",
-		HTML:    "<p>Hello</p>",
-		Text:    "Hello",
-		GroupID: "my-batch-id",
+		To:              "user@example.com",
+		Subject:         "You've been added",
+		HTML:            "<p>Hello</p>",
+		Text:            "Hello",
+		From:            "newsletter@lfx.linuxfoundation.org", // optional
+		FromDisplayName: "LFX Newsletter",                     // optional
+		GroupID:         "my-batch-id",
 	}
 	data, _ := json.Marshal(req)
 
@@ -318,7 +353,11 @@ make helm-install-local
 | `EMAIL_ENABLED` | `false` | Set `true` to enable SMTP delivery; when `false` requests succeed but delivery is skipped via `NoOpSender` |
 | `SMTP_HOST` | `localhost` | SMTP server hostname |
 | `SMTP_PORT` | `587` | SMTP server port (STARTTLS) |
-| `SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | Envelope From address |
+| `DEFAULT_SMTP_FROM` | `noreply@lfx.linuxfoundation.org` | Default envelope From address (falls back to legacy `SMTP_FROM` if unset) |
+| `DEFAULT_SMTP_FROM_DISPLAY_NAME` | `LFX Self Serve` | Default display name in the From header; overridable per message via `from_display_name` |
+| `SMTP_ALLOWED_FROM_DOMAINS` | `lfx.linuxfoundation.org` | Comma-separated domains permitted for per-message `from` overrides; set to `""` to disable overrides entirely |
+| `SMTP_ALLOWED_REPLY_TO_DOMAINS` | `linuxfoundation.org` | Comma-separated base domains permitted for `reply_to`; subdomains are also permitted (e.g. `linuxfoundation.org` allows `lfx.linuxfoundation.org`); set to `""` to disable |
+| `SMTP_ALLOWED_RECIPIENT_DOMAINS` | _(empty — permit all)_ | Comma-separated base domains permitted as recipients (subdomain suffix matching applies). When empty all recipient domains are permitted (production default). Set in non-prod (e.g. `linuxfoundation.org`) to prevent test mail from reaching real users' personal addresses. |
 | `SMTP_USERNAME` | _(empty)_ | SMTP credential (from Kubernetes Secret in production) |
 | `SMTP_PASSWORD` | _(empty)_ | SMTP credential (from Kubernetes Secret in production) |
 | `SES_CONFIGURATION_SET` | _(empty)_ | SES configuration set name. When set, `X-SES-CONFIGURATION-SET` is added to every outbound email to route engagement events. Omitted when empty. |

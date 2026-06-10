@@ -63,8 +63,24 @@ app:
     smtpHost: "email-smtp.us-west-2.amazonaws.com"
     # smtpPort is the SMTP server port (STARTTLS)
     smtpPort: "587"
-    # smtpFrom is the envelope sender address for all outbound mail
+    # smtpFrom is the envelope sender address for all outbound mail (service-level default)
     smtpFrom: "noreply@lfx.linuxfoundation.org"
+    # smtpFromDisplayName is the display name shown in the From header when no per-message
+    # from_display_name is set. Defaults to "LFX Self Serve" when empty.
+    smtpFromDisplayName: "LFX Self Serve"
+    # smtpAllowedFromDomains is a comma-separated list of domains that callers are permitted
+    # to use in the per-message `from` field. Requests with a `from` domain not in this list
+    # are rejected. Defaults to "lfx.linuxfoundation.org".
+    smtpAllowedFromDomains: "lfx.linuxfoundation.org"
+    # smtpAllowedReplyToDomains is a comma-separated list of base domains permitted for the
+    # per-message `reply_to` field. Subdomain suffix matching applies, so "linuxfoundation.org"
+    # also permits "lfx.linuxfoundation.org". Defaults to "linuxfoundation.org".
+    smtpAllowedReplyToDomains: "linuxfoundation.org"
+    # smtpAllowedRecipientDomains is a comma-separated list of base domains permitted as
+    # recipients (subdomain suffix matching applies). Empty = permit all recipients (production
+    # default). Set in non-prod (e.g. "linuxfoundation.org") to prevent test mail from reaching
+    # real users' personal addresses.
+    smtpAllowedRecipientDomains: ""
     # smtpSecretName is the name of the Kubernetes Secret containing SMTP credentials.
     # The Secret must have keys: smtp-username, smtp-password.
     # Set to "" to skip injecting SMTP_USERNAME/SMTP_PASSWORD entirely — suitable for

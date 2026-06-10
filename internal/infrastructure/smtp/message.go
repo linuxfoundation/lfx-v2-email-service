@@ -46,19 +46,32 @@ func sanitizeHeaderValue(v string) string {
 // engagement events to the named configuration set.
 // trackingID, when non-empty, adds an X-LFX-TRACKING-ID header in the form group_id/email_id
 // so the SQS poller can correlate SES events back to the KV record.
-func buildEmailMessage(to, subject, htmlContent, textContent, from, configurationSet, trackingID string) string {
+// fromDisplayName is the display name shown in the From header (e.g. "LFX Self Serve").
+// replyTo, when non-empty, sets the Reply-To header to direct mail-client replies to
+// a different address than From.
+func buildEmailMessage(to, subject, htmlContent, textContent, from, fromDisplayName, replyTo, configurationSet, trackingID string) string {
 	messageID := generateMessageID(from)
 	boundary := generateBoundary()
 	var b strings.Builder
 
 	// Extract the bare address so a cfg.From value like "Name <addr>" doesn't
-	// produce an invalid "From: LFX Self Serve <Name <addr>>" header.
+	// produce an invalid "From: Display Name <Name <addr>>" header.
 	fromAddr := from
 	if parsed, err := mail.ParseAddress(from); err == nil {
 		fromAddr = parsed.Address
 	}
-	b.WriteString(fmt.Sprintf("From: LFX Self Serve <%s>\r\n", sanitizeHeaderValue(fromAddr)))
+	// Use mail.Address.String() to produce a properly RFC 5322-encoded From header.
+	// This quotes display names that contain commas or other special characters,
+	// preventing them from being mis-parsed as a mailbox list.
+	b.WriteString(fmt.Sprintf("From: %s\r\n", (&mail.Address{Name: sanitizeHeaderValue(fromDisplayName), Address: sanitizeHeaderValue(fromAddr)}).String()))
 	b.WriteString(fmt.Sprintf("To: %s\r\n", sanitizeHeaderValue(to)))
+	if replyTo != "" {
+		replyToAddr := replyTo
+		if parsed, err := mail.ParseAddress(replyTo); err == nil {
+			replyToAddr = parsed.Address
+		}
+		b.WriteString(fmt.Sprintf("Reply-To: %s\r\n", sanitizeHeaderValue(replyToAddr)))
+	}
 	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(subject))))
 	b.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
 	b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
@@ -91,9 +104,10 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from, configuratio
 }
 
 // sendMessage delivers a pre-built MIME message via SMTP.
-// It runs the blocking smtp.SendMail call in a goroutine so ctx cancellation
-// (including a caller-supplied deadline) is respected.
-func sendMessage(ctx context.Context, to, message string, cfg Config) error {
+// from is the resolved envelope sender address (MAIL FROM); it must match a
+// verified SES domain. It runs the blocking smtp.SendMail call in a goroutine
+// so ctx cancellation (including a caller-supplied deadline) is respected.
+func sendMessage(ctx context.Context, to, from, message string, cfg Config) error {
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 
 	var auth smtp.Auth
@@ -101,7 +115,7 @@ func sendMessage(ctx context.Context, to, message string, cfg Config) error {
 		auth = smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
 	}
 
-	fromAddr, err := mail.ParseAddress(cfg.From)
+	fromAddr, err := mail.ParseAddress(from)
 	if err != nil {
 		return fmt.Errorf("invalid From address: %w", err)
 	}

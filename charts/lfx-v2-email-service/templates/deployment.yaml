@@ -46,8 +46,18 @@ spec:
               value: {{ .Values.app.email.smtpHost | quote }}
             - name: SMTP_PORT
               value: {{ .Values.app.email.smtpPort | quote }}
-            - name: SMTP_FROM
+            - name: DEFAULT_SMTP_FROM
               value: {{ .Values.app.email.smtpFrom | quote }}
+            {{- if .Values.app.email.smtpFromDisplayName }}
+            - name: DEFAULT_SMTP_FROM_DISPLAY_NAME
+              value: {{ .Values.app.email.smtpFromDisplayName | quote }}
+            {{- end }}
+            - name: SMTP_ALLOWED_FROM_DOMAINS
+              value: {{ .Values.app.email.smtpAllowedFromDomains | quote }}
+            - name: SMTP_ALLOWED_REPLY_TO_DOMAINS
+              value: {{ .Values.app.email.smtpAllowedReplyToDomains | quote }}
+            - name: SMTP_ALLOWED_RECIPIENT_DOMAINS
+              value: {{ .Values.app.email.smtpAllowedRecipientDomains | quote }}
             {{- if .Values.app.email.smtpSecretName }}
             - name: SMTP_USERNAME
               valueFrom:
