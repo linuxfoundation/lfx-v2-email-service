@@ -2,6 +2,19 @@
 
 Development guide for Claude instances working on this service.
 
+> **Central LFX skills:**
+>
+> - `lfx-skills:lfx`: cross-repo topology, ownership routing, repo discovery, and missing-checkout handling.
+> - `lfx-skills:lfx-platform-architecture`: platform composition, service classes, NATS/KV ownership, Helm and ArgoCD handoffs, and cross-service responsibility boundaries.
+>
+> Repo-local skills live in `.claude/skills/` and are invoked from this repo:
+>
+> - `/email-service-dev` auto-attaches on Go, chart, and service-owned doc paths. It owns this repo's Go conventions, NATS request/reply handler shape, public `pkg/api` contract, SMTP/SES/SQS tracking behavior, KV tracking rules, tests, formatting, linting, and license headers.
+> - `/email-service-pr-readiness` checks PR shape only: branch, JIRA, conventional commits, rebase status, DCO + GPG signing, diff size, and protected files.
+> - `/email-service-preflight` runs the mechanical Go pre-PR pipeline: working tree, license headers, formatting, lint, build, tests, protected files, commit verification, and change summary.
+>
+> If the plugin is missing, install with `/plugin marketplace add linuxfoundation/lfx-skills` then `/plugin install lfx-skills@lfx-skills`.
+
 ## Service Overview
 
 Thin NATS request/reply relay. Receives pre-rendered `{to, subject, html, text, from?, from_display_name?, reply_to?}`
@@ -21,6 +34,27 @@ real users' personal addresses. Subdomain suffix matching applies; a blocked rec
 empty success response so callers don't log expected non-prod filtering as a delivery failure.
 
 **Technologies:** Go 1.24, NATS (`nats.go`), `net/smtp`, Kubernetes/Helm
+
+## Repo Role
+
+This repo owns transactional email delivery over NATS request/reply, the email-service public Go contract in `pkg/api`, NATS KV engagement tracking, SES/SQS engagement event handling, and the service-local Helm chart. It does not own template rendering, newsletter composition, newsletter persistence, FGA tuple emission, or indexer publishing.
+
+## Authoritative Repo Docs
+
+- `docs/email-service-contract.md`: public NATS subjects, payloads, response shapes, errors, and tracking record fields.
+- `docs/email-engagement-tracking.md`: SES configuration set header, tracking header, SQS poller, event handling, and KV update behavior.
+- `docs/service-helm-chart.md`: service-local chart values, secrets, NATS KV bucket CRs, and deployment handoffs.
+- `charts/lfx-v2-email-service/`: service-local Helm templates and defaults.
+
+Read the relevant contract before changing `pkg/api`, NATS handlers, tracking fields, SES/SQS behavior, or chart values. Update docs in the same PR as behavior changes.
+
+## Consumed Cross-Repo Contracts
+
+- Shared service chart conventions: `lfx-v2-helm/docs/service-chart-patterns.md`
+- Deployed values, image tags, IRSA annotations, ExternalSecret wiring: `lfx-v2-argocd`
+- Newsletter caller and future newsletter integration: `lfx-v2-newsletter-service`
+
+Use `lfx-skills:lfx` if an owner repo is missing locally, a path has moved, or the task needs additional peer repos.
 
 ## Architecture
 
@@ -70,7 +104,39 @@ make fmt            # go fmt + gofmt -s (no goimports)
 make check          # gofmt check + lint + license-check (does not run tests)
 ```
 
-### Local dev loop
+## Work cycle — post-commit and pre-PR reviews
+
+> **CRITICAL — while the branch is pre-PR, post-commit review is mandatory.** After every commit on the local branch, launch `lfx-skills:lfx-general-code-reviewer`, `lfx-skills:lfx-email-service-code-reviewer`, and `lfx-skills:lfx-email-service-learnings-reviewer` subagents via the Agent tool with `run_in_background: true` — then keep working while they run. If Claude displays plugin agents without the `lfx-skills:` namespace, use the equivalent displayed general, email-service, and learnings reviewer names. Before opening a PR, every running review must return clean (or remaining findings explicitly documented as trade-offs), the **full-branch sweep** must run clean if the branch has more than one commit (`branch` arg), AND `/email-service-pr-readiness` must clear every Critical finding before `/email-service-preflight` runs.
+>
+> **Once the PR is open, do NOT invoke these pre-PR reviewers on iteration commits.** Copilot + `github-license-compliance[bot]` auto-trigger on every push and own the audit surface from that point (CodeRabbit is not enabled on this repo). The general, email-service, and learnings reviewers are pre-PR insurance only.
+
+### Post-commit (pre-PR phase, after every commit, asynchronous)
+
+1. **Commit your work.** `git commit -s -S`. Do not wait for any prior review to finish.
+2. **Immediately launch all three reviewer subagents in parallel.** Use `subagent_type: lfx-skills:lfx-general-code-reviewer`, `run_in_background: true`; `subagent_type: lfx-skills:lfx-email-service-code-reviewer`, `run_in_background: true`; and `subagent_type: lfx-skills:lfx-email-service-learnings-reviewer`, `run_in_background: true`.
+3. **Post-commit mode prompt for all three reviewers (exact):** `target repo: lfx-v2-email-service\n\nReview the latest commit.` Append `extra: <focus>` on a new line only when there is a priority hint to add. Do NOT pass `branch` here. If this work cycle is launched from the LFX workspace parent, the `target repo:` line is required so all three reviewers operate in this repo.
+4. **Keep working.** Start the next commit while the reviewers run. Do not block on them.
+5. **When the reviews return:** roll every Critical finding and every reasonable Important finding into the next commit.
+
+### Pre-PR (drain the queue, sweep cumulative state, then open)
+
+When the work is done and no more code commits are planned:
+
+1. **Wait for every running review to complete.**
+2. **If any returned review flags Critical or reasonable Important:** add a fix commit, launch all three reviewers again on the new state, wait, and loop until clean or explicitly documented as a trade-off.
+3. **Full-branch sweep — only if the branch has more than one commit.** Launch `lfx-skills:lfx-general-code-reviewer`, `lfx-skills:lfx-email-service-code-reviewer`, and `lfx-skills:lfx-email-service-learnings-reviewer` again with prompt **`target repo: lfx-v2-email-service\nbranch\n\nReview the branch's diff against origin/main.`**. Address any new findings, then re-run all three sweeps until clean.
+4. **Run `/email-service-pr-readiness`** for branch and PR-shape checks.
+5. **Run `/email-service-preflight`** for mechanical Go validation and the PR change summary.
+6. **Only then push and open the PR.**
+
+### Post-PR iteration (responding to bot feedback on an open PR)
+
+1. Wait for Copilot (and `github-license-compliance[bot]`) to comment after each push.
+2. Triage every Critical and reasonable Important finding against current code.
+3. Roll fixes into a `fix(review): ...` commit.
+4. Push. Repeat until clean.
+
+## Local dev loop
 
 ```bash
 # Terminal 1: NATS
@@ -102,7 +168,7 @@ nats req lfx.email-service.send_email \
 |---|---|---|
 | `api.SendEmailSubject` | `lfx.email-service.send_email` | request/reply; reply is JSON `SendEmailResponse` |
 | `api.QueueGroup` | `lfx.email-service.queue` | queue group for all subscriptions |
-| `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | request/reply; payload `GetEmailStatusRequest` → `EmailRecipientRecord` |
+| `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | request/reply; payload `GetEmailStatusRequest` → `EmailRecipientRecord` for `email_id`, `[]EmailRecipientRecord` for `group_id` |
 | `api.GetEmailEngagementAnalyticsSubject` | `lfx.email-service.get_email_engagement_analytics` | request/reply; payload `GetEmailEngagementAnalyticsRequest` → `GetEmailEngagementAnalyticsResponse` |
 
 All constants are in `pkg/api/nats.go`.
