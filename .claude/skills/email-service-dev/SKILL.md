@@ -15,6 +15,9 @@ paths:
 allowed-tools: Read, Glob, Grep, Edit, Write, Bash
 ---
 
+<!-- Copyright The Linux Foundation and each contributor to LFX. -->
+<!-- SPDX-License-Identifier: MIT -->
+
 # Development Conventions
 
 Repo-owned conventions for `lfx-v2-email-service`. This service is a thin NATS request/reply email relay with optional NATS KV engagement tracking. It is not a Goa resource service, does not own an OpenFGA type, and does not publish indexer or FGA messages.
