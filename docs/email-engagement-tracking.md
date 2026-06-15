@@ -50,7 +50,9 @@ Supported SES event types:
 
 Open events are deduplicated by SNS `MessageId`. Duplicate delivery, bounce, and complaint events are ignored once the matching boolean is set.
 
-Unknown event types, malformed SNS/SES payloads, missing tracking headers, and missing KV records are treated as non-retryable skips. The SQS message is deleted after the handler returns `nil`.
+Unknown event types, malformed SNS/SES payloads, and missing tracking headers are treated as non-retryable skips. The engagement handler also treats **all** `email-recipients` KV read errors as non-retryable skips: the recipient lookup returns `nil` (delete the SQS message) for every `KV.Get` error, not only `ErrKeyNotFound`. A transient KV read failure therefore drops the engagement event rather than retrying it. The SQS message is deleted after the handler returns `nil`.
+
+> **Suggested follow-up (code, out of scope for this docs PR):** the engagement handler could distinguish `nats.ErrKeyNotFound` (genuine miss → skip) from other `KV.Get` errors (transient → return an error so the SQS message is redelivered), matching the `get_email_status` handler's error handling. Tracked as a behavior change, not made here.
 
 ## SQS Poller
 

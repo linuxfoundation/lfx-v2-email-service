@@ -68,7 +68,7 @@ Keep implementation details in `internal/`. Anything callers import belongs in `
 ## SMTP And SES
 
 - The service accepts already-rendered content and sends via `net/smtp`.
-- `EMAIL_ENABLED=false` selects `NoOpSender`, which returns successful IDs without sending SMTP mail.
+- `EMAIL_ENABLED=false` selects `NoOpSender`, which returns an empty `SendEmailResponse` (`email_id` and `group_id` both empty) without sending SMTP mail or writing tracking records. Because the returned `email_id` is empty, `SendEmailHandler` writes no KV tracking records on this path.
 - `SMTPSender.Send` creates both `email_id` and `group_id`, builds a MIME multipart message, and applies a 30-second timeout around the blocking SMTP call.
 - Domain allowlist validation happens in `SendEmailHandler`, not in the sender: per-message `from` requires an exact-match domain in `SMTP_ALLOWED_FROM_DOMAINS`; `reply_to` requires a suffix-match domain in `SMTP_ALLOWED_REPLY_TO_DOMAINS`. Disallowed values return documented error replies.
 - Recipient filtering (`SMTP_ALLOWED_RECIPIENT_DOMAINS`, empty = permit all) also happens in the handler. A blocked recipient is not an error: the handler replies with an empty `SendEmailResponse` and writes no tracking records. Preserve this empty-success semantic.

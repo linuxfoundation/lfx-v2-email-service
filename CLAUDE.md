@@ -81,8 +81,8 @@ pkg/redaction/         → email address redaction for logs
 - **Queue group for horizontal scaling.** The subscription uses queue group
   `lfx.email-service.queue` so each message is delivered to exactly one pod.
 - **Handle always responds.** The NATS handler calls `msg.Respond` on every path
-  (success → `nil`, failure → JSON error) so callers' `RequestWithContext` never
-  hangs.
+  (success → JSON `SendEmailResponse`, failure → JSON `SendEmailErrorResponse`) so
+  callers' `RequestWithContext` never hangs.
 
 ## Development Workflow
 

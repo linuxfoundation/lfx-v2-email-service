@@ -65,7 +65,7 @@ Error reply: `api.SendEmailErrorResponse`
 | `reply_to address domain not allowed` | `reply_to` domain is not in `SMTP_ALLOWED_REPLY_TO_DOMAINS`. |
 | `email delivery failed` | SMTP delivery failed after the service accepted the request. |
 
-When `EMAIL_ENABLED=false`, the service uses `NoOpSender`: the request still succeeds and returns generated IDs, but no SMTP message is sent.
+When `EMAIL_ENABLED=false`, the service uses `NoOpSender`: the request still succeeds but returns an empty `SendEmailResponse` (`email_id` and `group_id` both empty). No SMTP message is sent and no tracking records are written.
 
 ### Recipient domain filtering
 
@@ -93,6 +93,11 @@ Reply:
 
 - `email_id` lookup returns one `api.EmailRecipientRecord`.
 - `group_id` lookup returns a JSON array of `api.EmailRecipientRecord`.
+  The array may contain **fewer** entries than the group index lists: a recipient
+  record that is missing (`ErrKeyNotFound`) or fails to unmarshal is silently omitted
+  from the array rather than erroring, so the returned count can be less than the number
+  of `email_id`s originally sent for the group. (A non-`ErrKeyNotFound` KV read error on
+  a recipient still returns `internal error`.)
 - Error responses use `api.SendEmailErrorResponse`.
 
 Error values:
@@ -133,7 +138,14 @@ Error values:
 | `invalid request payload` | Request body is not valid JSON. |
 | `group_id is required` | The request omitted `group_id`. |
 | `not found` | No group index exists for `group_id`. |
-| `internal error` | KV read or decode failed. |
+| `internal error` | Reading or decoding the group index failed. |
+
+Only failures reading or decoding the **group index** return `internal error`. Per-recipient
+`email-recipients` reads in the analytics loop are best-effort: a missing or corrupt recipient
+record (any `KV.Get` error or unmarshal failure) is silently skipped and excluded from the
+aggregate counts. `total_sent` reflects the number of `email_id`s in the group index, so the
+sum of `delivered` / `failed` / `unique_opened` may be less than `total_sent` when records are
+missing or unreadable.
 
 ## Tracking Record
 
