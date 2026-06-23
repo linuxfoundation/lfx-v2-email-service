@@ -21,6 +21,8 @@ import (
 	natsgo "github.com/nats-io/nats.go"
 
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
+	natstracing "github.com/linuxfoundation/lfx-v2-email-service/internal/infrastructure/nats"
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/infrastructure/observability"
 	smtpinfra "github.com/linuxfoundation/lfx-v2-email-service/internal/infrastructure/smtp"
 	sqsinfra "github.com/linuxfoundation/lfx-v2-email-service/internal/infrastructure/sqs"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
@@ -35,6 +37,19 @@ func main() {
 	env := parseEnv()
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	otelCfg := observability.OTelConfigFromEnv(ctx)
+	otelShutdown, err := observability.SetupOTelSDKWithConfig(ctx, otelCfg)
+	if err != nil {
+		slog.Error("failed to set up OTel SDK", logging.ErrKey, err)
+		cancel()
+		os.Exit(1)
+	}
+	defer func() {
+		if err := otelShutdown(context.Background()); err != nil {
+			slog.Error("OTel shutdown error", logging.ErrKey, err)
+		}
+	}()
 
 	var sender domain.Sender
 	if env.EmailEnabled {
@@ -218,7 +233,9 @@ func subscribeHandlers(
 
 	sendHandler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, allowedFromDomains, allowedReplyToDomains, allowedRecipientDomains)
 	if _, err := nc.QueueSubscribe(api.SendEmailSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-		sendHandler.Handle(msgCtx, msg)
+		spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.SendEmailSubject)
+		defer span.End()
+		sendHandler.Handle(spanCtx, msg)
 	}); err != nil {
 		msgCancel()
 		return fmt.Errorf("nats subscribe %s: %w", api.SendEmailSubject, err)
@@ -228,7 +245,9 @@ func subscribeHandlers(
 	if recipientsKV != nil && groupIndexKV != nil {
 		statusHandler := service.NewGetEmailStatusHandler(recipientsKV, groupIndexKV)
 		if _, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-			statusHandler.Handle(msgCtx, msg)
+			spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailStatusSubject)
+			defer span.End()
+			statusHandler.Handle(spanCtx, msg)
 		}); err != nil {
 			msgCancel()
 			return fmt.Errorf("nats subscribe %s: %w", api.GetEmailStatusSubject, err)
@@ -237,7 +256,9 @@ func subscribeHandlers(
 
 		analyticsHandler := service.NewGetEmailEngagementAnalyticsHandler(recipientsKV, groupIndexKV)
 		if _, err := nc.QueueSubscribe(api.GetEmailEngagementAnalyticsSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-			analyticsHandler.Handle(msgCtx, msg)
+			spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailEngagementAnalyticsSubject)
+			defer span.End()
+			analyticsHandler.Handle(spanCtx, msg)
 		}); err != nil {
 			msgCancel()
 			return fmt.Errorf("nats subscribe %s: %w", api.GetEmailEngagementAnalyticsSubject, err)
