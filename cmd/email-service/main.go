@@ -45,7 +45,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() {
-		if err := otelShutdown(context.Background()); err != nil {
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutCancel()
+		if err := otelShutdown(shutCtx); err != nil {
 			slog.Error("OTel shutdown error", logging.ErrKey, err)
 		}
 	}()

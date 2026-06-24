@@ -32,6 +32,9 @@ func (c natsHeaderCarrier) Get(key string) string {
 }
 
 func (c natsHeaderCarrier) Set(key string, value string) {
+	if c == nil {
+		return
+	}
 	c[key] = []string{value}
 }
 
