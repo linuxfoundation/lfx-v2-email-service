@@ -81,7 +81,7 @@ func main() {
 	if err != nil {
 		slog.Error("failed to connect to NATS", logging.ErrKey, err)
 		cancel()
-		os.Exit(1) //nolint:gocritic // OTel shutdown handled by deferred function
+		os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
 	}
 
 	slog.Info("from address allowlist configured", "allowed_domains", env.SMTP.AllowedFromDomains)
@@ -92,7 +92,7 @@ func main() {
 	if err := subscribeHandlers(ctx, nc, sender, recipientsKV, groupIndexKV, env.SMTP.AllowedFromDomains, env.SMTP.AllowedReplyToDomains, env.SMTP.AllowedRecipientDomains, &wg, done); err != nil {
 		slog.Error("failed to subscribe NATS handlers", logging.ErrKey, err)
 		cancel()
-		os.Exit(1) //nolint:gocritic // OTel shutdown handled by deferred function
+		os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
 	}
 
 	var pollerAborted atomic.Bool
@@ -101,18 +101,18 @@ func main() {
 		if env.SESEngagementSQSURL == "" {
 			slog.Error("SES_EVENTING_ENABLED is true but SES_ENGAGEMENT_SQS_QUEUE_URL is not set")
 			cancel()
-			os.Exit(1) //nolint:gocritic // OTel shutdown handled by deferred function
+			os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
 		}
 		if recipientsKV == nil {
 			slog.Error("SES_EVENTING_ENABLED is true but NATS KV (email-recipients bucket) is unavailable")
 			cancel()
-			os.Exit(1) //nolint:gocritic // OTel shutdown handled by deferred function
+			os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
 		}
 		awsCfg, err := config.LoadDefaultConfig(ctx)
 		if err != nil {
 			slog.Error("failed to load AWS config for SQS poller", logging.ErrKey, err)
 			cancel()
-			os.Exit(1) //nolint:gocritic // OTel shutdown handled by deferred function
+			os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
 		}
 		sqsClient := awssqs.NewFromConfig(awsCfg)
 		engagementHandler := service.NewEngagementEventHandler(recipientsKV)

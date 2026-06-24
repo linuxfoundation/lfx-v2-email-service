@@ -176,8 +176,15 @@ func TestExtractAndStartConsumerSpan(t *testing.T) {
 		spans := exporter.GetSpans()
 		require.Len(t, spans, 2) // parent + consumer
 
-		// The consumer span should share the parent's trace ID.
-		consumerSpan := spans[1]
+		// Find the consumer span by name to avoid ordering assumptions.
+		var consumerSpan tracetest.SpanStub
+		for _, s := range spans {
+			if s.Name == "nats.process" {
+				consumerSpan = s
+				break
+			}
+		}
+		require.Equal(t, "nats.process", consumerSpan.Name, "consumer span not found in exporter")
 		assert.Equal(t, parentSC.TraceID(), consumerSpan.SpanContext.TraceID())
 		assert.Equal(t, parentSC.SpanID(), consumerSpan.Parent.SpanID())
 	})
