@@ -163,6 +163,11 @@ func main() {
 	wg.Wait()
 	slog.Info("email service stopped")
 	if pollerAborted.Load() {
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutCancel()
+		if err := otelShutdown(shutCtx); err != nil {
+			slog.Error("OTel shutdown error", logging.ErrKey, err)
+		}
 		os.Exit(1)
 	}
 }

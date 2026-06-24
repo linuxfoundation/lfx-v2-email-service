@@ -30,8 +30,8 @@ func SetupOTelSDK(ctx context.Context) (shutdown func(context.Context) error, er
 
 	shutdown = func(ctx context.Context) error {
 		var err error
-		for _, fn := range shutdownFuncs {
-			err = errors.Join(err, fn(ctx))
+		for i := len(shutdownFuncs) - 1; i >= 0; i-- {
+			err = errors.Join(err, shutdownFuncs[i](ctx))
 		}
 		shutdownFuncs = nil
 		return err

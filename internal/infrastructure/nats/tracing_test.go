@@ -4,11 +4,17 @@
 package nats
 
 import (
+	"context"
 	"testing"
 
 	natsgo "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestNatsHeaderCarrier_Get(t *testing.T) {
@@ -98,5 +104,81 @@ func TestNatsHeaderCarrier_TextMapCarrier(t *testing.T) {
 		assert.Equal(t, "00-trace-id-span-id-01", carrier.Get("traceparent"))
 		assert.Equal(t, "vendor=value", carrier.Get("tracestate"))
 		assert.Len(t, header, 2)
+	})
+}
+
+func TestExtractAndStartConsumerSpan(t *testing.T) {
+	// Set up an in-memory span exporter and a real TracerProvider.
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+
+	// Wire the test provider and a W3C propagator globally for the duration of the test.
+	origTP := otel.GetTracerProvider()
+	origProp := otel.GetTextMapPropagator()
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	defer func() {
+		otel.SetTracerProvider(origTP)
+		otel.SetTextMapPropagator(origProp)
+	}()
+
+	t.Run("creates consumer span with correct attributes", func(t *testing.T) {
+		exporter.Reset()
+
+		msg := &natsgo.Msg{
+			Subject: "test.subject",
+			Data:    []byte("hello"),
+			Header:  make(natsgo.Header),
+		}
+		subject := "test.subject"
+
+		ctx, span := ExtractAndStartConsumerSpan(context.Background(), msg, subject)
+		require.NotNil(t, span)
+		span.End()
+
+		spans := exporter.GetSpans()
+		require.Len(t, spans, 1)
+
+		s := spans[0]
+		assert.Equal(t, "nats.process", s.Name)
+		assert.Equal(t, trace.SpanKindConsumer, s.SpanKind)
+
+		attrMap := make(map[string]string)
+		for _, a := range s.Attributes {
+			attrMap[string(a.Key)] = a.Value.AsString()
+		}
+		assert.Equal(t, "nats", attrMap["messaging.system"])
+		assert.Equal(t, subject, attrMap["messaging.destination.name"])
+		assert.Equal(t, "process", attrMap["messaging.operation.type"])
+
+		_ = ctx // ctx carries the span; consumed by the handler under test
+	})
+
+	t.Run("extracts parent trace context from message headers", func(t *testing.T) {
+		exporter.Reset()
+
+		// Inject a parent span context into a synthetic message header.
+		parentCtx, parentSpan := tp.Tracer("test").Start(context.Background(), "parent")
+		parentSpan.End()
+		parentSC := parentSpan.SpanContext()
+
+		msg := &natsgo.Msg{
+			Subject: "test.subject",
+			Data:    []byte("payload"),
+			Header:  make(natsgo.Header),
+		}
+		otel.GetTextMapPropagator().Inject(parentCtx, natsHeaderCarrier(msg.Header))
+
+		_, span := ExtractAndStartConsumerSpan(context.Background(), msg, "test.subject")
+		span.End()
+
+		spans := exporter.GetSpans()
+		require.Len(t, spans, 2) // parent + consumer
+
+		// The consumer span should share the parent's trace ID.
+		consumerSpan := spans[1]
+		assert.Equal(t, parentSC.TraceID(), consumerSpan.SpanContext.TraceID())
+		assert.Equal(t, parentSC.SpanID(), consumerSpan.Parent.SpanID())
 	})
 }
