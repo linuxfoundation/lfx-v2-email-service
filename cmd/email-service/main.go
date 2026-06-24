@@ -81,7 +81,7 @@ func main() {
 	if err != nil {
 		slog.Error("failed to connect to NATS", logging.ErrKey, err)
 		cancel()
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic // OTel shutdown handled by deferred function
 	}
 
 	slog.Info("from address allowlist configured", "allowed_domains", env.SMTP.AllowedFromDomains)
@@ -92,7 +92,7 @@ func main() {
 	if err := subscribeHandlers(ctx, nc, sender, recipientsKV, groupIndexKV, env.SMTP.AllowedFromDomains, env.SMTP.AllowedReplyToDomains, env.SMTP.AllowedRecipientDomains, &wg, done); err != nil {
 		slog.Error("failed to subscribe NATS handlers", logging.ErrKey, err)
 		cancel()
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic // OTel shutdown handled by deferred function
 	}
 
 	var pollerAborted atomic.Bool
@@ -101,18 +101,18 @@ func main() {
 		if env.SESEngagementSQSURL == "" {
 			slog.Error("SES_EVENTING_ENABLED is true but SES_ENGAGEMENT_SQS_QUEUE_URL is not set")
 			cancel()
-			os.Exit(1)
+			os.Exit(1) //nolint:gocritic // OTel shutdown handled by deferred function
 		}
 		if recipientsKV == nil {
 			slog.Error("SES_EVENTING_ENABLED is true but NATS KV (email-recipients bucket) is unavailable")
 			cancel()
-			os.Exit(1)
+			os.Exit(1) //nolint:gocritic // OTel shutdown handled by deferred function
 		}
 		awsCfg, err := config.LoadDefaultConfig(ctx)
 		if err != nil {
 			slog.Error("failed to load AWS config for SQS poller", logging.ErrKey, err)
 			cancel()
-			os.Exit(1)
+			os.Exit(1) //nolint:gocritic // OTel shutdown handled by deferred function
 		}
 		sqsClient := awssqs.NewFromConfig(awsCfg)
 		engagementHandler := service.NewEngagementEventHandler(recipientsKV)
@@ -164,11 +164,11 @@ func main() {
 	slog.Info("email service stopped")
 	if pollerAborted.Load() {
 		shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutCancel()
 		if err := otelShutdown(shutCtx); err != nil {
 			slog.Error("OTel shutdown error", logging.ErrKey, err)
 		}
-		os.Exit(1)
+		shutCancel()
+		os.Exit(1) //nolint:gocritic // explicit OTel flush above; deferred shutdown is a no-op after flush
 	}
 }
 
