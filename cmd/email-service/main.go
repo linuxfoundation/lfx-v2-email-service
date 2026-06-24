@@ -38,8 +38,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	otelCfg := observability.OTelConfigFromEnv(ctx)
-	otelShutdown, err := observability.SetupOTelSDKWithConfig(ctx, otelCfg)
+	otelShutdown, err := observability.SetupOTelSDK(ctx)
 	if err != nil {
 		slog.Error("failed to set up OTel SDK", logging.ErrKey, err)
 		cancel()
