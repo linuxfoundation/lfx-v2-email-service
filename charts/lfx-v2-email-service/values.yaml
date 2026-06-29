@@ -70,8 +70,8 @@ app:
     smtpFromDisplayName: "LFX Self Serve"
     # smtpAllowedFromDomains is a comma-separated list of domains that callers are permitted
     # to use in the per-message `from` field. Requests with a `from` domain not in this list
-    # are rejected. Defaults to "lfx.linuxfoundation.org".
-    smtpAllowedFromDomains: "lfx.linuxfoundation.org"
+    # are rejected. Permits "lfx.linuxfoundation.org" and "lfx.aaif.io" by default.
+    smtpAllowedFromDomains: "lfx.linuxfoundation.org,lfx.aaif.io"
     # smtpAllowedReplyToDomains is a comma-separated list of base domains permitted for the
     # per-message `reply_to` field. Subdomain suffix matching applies, so "linuxfoundation.org"
     # also permits "lfx.linuxfoundation.org". Defaults to "linuxfoundation.org".
