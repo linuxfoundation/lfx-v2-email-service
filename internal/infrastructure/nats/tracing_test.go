@@ -141,7 +141,7 @@ func TestExtractAndStartConsumerSpan(t *testing.T) {
 		require.Len(t, spans, 1)
 
 		s := spans[0]
-		assert.Equal(t, "nats.process", s.Name)
+		assert.Equal(t, subject+" process", s.Name)
 		assert.Equal(t, trace.SpanKindConsumer, s.SpanKind)
 
 		attrMap := make(map[string]string)
@@ -151,6 +151,11 @@ func TestExtractAndStartConsumerSpan(t *testing.T) {
 		assert.Equal(t, "nats", attrMap["messaging.system"])
 		assert.Equal(t, subject, attrMap["messaging.destination.name"])
 		assert.Equal(t, "process", attrMap["messaging.operation.type"])
+		for _, a := range s.Attributes {
+			if string(a.Key) == "messaging.message.body.size" {
+				assert.Equal(t, int64(len(msg.Data)), a.Value.AsInt64())
+			}
+		}
 
 		_ = ctx // ctx carries the span; consumed by the handler under test
 	})
@@ -179,12 +184,12 @@ func TestExtractAndStartConsumerSpan(t *testing.T) {
 		// Find the consumer span by name to avoid ordering assumptions.
 		var consumerSpan tracetest.SpanStub
 		for _, s := range spans {
-			if s.Name == "nats.process" {
+			if s.Name == "test.subject process" {
 				consumerSpan = s
 				break
 			}
 		}
-		require.Equal(t, "nats.process", consumerSpan.Name, "consumer span not found in exporter")
+		require.Equal(t, "test.subject process", consumerSpan.Name, "consumer span not found in exporter")
 		assert.Equal(t, parentSC.TraceID(), consumerSpan.SpanContext.TraceID())
 		assert.Equal(t, parentSC.SpanID(), consumerSpan.Parent.SpanID())
 	})

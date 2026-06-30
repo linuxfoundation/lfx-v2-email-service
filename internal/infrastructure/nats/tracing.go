@@ -49,11 +49,11 @@ func (c natsHeaderCarrier) Keys() []string {
 var _ propagation.TextMapCarrier = natsHeaderCarrier{}
 
 // ExtractAndStartConsumerSpan extracts trace context from the NATS message
-// headers and starts a consumer span named "nats.process". The caller must
+// headers and starts a consumer span named "<subject> process". The caller must
 // call span.End() when the message has been fully processed.
 func ExtractAndStartConsumerSpan(ctx context.Context, msg *natsgo.Msg, subject string) (context.Context, trace.Span) {
 	msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Header))
-	return tracer.Start(msgCtx, "nats.process",
+	return tracer.Start(msgCtx, subject+" process",
 		trace.WithSpanKind(trace.SpanKindConsumer),
 		trace.WithAttributes(
 			attribute.String("messaging.system", "nats"),
