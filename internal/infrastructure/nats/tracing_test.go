@@ -151,11 +151,14 @@ func TestExtractAndStartConsumerSpan(t *testing.T) {
 		assert.Equal(t, "nats", attrMap["messaging.system"])
 		assert.Equal(t, subject, attrMap["messaging.destination.name"])
 		assert.Equal(t, "process", attrMap["messaging.operation.type"])
+		var bodySizeFound bool
 		for _, a := range s.Attributes {
 			if string(a.Key) == "messaging.message.body.size" {
 				assert.Equal(t, int64(len(msg.Data)), a.Value.AsInt64())
+				bodySizeFound = true
 			}
 		}
+		assert.True(t, bodySizeFound, "messaging.message.body.size attribute not found")
 
 		_ = ctx // ctx carries the span; consumed by the handler under test
 	})

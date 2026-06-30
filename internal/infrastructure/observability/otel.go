@@ -20,8 +20,8 @@ import (
 const defaultServiceName = "lfx-v2-email-service"
 
 // SetupOTelSDK bootstraps the OpenTelemetry pipeline.
-// Exporters are configured via OTEL_TRACES_EXPORTER, OTEL_METRICS_EXPORTER, and
-// OTEL_LOGS_EXPORTER environment variables (default: "otlp").
+// Exporters are configured via OTEL_TRACES_EXPORTER and OTEL_METRICS_EXPORTER
+// environment variables (default: "otlp").
 // Propagators are configured via OTEL_PROPAGATORS (default: "tracecontext,baggage").
 func SetupOTelSDK(ctx context.Context) (shutdown func(context.Context) error, err error) {
 	var shutdownFuncs []func(context.Context) error

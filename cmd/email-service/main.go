@@ -164,10 +164,10 @@ func main() {
 	slog.Info("email service stopped")
 	if pollerAborted.Load() {
 		shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutCancel()
 		if err := otelShutdown(shutCtx); err != nil {
 			slog.Error("OTel shutdown error", logging.ErrKey, err)
 		}
-		shutCancel()
 		os.Exit(1) //nolint:gocritic // explicit OTel flush above; deferred shutdown is a no-op after flush
 	}
 }
