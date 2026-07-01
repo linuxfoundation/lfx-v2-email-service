@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.42.27
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats.go v1.47.0
+	github.com/remychantenay/slog-otel v1.3.5
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/exporters/autoexport v0.69.0
 	go.opentelemetry.io/contrib/propagators/autoprop v0.69.0
