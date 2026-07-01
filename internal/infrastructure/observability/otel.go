@@ -1,0 +1,87 @@
+// Copyright The Linux Foundation and each contributor to LFX.
+// SPDX-License-Identifier: MIT
+
+package observability
+
+import (
+	"context"
+	"errors"
+	"os"
+
+	"go.opentelemetry.io/contrib/exporters/autoexport"
+	"go.opentelemetry.io/contrib/propagators/autoprop"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+)
+
+const defaultServiceName = "lfx-v2-email-service"
+
+// SetupOTelSDK bootstraps the OpenTelemetry pipeline.
+// Exporters are configured via OTEL_TRACES_EXPORTER and OTEL_METRICS_EXPORTER
+// environment variables (default: "otlp").
+// Propagators are configured via OTEL_PROPAGATORS (default: "tracecontext,baggage").
+func SetupOTelSDK(ctx context.Context) (shutdown func(context.Context) error, err error) {
+	var shutdownFuncs []func(context.Context) error
+
+	shutdown = func(ctx context.Context) error {
+		var err error
+		for i := len(shutdownFuncs) - 1; i >= 0; i-- {
+			err = errors.Join(err, shutdownFuncs[i](ctx))
+		}
+		shutdownFuncs = nil
+		return err
+	}
+
+	handleErr := func(inErr error) {
+		err = errors.Join(inErr, shutdown(ctx))
+	}
+
+	serviceName := os.Getenv("OTEL_SERVICE_NAME")
+	if serviceName == "" {
+		serviceName = defaultServiceName
+	}
+
+	res, err := resource.Merge(
+		resource.Default(),
+		resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceName(serviceName),
+			semconv.ServiceVersion(os.Getenv("OTEL_SERVICE_VERSION")),
+		),
+	)
+	if err != nil {
+		handleErr(err)
+		return
+	}
+
+	otel.SetTextMapPropagator(autoprop.NewTextMapPropagator())
+
+	spanExporter, err := autoexport.NewSpanExporter(ctx)
+	if err != nil {
+		handleErr(err)
+		return
+	}
+	tracerProvider := trace.NewTracerProvider(
+		trace.WithResource(res),
+		trace.WithBatcher(spanExporter),
+	)
+	shutdownFuncs = append(shutdownFuncs, tracerProvider.Shutdown)
+	otel.SetTracerProvider(tracerProvider)
+
+	metricReader, err := autoexport.NewMetricReader(ctx)
+	if err != nil {
+		handleErr(err)
+		return
+	}
+	meterProvider := metric.NewMeterProvider(
+		metric.WithResource(res),
+		metric.WithReader(metricReader),
+	)
+	shutdownFuncs = append(shutdownFuncs, meterProvider.Shutdown)
+	otel.SetMeterProvider(meterProvider)
+
+	return
+}
