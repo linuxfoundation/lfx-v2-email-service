@@ -9,6 +9,8 @@ import (
 	"log"
 	"log/slog"
 	"os"
+
+	slogotel "github.com/remychantenay/slog-otel"
 )
 
 // ErrKey is the standard slog key for error values.
@@ -61,6 +63,8 @@ func InitStructuredLogConfig() {
 	opts.AddSource = addSource == "true" || addSource == "1"
 
 	log.SetFlags(log.Llongfile)
-	slog.SetDefault(slog.New(contextHandler{slog.NewJSONHandler(os.Stdout, opts)}))
+	// Wrap with slog-otel handler to add trace_id and span_id from context
+	otelHandler := slogotel.OtelHandler{Next: slog.NewJSONHandler(os.Stdout, opts)}
+	slog.SetDefault(slog.New(contextHandler{otelHandler}))
 	slog.Info("log config", "level", opts.Level, "addSource", opts.AddSource)
 }
