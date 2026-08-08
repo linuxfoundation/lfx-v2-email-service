@@ -51,15 +51,30 @@ const (
 // Must be a valid email address whose domain is in the service's reply-to allowlist
 // (SMTP_ALLOWED_REPLY_TO_DOMAINS, default: "linuxfoundation.org"). Subdomain suffix
 // matching applies, so "linuxfoundation.org" also permits "lfx.linuxfoundation.org".
+//
+// ListUnsubscribeURL is optional. When set, it is written into the RFC 2369
+// List-Unsubscribe header (wrapped in angle brackets), letting mail clients
+// surface a native unsubscribe action. Must be an "https:" or "mailto:" URI;
+// the caller is responsible for producing a working link.
+//
+// ListUnsubscribePost, when true, adds the RFC 8058 one-click header
+// (List-Unsubscribe-Post: List-Unsubscribe=One-Click), telling mail clients
+// they may POST to ListUnsubscribeURL without further confirmation. Only set
+// this when the target URL performs the unsubscribe as a plain POST with no
+// body requirements — one-click clients send the literal body
+// "List-Unsubscribe=One-Click" and expect success. Ignored when
+// ListUnsubscribeURL is empty.
 type SendEmailRequest struct {
-	To              string `json:"to"`
-	Subject         string `json:"subject"`
-	HTML            string `json:"html"`
-	Text            string `json:"text"`
-	From            string `json:"from,omitempty"`              // bare address; empty → service default
-	FromDisplayName string `json:"from_display_name,omitempty"` // display name; empty → service default
-	ReplyTo         string `json:"reply_to,omitempty"`          // Reply-To header address; omitted when empty
-	GroupID         string `json:"group_id,omitempty"`
+	To                  string `json:"to"`
+	Subject             string `json:"subject"`
+	HTML                string `json:"html"`
+	Text                string `json:"text"`
+	From                string `json:"from,omitempty"`              // bare address; empty → service default
+	FromDisplayName     string `json:"from_display_name,omitempty"` // display name; empty → service default
+	ReplyTo             string `json:"reply_to,omitempty"`          // Reply-To header address; omitted when empty
+	GroupID             string `json:"group_id,omitempty"`
+	ListUnsubscribeURL  string `json:"list_unsubscribe_url,omitempty"`  // List-Unsubscribe target; omitted when empty
+	ListUnsubscribePost bool   `json:"list_unsubscribe_post,omitempty"` // adds RFC 8058 one-click header
 }
 
 // SendEmailResponse is the JSON payload returned in the NATS reply on success.

@@ -49,7 +49,10 @@ func sanitizeHeaderValue(v string) string {
 // fromDisplayName is the display name shown in the From header (e.g. "LFX Self Serve").
 // replyTo, when non-empty, sets the Reply-To header to direct mail-client replies to
 // a different address than From.
-func buildEmailMessage(to, subject, htmlContent, textContent, from, fromDisplayName, replyTo, configurationSet, trackingID string) string {
+// listUnsubscribeURL, when non-empty, adds an RFC 2369 List-Unsubscribe header (wrapped
+// in angle brackets). listUnsubscribePost, when true and listUnsubscribeURL is non-empty,
+// adds the RFC 8058 one-click header (List-Unsubscribe-Post: List-Unsubscribe=One-Click).
+func buildEmailMessage(to, subject, htmlContent, textContent, from, fromDisplayName, replyTo, configurationSet, trackingID, listUnsubscribeURL string, listUnsubscribePost bool) string {
 	messageID := generateMessageID(from)
 	boundary := generateBoundary()
 	var b strings.Builder
@@ -80,6 +83,12 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from, fromDisplayN
 	}
 	if trackingID != "" {
 		b.WriteString(fmt.Sprintf("X-LFX-TRACKING-ID: %s\r\n", sanitizeHeaderValue(trackingID)))
+	}
+	if listUnsubscribeURL != "" {
+		b.WriteString(fmt.Sprintf("List-Unsubscribe: <%s>\r\n", sanitizeHeaderValue(listUnsubscribeURL)))
+		if listUnsubscribePost {
+			b.WriteString("List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n")
+		}
 	}
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary))

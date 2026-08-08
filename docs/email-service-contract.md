@@ -45,6 +45,8 @@ Request: `api.SendEmailRequest`
 | `from_display_name` | no | Display name in the From header. If omitted, the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default `"LFX Self Serve"`) is used. |
 | `reply_to` | no | Sets the SMTP `Reply-To` header. The domain must be in `SMTP_ALLOWED_REPLY_TO_DOMAINS` (default: `linuxfoundation.org`); subdomain suffix matching applies, so the default also permits `lfx.linuxfoundation.org`. |
 | `group_id` | no | Caller-supplied correlation ID for a batch or campaign. If omitted, the service generates one. |
+| `list_unsubscribe_url` | no | Adds an RFC 2369 `List-Unsubscribe: <url>` header. Must be an `https:` or `mailto:` URI; the caller builds the link. The value is stripped of CR/LF before use. |
+| `list_unsubscribe_post` | no | When `true` and `list_unsubscribe_url` is set, also adds the RFC 8058 one-click header `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. Only set this when the target URL performs the unsubscribe as a plain POST with no body requirements, since one-click clients send the literal body `List-Unsubscribe=One-Click`. Ignored when `list_unsubscribe_url` is empty. |
 
 Success reply: `api.SendEmailResponse`
 
