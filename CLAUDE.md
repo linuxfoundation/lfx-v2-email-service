@@ -171,6 +171,17 @@ When the work is done and no more code commits are planned:
 3. Roll fixes into a `fix(review): ...` commit.
 4. Push. Repeat until clean.
 
+### Keeping the PR title and description accurate
+
+After every `git push` to an open PR, verify the title and description are still accurate:
+
+1. Read the current PR: `gh pr view <number> --json title,body`.
+2. Compare against the actual branch diff: `git diff origin/main...HEAD --stat` and `git log --oneline origin/main..HEAD`.
+3. If the title no longer reflects the primary change, update it: `gh pr edit <number> --title "..."`.
+4. If the description is missing new changes, omits updated protected files, references removed work, or contains stale notes, update it: `gh pr edit <number> --body "..."`.
+
+Do not leave a PR with a title or description that contradicts or understates what is actually in the branch. Reviewers rely on the description to understand scope; a stale description causes confusion and unnecessary review comments.
+
 ## Local dev loop
 
 ```bash
