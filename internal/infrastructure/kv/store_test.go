@@ -174,17 +174,5 @@ func TestStore_UpdateRecord(t *testing.T) {
 	})
 }
 
-func TestStore_Available(t *testing.T) {
-	t.Parallel()
-	store, _, _ := newStore(t)
-	assert.True(t, store.Available(), "kv.Store must report Available=true")
-}
-
-func TestNullTrackingStore_Available(t *testing.T) {
-	t.Parallel()
-	var s domain.NullTrackingStore
-	assert.False(t, s.Available(), "NullTrackingStore must report Available=false")
-}
-
 // Compile-time assertion: *kvinfra.Store satisfies domain.TrackingStore.
 var _ domain.TrackingStore = (*kvinfra.Store)(nil)

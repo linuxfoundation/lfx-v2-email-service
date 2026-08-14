@@ -31,9 +31,6 @@ func New(recipientsKV, groupIndexKV natsgo.KeyValue) *Store {
 	return &Store{recipientsKV: recipientsKV, groupIndexKV: groupIndexKV}
 }
 
-// Available always returns true — a kv.Store is backed by live NATS KV buckets.
-func (s *Store) Available() bool { return true }
-
 // WriteRecord marshals r and puts it in the recipients bucket under emailID.
 func (s *Store) WriteRecord(_ context.Context, emailID string, r api.EmailRecipientRecord) error {
 	b, err := json.Marshal(r)

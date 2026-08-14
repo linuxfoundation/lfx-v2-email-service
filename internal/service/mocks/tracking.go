@@ -15,7 +15,6 @@ import (
 // TrackingStore is a thread-safe in-memory mock that satisfies domain.TrackingStore.
 // Construct with NewTrackingStore and pre-seed records with PutRecord / PutGroup.
 // Inject errors via WriteErr, AppendErr, GetErrFor, and GroupErrFor.
-// Set Unavailable to true to make Available() return false (simulates degraded KV).
 //
 // GetGroupRecords delegates individual-record fetches through GetRecord, so errors
 // injected via GetErrFor are visible to group-level callers as well.
@@ -23,7 +22,6 @@ type TrackingStore struct {
 	mu          sync.RWMutex
 	records     map[string]api.EmailRecipientRecord
 	groups      map[string][]string
-	Unavailable bool             // if true, Available() returns false
 	WriteErr    error            // if non-nil, WriteRecord returns this error
 	AppendErr   error            // if non-nil, AppendToGroup returns this error
 	GetErrFor   map[string]error // per-emailID error override for GetRecord / UpdateRecord / GetGroupRecords fan-out
@@ -74,9 +72,6 @@ func (m *TrackingStore) GetStoredGroup(groupID string) ([]string, bool) {
 	copy(out, ids)
 	return out, true
 }
-
-// Available returns false when Unavailable is set, true otherwise.
-func (m *TrackingStore) Available() bool { return !m.Unavailable }
 
 func (m *TrackingStore) WriteRecord(_ context.Context, emailID string, r api.EmailRecipientRecord) error {
 	if m.WriteErr != nil {

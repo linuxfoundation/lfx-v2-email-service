@@ -62,9 +62,9 @@ Clean layered architecture:
 
 ```
 cmd/email-service/                  → entry point, wiring, config
-internal/domain/                    → interfaces (Sender)
+internal/domain/                    → interfaces (Sender, TrackingStore, AddressPolicy, NullTrackingStore)
 internal/service/                   → NATS message handlers (SendEmail, GetEmailStatus, GetEmailEngagementAnalytics, EngagementEvent)
-internal/service/mocks/             → test doubles for external interfaces (mocks.KeyValue satisfies natsgo.KeyValue)
+internal/service/mocks/             → test doubles (mocks.TrackingStore satisfies domain.TrackingStore)
 internal/infrastructure/smtp/       → SMTPSender, NoOpSender, MIME builder
 internal/infrastructure/sqs/        → SQS long-poll loop (feeds EngagementEventHandler)
 internal/infrastructure/nats/       → NATS tracing helpers (ExtractAndStartConsumerSpan)
@@ -88,6 +88,7 @@ pkg/redaction/                      → email address redaction for logs
   instead of sending). Set `EMAIL_ENABLED=true` to enable real SMTP delivery.
 - **Queue group for horizontal scaling.** The subscription uses queue group
   `lfx.email-service.queue` so each message is delivered to exactly one pod.
+- **All four subjects are always subscribed.** Status and analytics handlers are subscribed unconditionally at startup. When NATS KV is unavailable, `NullTrackingStore` is wired in and all reads return `ErrNotFound`, which the handlers map to a `"not found"` error reply. Never skip a subscription based on KV availability — callers must not hang on `RequestWithContext`.
 - **Handle always responds.** The NATS handler calls `msg.Respond` on every path
   (success → JSON `SendEmailResponse`, failure → JSON `SendEmailErrorResponse`) so
   callers' `RequestWithContext` never hangs.

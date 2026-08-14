@@ -34,12 +34,12 @@ Use this skill alongside:
 
 ```text
 cmd/email-service/                  entry point, env parsing, NATS subscriptions, health probes, shutdown
-internal/domain/                    Sender interface
+internal/domain/                    Sender, TrackingStore, AddressPolicy, NullTrackingStore
 internal/infrastructure/smtp/       SMTP/SES sender, MIME builder, NoOpSender
 internal/infrastructure/sqs/        SQS long-polling engagement-event consumer
 internal/logging/                   slog context helper and global logger setup
 internal/service/                   NATS handlers and SES engagement event handler
-internal/service/mocks/             NATS KV fake for unit tests
+internal/service/mocks/             TrackingStore mock (mocks.NewTrackingStore) for unit tests
 pkg/api/                            public NATS subjects, payloads, KV bucket constants
 pkg/redaction/                      email redaction helpers for logs
 charts/lfx-v2-email-service/        service-local Helm chart
@@ -61,7 +61,7 @@ Keep implementation details in `internal/`. Anything callers import belongs in `
 - The service subscribes with queue group `lfx.email-service.queue` so replicas share work.
 - `email-recipients` stores one `api.EmailRecipientRecord` per `email_id`.
 - `email-group-index` maps a `group_id` to `[]string` of `email_id` values.
-- Tracking is optional. If JetStream or either KV bucket is missing, send requests still work, but status and analytics subjects are not subscribed.
+- Tracking is optional. If JetStream or either KV bucket is missing, send requests still work. All four subjects are always subscribed; status and analytics handlers respond with "not found" when KV is unavailable (via NullTrackingStore).
 - KV writes use optimistic locking where concurrent updates are possible. Preserve the retry behavior in group-index and engagement-event updates.
 - Never write to another service's KV bucket. This service owns only the two email tracking buckets above.
 
@@ -103,7 +103,7 @@ Keep implementation details in `internal/`. Anything callers import belongs in `
 - Co-locate `*_test.go` with the code under test.
 - Use table-driven tests for branching behavior.
 - Use `SendEmailHandler.HandleData` and the handler-level `HandleData` helpers instead of standing up a real NATS server in unit tests.
-- Use `internal/service/mocks.NewKeyValue()` for KV behavior.
+- Use `internal/service/mocks.NewTrackingStore()` for KV behavior.
 - Same-package tests are acceptable when exercising unexported SMTP helpers such as `buildEmailMessage`.
 - Run `make test` before handoff; it enables the race detector.
 
