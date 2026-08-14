@@ -65,6 +65,7 @@ cmd/email-service/                  → entry point, wiring, config
 internal/domain/                    → interfaces (Sender, TrackingStore, AddressPolicy, NullTrackingStore)
 internal/service/                   → NATS message handlers (SendEmail, GetEmailStatus, GetEmailEngagementAnalytics, EngagementEvent)
 internal/service/mocks/             → test doubles (mocks.TrackingStore satisfies domain.TrackingStore)
+internal/infrastructure/kv/         → KV adapter (kv.Store implements domain.TrackingStore; owns JSON marshaling, CAS retry, group fan-out)
 internal/infrastructure/smtp/       → SMTPSender, NoOpSender, MIME builder
 internal/infrastructure/sqs/        → SQS long-poll loop (feeds EngagementEventHandler)
 internal/infrastructure/nats/       → NATS tracing helpers (ExtractAndStartConsumerSpan)
@@ -290,17 +291,18 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
 - **All tests run with `-race`** (`TEST_FLAGS=-race` in the Makefile). New tests must
   be safe under the race detector; avoid shared mutable state without synchronization.
 - **`mockSender`** in `internal/service/send_email_handler_test.go` — satisfies `domain.Sender`.
-- **`mocks.KeyValue`** in `internal/service/mocks/kv.go` — a thread-safe in-memory mock
-  that satisfies `natsgo.KeyValue`. Use it to test any handler that reads or writes the
-  NATS KV store; construct with `mocks.NewKeyValue()` and pre-seed entries with `kv.Put`.
-  `PutErr` and `GetErrFor` fields inject errors for specific keys. Do not write a new KV
-  mock — this one is already complete.
+- **`mocks.TrackingStore`** in `internal/service/mocks/tracking.go` — a thread-safe
+  in-memory mock that satisfies `domain.TrackingStore`. Construct with
+  `mocks.NewTrackingStore()` and pre-seed records with `PutRecord` / `PutGroup`.
+  `WriteErr`, `AppendErr`, `GetErrFor`, and `GroupErrFor` inject errors for specific
+  conditions. Use this for all handler tests that touch KV tracking — do not write a
+  new tracking mock.
 - **`HandleData`** on `SendEmailHandler` and `GetEmailStatusHandler` — testable entry
   point that takes raw bytes and a respond callback; `Handle` wraps it for real NATS
   messages. Use `HandleData` in tests instead of embedding a real NATS server.
 - **`EngagementEventHandler.Handle`** takes an `sqs/types.Message` (not raw bytes). Its
   test shape differs from the other handlers: construct the handler, call `Handle` directly
-  with a crafted `types.Message`, and assert KV side-effects via `mocks.KeyValue`. See
+  with a crafted `types.Message`, and assert KV side-effects via `mocks.TrackingStore`. See
   `internal/service/engagement_event_handler_test.go` for the pattern.
 - **Package `smtp` tests** use the unexported `buildEmailMessage` / `generateMessageID`
   / `generateBoundary` helpers directly (internal test package `package smtp`).
