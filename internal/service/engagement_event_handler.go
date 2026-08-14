@@ -94,6 +94,8 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 		return nil
 	}
 
+	ctx = logging.AppendCtx(ctx, slog.String("email_id", emailID))
+
 	eventType := strings.ToUpper(event.EventType)
 	switch eventType {
 	case "OPEN", "DELIVERY", "BOUNCE", "COMPLAINT":
@@ -102,22 +104,20 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 		return nil
 	}
 
-	slog.InfoContext(ctx, "ses engagement event received",
-		"event_type", strings.ToLower(eventType),
-		"email_id", emailID,
-	)
+	slog.DebugContext(ctx, "ses engagement event received", "event_type", strings.ToLower(eventType))
 
 	// Retry once on KV write conflict to avoid losing concurrent updates.
+	var lastUpdateErr error
 	for attempt := range 2 {
 		entry, err := h.recipientsKV.Get(emailID)
 		if err != nil {
-			slog.DebugContext(ctx, "no recipient record for email_id, skipping", "email_id", emailID)
+			slog.DebugContext(ctx, "no recipient record for email_id, skipping")
 			return nil
 		}
 
 		var record api.EmailRecipientRecord
 		if err := json.Unmarshal(entry.Value(), &record); err != nil {
-			slog.WarnContext(ctx, "failed to unmarshal recipient record", logging.ErrKey, err, "email_id", emailID)
+			slog.ErrorContext(ctx, "failed to unmarshal recipient record", logging.ErrKey, err)
 			return nil
 		}
 
@@ -125,22 +125,20 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 
 		updated, err := json.Marshal(record)
 		if err != nil {
-			slog.WarnContext(ctx, "failed to marshal updated recipient record", logging.ErrKey, err)
+			slog.ErrorContext(ctx, "failed to marshal updated recipient record", logging.ErrKey, err)
 			return nil
 		}
 
-		if _, err := h.recipientsKV.Update(emailID, updated, entry.Revision()); err == nil {
-			slog.InfoContext(ctx, "ses engagement event applied",
-				"event_type", strings.ToLower(eventType),
-				"email_id", emailID,
-			)
+		_, lastUpdateErr = h.recipientsKV.Update(emailID, updated, entry.Revision())
+		if lastUpdateErr == nil {
+			slog.DebugContext(ctx, "ses engagement event applied", "event_type", strings.ToLower(eventType))
 			return nil
 		}
 		if attempt == 0 {
-			slog.DebugContext(ctx, "recipient record write conflict, retrying", "email_id", emailID)
+			slog.DebugContext(ctx, "recipient record write conflict, retrying")
 		}
 	}
-	slog.WarnContext(ctx, "failed to update recipient record after retry", "email_id", emailID)
+	slog.ErrorContext(ctx, "failed to update recipient record after retry", logging.ErrKey, lastUpdateErr)
 	return fmt.Errorf("kv update conflict unresolved for email_id %s", emailID)
 }
 

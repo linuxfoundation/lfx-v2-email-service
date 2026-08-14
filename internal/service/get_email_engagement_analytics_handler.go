@@ -28,26 +28,33 @@ func NewGetEmailEngagementAnalyticsHandler(recipientsKV, groupIndexKV natsgo.Key
 
 // Handle processes a single NATS message.
 func (h *GetEmailEngagementAnalyticsHandler) Handle(ctx context.Context, msg *natsgo.Msg) {
+	h.HandleData(ctx, msg.Data, msg.Respond)
+}
+
+// HandleData is the testable core: respond is called exactly once.
+func (h *GetEmailEngagementAnalyticsHandler) HandleData(ctx context.Context, data []byte, respond func([]byte) error) {
 	var req api.GetEmailEngagementAnalyticsRequest
-	if err := json.Unmarshal(msg.Data, &req); err != nil {
+	if err := json.Unmarshal(data, &req); err != nil {
 		slog.WarnContext(ctx, "failed to unmarshal get_email_engagement_analytics request", logging.ErrKey, err)
-		respondErrorMsg(msg, "invalid request payload")
+		replyError(ctx, respond, "invalid request payload")
 		return
 	}
 
 	if req.GroupID == "" {
-		respondErrorMsg(msg, "group_id is required")
+		replyError(ctx, respond, "group_id is required")
 		return
 	}
+
+	ctx = logging.AppendCtx(ctx, slog.String("group_id", req.GroupID))
 
 	entry, err := h.groupIndexKV.Get(req.GroupID)
 	if err != nil {
 		if errors.Is(err, natsgo.ErrKeyNotFound) {
-			slog.DebugContext(ctx, "group index not found", "group_id", req.GroupID)
-			respondErrorMsg(msg, "not found")
+			slog.DebugContext(ctx, "group index not found")
+			replyError(ctx, respond, "not found")
 		} else {
-			slog.ErrorContext(ctx, "failed to read group index from KV", logging.ErrKey, err, "group_id", req.GroupID)
-			respondErrorMsg(msg, "internal error")
+			slog.ErrorContext(ctx, "failed to read group index from KV", logging.ErrKey, err)
+			replyError(ctx, respond, "internal error")
 		}
 		return
 	}
@@ -55,7 +62,7 @@ func (h *GetEmailEngagementAnalyticsHandler) Handle(ctx context.Context, msg *na
 	var emailIDs []string
 	if err := json.Unmarshal(entry.Value(), &emailIDs); err != nil {
 		slog.ErrorContext(ctx, "failed to unmarshal group index", logging.ErrKey, err)
-		respondErrorMsg(msg, "internal error")
+		replyError(ctx, respond, "internal error")
 		return
 	}
 
@@ -87,7 +94,7 @@ func (h *GetEmailEngagementAnalyticsHandler) Handle(ctx context.Context, msg *na
 	}
 
 	b, _ := json.Marshal(resp)
-	if err := msg.Respond(b); err != nil {
+	if err := respond(b); err != nil {
 		slog.WarnContext(ctx, "failed to respond to get_email_engagement_analytics request", logging.ErrKey, err)
 	}
 }

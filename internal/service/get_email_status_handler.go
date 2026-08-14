@@ -53,13 +53,14 @@ func (h *GetEmailStatusHandler) HandleData(ctx context.Context, data []byte, res
 }
 
 func (h *GetEmailStatusHandler) handleByEmailID(ctx context.Context, respond func([]byte) error, emailID string) {
+	ctx = logging.AppendCtx(ctx, slog.String("email_id", emailID))
 	entry, err := h.recipientsKV.Get(emailID)
 	if err != nil {
 		if errors.Is(err, natsgo.ErrKeyNotFound) {
-			slog.DebugContext(ctx, "recipient record not found", "email_id", emailID)
+			slog.DebugContext(ctx, "recipient record not found")
 			replyError(ctx, respond, "not found")
 		} else {
-			slog.ErrorContext(ctx, "failed to read recipient record from KV", logging.ErrKey, err, "email_id", emailID)
+			slog.ErrorContext(ctx, "failed to read recipient record from KV", logging.ErrKey, err)
 			replyError(ctx, respond, "internal error")
 		}
 		return
@@ -84,13 +85,14 @@ func (h *GetEmailStatusHandler) handleByEmailID(ctx context.Context, respond fun
 }
 
 func (h *GetEmailStatusHandler) handleByGroupID(ctx context.Context, respond func([]byte) error, groupID string) {
+	ctx = logging.AppendCtx(ctx, slog.String("group_id", groupID))
 	entry, err := h.groupIndexKV.Get(groupID)
 	if err != nil {
 		if errors.Is(err, natsgo.ErrKeyNotFound) {
-			slog.DebugContext(ctx, "group index not found", "group_id", groupID)
+			slog.DebugContext(ctx, "group index not found")
 			replyError(ctx, respond, "not found")
 		} else {
-			slog.ErrorContext(ctx, "failed to read group index from KV", logging.ErrKey, err, "group_id", groupID)
+			slog.ErrorContext(ctx, "failed to read group index from KV", logging.ErrKey, err)
 			replyError(ctx, respond, "internal error")
 		}
 		return
@@ -98,7 +100,7 @@ func (h *GetEmailStatusHandler) handleByGroupID(ctx context.Context, respond fun
 
 	var emailIDs []string
 	if err := json.Unmarshal(entry.Value(), &emailIDs); err != nil {
-		slog.ErrorContext(ctx, "failed to unmarshal group index", logging.ErrKey, err, "group_id", groupID)
+		slog.ErrorContext(ctx, "failed to unmarshal group index", logging.ErrKey, err)
 		replyError(ctx, respond, "internal error")
 		return
 	}
@@ -132,8 +134,4 @@ func (h *GetEmailStatusHandler) handleByGroupID(ctx context.Context, respond fun
 	if err := respond(b); err != nil {
 		slog.WarnContext(ctx, "failed to respond to get_email_status (group) request", logging.ErrKey, err)
 	}
-}
-
-func respondErrorMsg(msg *natsgo.Msg, reason string) {
-	replyError(context.Background(), msg.Respond, reason)
 }

@@ -222,6 +222,7 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 // Retries once on write conflict. Distinguishes ErrKeyNotFound from transient errors
 // so a Get failure does not silently overwrite the existing index.
 func (h *SendEmailHandler) appendToGroupIndex(ctx context.Context, groupID, emailID string) {
+	ctx = logging.AppendCtx(ctx, slog.String("group_id", groupID))
 	var writeErr error
 	for attempt := range 2 {
 		var ids []string
@@ -233,13 +234,13 @@ func (h *SendEmailHandler) appendToGroupIndex(ctx context.Context, groupID, emai
 		case err == nil:
 			revision = entry.Revision()
 			if jsonErr := json.Unmarshal(entry.Value(), &ids); jsonErr != nil {
-				slog.WarnContext(ctx, "corrupted group index, resetting", "group_id", groupID, logging.ErrKey, jsonErr)
+				slog.WarnContext(ctx, "corrupted group index, resetting", logging.ErrKey, jsonErr)
 				ids = nil
 			}
 		case errors.Is(err, natsgo.ErrKeyNotFound):
 			isNew = true
 		default:
-			slog.WarnContext(ctx, "failed to read group index, aborting append", "group_id", groupID, logging.ErrKey, err)
+			slog.WarnContext(ctx, "failed to read group index, aborting append", logging.ErrKey, err)
 			return
 		}
 
@@ -256,10 +257,10 @@ func (h *SendEmailHandler) appendToGroupIndex(ctx context.Context, groupID, emai
 			return
 		}
 		if attempt == 0 {
-			slog.DebugContext(ctx, "group index write conflict, retrying", "group_id", groupID)
+			slog.DebugContext(ctx, "group index write conflict, retrying")
 		}
 	}
-	slog.WarnContext(ctx, "failed to update group index after retry", "group_id", groupID, logging.ErrKey, writeErr)
+	slog.WarnContext(ctx, "failed to update group index after retry", logging.ErrKey, writeErr)
 }
 
 func replyError(ctx context.Context, respond func([]byte) error, reason string) {

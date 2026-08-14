@@ -63,43 +63,43 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from, fromDisplayN
 	// Use mail.Address.String() to produce a properly RFC 5322-encoded From header.
 	// This quotes display names that contain commas or other special characters,
 	// preventing them from being mis-parsed as a mailbox list.
-	b.WriteString(fmt.Sprintf("From: %s\r\n", (&mail.Address{Name: sanitizeHeaderValue(fromDisplayName), Address: sanitizeHeaderValue(fromAddr)}).String()))
-	b.WriteString(fmt.Sprintf("To: %s\r\n", sanitizeHeaderValue(to)))
+	fmt.Fprintf(&b, "From: %s\r\n", (&mail.Address{Name: sanitizeHeaderValue(fromDisplayName), Address: sanitizeHeaderValue(fromAddr)}).String())
+	fmt.Fprintf(&b, "To: %s\r\n", sanitizeHeaderValue(to))
 	if replyTo != "" {
 		replyToAddr := replyTo
 		if parsed, err := mail.ParseAddress(replyTo); err == nil {
 			replyToAddr = parsed.Address
 		}
-		b.WriteString(fmt.Sprintf("Reply-To: %s\r\n", sanitizeHeaderValue(replyToAddr)))
+		fmt.Fprintf(&b, "Reply-To: %s\r\n", sanitizeHeaderValue(replyToAddr))
 	}
-	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(subject))))
-	b.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
-	b.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
+	fmt.Fprintf(&b, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(subject)))
+	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
+	fmt.Fprintf(&b, "Message-ID: %s\r\n", messageID)
 	if configurationSet != "" {
-		b.WriteString(fmt.Sprintf("X-SES-CONFIGURATION-SET: %s\r\n", sanitizeHeaderValue(configurationSet)))
+		fmt.Fprintf(&b, "X-SES-CONFIGURATION-SET: %s\r\n", sanitizeHeaderValue(configurationSet))
 	}
 	if trackingID != "" {
-		b.WriteString(fmt.Sprintf("X-LFX-TRACKING-ID: %s\r\n", sanitizeHeaderValue(trackingID)))
+		fmt.Fprintf(&b, "X-LFX-TRACKING-ID: %s\r\n", sanitizeHeaderValue(trackingID))
 	}
 	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary))
+	fmt.Fprintf(&b, "Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary)
 	b.WriteString("\r\n")
 
-	b.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	fmt.Fprintf(&b, "--%s\r\n", boundary)
 	b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
 	b.WriteString("Content-Transfer-Encoding: 8bit\r\n")
 	b.WriteString("\r\n")
 	b.WriteString(textContent)
 	b.WriteString("\r\n")
 
-	b.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	fmt.Fprintf(&b, "--%s\r\n", boundary)
 	b.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
 	b.WriteString("Content-Transfer-Encoding: 8bit\r\n")
 	b.WriteString("\r\n")
 	b.WriteString(htmlContent)
 	b.WriteString("\r\n")
 
-	b.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+	fmt.Fprintf(&b, "--%s--\r\n", boundary)
 	return b.String()
 }
 

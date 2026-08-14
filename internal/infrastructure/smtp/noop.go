@@ -20,7 +20,7 @@ func NewNoOpSender() *NoOpSender { return &NoOpSender{} }
 
 // Send logs the request and returns empty IDs without sending anything.
 func (s *NoOpSender) Send(ctx context.Context, req api.SendEmailRequest) (string, string, error) {
-	slog.InfoContext(ctx, "email send skipped (EMAIL_ENABLED=false)",
+	slog.DebugContext(ctx, "email send skipped (EMAIL_ENABLED=false)",
 		"to", redaction.RedactEmail(req.To),
 		"subject", req.Subject,
 	)
