@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/service"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/service/mocks"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
@@ -184,7 +185,7 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			t.Parallel()
 
 			sender := &mockSender{err: tc.senderErr, emailID: tc.emailID, groupID: tc.groupID}
-			handler := service.NewSendEmailHandler(sender, nil, nil, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+			handler := service.NewSendEmailHandler(sender, domain.NullTrackingStore{}, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 			var data []byte
 			switch v := tc.payload.(type) {
@@ -238,10 +239,9 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 	t.Run("writes recipient record on successful send", func(t *testing.T) {
 		t.Parallel()
 
-		recipientsKV := mocks.NewKeyValue()
-		groupIndexKV := mocks.NewKeyValue()
+		store := mocks.NewTrackingStore()
 		sender := &mockSender{emailID: "email-1", groupID: "group-1"}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+		handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 		req := api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-1"}
 		data, err := json.Marshal(req)
@@ -249,12 +249,8 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 
 		handler.HandleData(context.Background(), data, func([]byte) error { return nil })
 
-		// Recipient record must be keyed by emailID.
-		entry, err := recipientsKV.Get("email-1")
-		require.NoError(t, err, "recipient record should be stored under emailID")
-
-		var record api.EmailRecipientRecord
-		require.NoError(t, json.Unmarshal(entry.Value(), &record))
+		record, ok := store.GetStoredRecord("email-1")
+		require.True(t, ok, "recipient record should be stored under emailID")
 		assert.Equal(t, "email-1", record.EmailID)
 		assert.Equal(t, "group-1", record.GroupID)
 		assert.Equal(t, "alice@example.com", record.To)
@@ -265,95 +261,83 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 	t.Run("appends emailID to group index", func(t *testing.T) {
 		t.Parallel()
 
-		recipientsKV := mocks.NewKeyValue()
-		groupIndexKV := mocks.NewKeyValue()
+		store := mocks.NewTrackingStore()
 		sender := &mockSender{emailID: "email-2", groupID: "group-2"}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+		handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 		req := api.SendEmailRequest{To: "bob@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-2"}
 		data, _ := json.Marshal(req)
 		handler.HandleData(context.Background(), data, func([]byte) error { return nil })
 
-		entry, err := groupIndexKV.Get("group-2")
-		require.NoError(t, err, "group index should be written")
-
-		var ids []string
-		require.NoError(t, json.Unmarshal(entry.Value(), &ids))
+		ids, ok := store.GetStoredGroup("group-2")
+		require.True(t, ok, "group index should be written")
 		assert.Equal(t, []string{"email-2"}, ids)
 	})
 
 	t.Run("second send appends to existing group index", func(t *testing.T) {
 		t.Parallel()
 
-		recipientsKV := mocks.NewKeyValue()
-		groupIndexKV := mocks.NewKeyValue()
+		store := mocks.NewTrackingStore()
 
-		for i, id := range []string{"email-a", "email-b"} {
-			_ = i
+		for _, id := range []string{"email-a", "email-b"} {
 			sender := &mockSender{emailID: id, groupID: "group-3"}
-			handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+			handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 			req := api.SendEmailRequest{To: "c@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-3"}
 			data, _ := json.Marshal(req)
 			handler.HandleData(context.Background(), data, func([]byte) error { return nil })
 		}
 
-		entry, err := groupIndexKV.Get("group-3")
-		require.NoError(t, err)
-
-		var ids []string
-		require.NoError(t, json.Unmarshal(entry.Value(), &ids))
+		ids, ok := store.GetStoredGroup("group-3")
+		require.True(t, ok)
 		assert.ElementsMatch(t, []string{"email-a", "email-b"}, ids)
 	})
 
 	t.Run("no KV write when sender returns empty emailID", func(t *testing.T) {
 		t.Parallel()
 
-		recipientsKV := mocks.NewKeyValue()
-		groupIndexKV := mocks.NewKeyValue()
+		store := mocks.NewTrackingStore()
 		sender := &mockSender{emailID: "", groupID: ""}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+		handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 		req := api.SendEmailRequest{To: "d@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
 		handler.HandleData(context.Background(), data, func([]byte) error { return nil })
 
-		_, err := recipientsKV.Get("")
-		assert.Error(t, err, "no record should be written when emailID is empty")
+		_, ok := store.GetStoredRecord("")
+		assert.False(t, ok, "no record should be written when emailID is empty")
 	})
 
 	t.Run("no group index write when group_id is empty", func(t *testing.T) {
 		t.Parallel()
 
-		recipientsKV := mocks.NewKeyValue()
-		groupIndexKV := mocks.NewKeyValue()
+		store := mocks.NewTrackingStore()
 		sender := &mockSender{emailID: "email-nogroupid", groupID: ""}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+		handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 		req := api.SendEmailRequest{To: "f@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
 		handler.HandleData(context.Background(), data, func([]byte) error { return nil })
 
-		_, err := recipientsKV.Get("email-nogroupid")
-		assert.NoError(t, err, "recipient record should still be written")
+		_, ok := store.GetStoredRecord("email-nogroupid")
+		assert.True(t, ok, "recipient record should still be written")
 
-		_, err = groupIndexKV.Get("")
-		assert.Error(t, err, "group index should not be written under empty key")
+		_, ok = store.GetStoredGroup("")
+		assert.False(t, ok, "group index should not be written under empty key")
 	})
 
 	t.Run("KV write skipped when sender errors", func(t *testing.T) {
 		t.Parallel()
 
-		recipientsKV := mocks.NewKeyValue()
-		groupIndexKV := mocks.NewKeyValue()
+		store := mocks.NewTrackingStore()
 		sender := &mockSender{emailID: "email-x", groupID: "group-x", err: errors.New("smtp down")}
-		handler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+		handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
 
 		req := api.SendEmailRequest{To: "e@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
 		handler.HandleData(context.Background(), data, func([]byte) error { return nil })
 
-		_, err := recipientsKV.Get("email-x")
-		assert.Error(t, err, "no record should be written on send error")
+		_, ok := store.GetStoredRecord("email-x")
+		assert.False(t, ok, "no record should be written on send error")
 	})
 }
 
@@ -367,7 +351,7 @@ func TestSendEmailHandler_RecipientDomainAllowlist(t *testing.T) {
 
 	makeHandler := func(recipientDomains []string) (*service.SendEmailHandler, *mockSender) {
 		s := &mockSender{emailID: "email-r", groupID: "group-r"}
-		h := service.NewSendEmailHandler(s, nil, nil, nil, nil, recipientDomains)
+		h := service.NewSendEmailHandler(s, domain.NullTrackingStore{}, nil, nil, recipientDomains)
 		return h, s
 	}
 

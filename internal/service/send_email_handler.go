@@ -7,7 +7,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/mail"
 	"strings"
@@ -24,23 +23,20 @@ import (
 // SendEmailHandler handles inbound NATS requests on the send_email subject.
 type SendEmailHandler struct {
 	sender                  domain.Sender
-	recipientsKV            natsgo.KeyValue
-	groupIndexKV            natsgo.KeyValue
+	store                   domain.TrackingStore
 	allowedFromDomains      []string // lower-cased exact match; empty slice = reject any explicit From
 	allowedReplyToDomains   []string // lower-cased base domains; subdomain suffix matching applies
 	allowedRecipientDomains []string // lower-cased base domains; subdomain suffix matching applies; empty = permit all
 }
 
 // NewSendEmailHandler creates a SendEmailHandler.
-// recipientsKV and groupIndexKV may be nil; tracking is skipped when either is absent.
-// allowedFromDomains is the list of permitted domains for the per-message From override;
-// values are stored lower-cased. An empty slice means no domain is allowed (default-only mode).
-// allowedReplyToDomains is the list of permitted base domains for reply_to; subdomain
-// suffix matching is applied, so "linuxfoundation.org" also permits "lfx.linuxfoundation.org".
+// store must not be nil; use domain.NullTrackingStore{} when tracking is unavailable.
+// allowedFromDomains is the list of permitted domains for the per-message From override.
+// An empty slice means no per-message From override is permitted.
+// allowedReplyToDomains is the list of permitted base domains for reply_to.
 // allowedRecipientDomains is the list of permitted base domains for the recipient address;
-// subdomain suffix matching applies. An empty slice means all recipient domains are permitted
-// (the production default). Set in non-prod to prevent test mail reaching real users.
-func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo.KeyValue, allowedFromDomains, allowedReplyToDomains, allowedRecipientDomains []string) *SendEmailHandler {
+// subdomain suffix matching applies. An empty slice means all recipient domains are permitted.
+func NewSendEmailHandler(sender domain.Sender, store domain.TrackingStore, allowedFromDomains, allowedReplyToDomains, allowedRecipientDomains []string) *SendEmailHandler {
 	normalize := func(domains []string) []string {
 		out := make([]string, 0, len(domains))
 		for _, d := range domains {
@@ -52,8 +48,7 @@ func NewSendEmailHandler(sender domain.Sender, recipientsKV, groupIndexKV natsgo
 	}
 	return &SendEmailHandler{
 		sender:                  sender,
-		recipientsKV:            recipientsKV,
-		groupIndexKV:            groupIndexKV,
+		store:                   store,
 		allowedFromDomains:      normalize(allowedFromDomains),
 		allowedReplyToDomains:   normalize(allowedReplyToDomains),
 		allowedRecipientDomains: normalize(allowedRecipientDomains),
@@ -185,7 +180,7 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		return
 	}
 
-	if emailID != "" && h.recipientsKV != nil && h.groupIndexKV != nil {
+	if emailID != "" {
 		h.writeTrackingRecords(ctx, emailID, groupID, req)
 	}
 
@@ -203,64 +198,15 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 		Subject: req.Subject,
 		SentAt:  time.Now().UTC(),
 	}
-	b, err := json.Marshal(record)
-	if err != nil {
-		slog.WarnContext(ctx, "failed to marshal recipient record", logging.ErrKey, err)
+	if err := h.store.WriteRecord(ctx, emailID, record); err != nil {
+		slog.WarnContext(ctx, "failed to write recipient record to store", logging.ErrKey, err, "email_id", emailID)
 		return
 	}
-	if _, err := h.recipientsKV.Put(emailID, b); err != nil {
-		slog.WarnContext(ctx, "failed to write recipient record to KV", logging.ErrKey, err, "email_id", emailID)
-		return
-	}
-
 	if groupID != "" {
-		h.appendToGroupIndex(ctx, groupID, emailID)
-	}
-}
-
-// appendToGroupIndex adds emailID to the group's index entry with optimistic locking.
-// Retries once on write conflict. Distinguishes ErrKeyNotFound from transient errors
-// so a Get failure does not silently overwrite the existing index.
-func (h *SendEmailHandler) appendToGroupIndex(ctx context.Context, groupID, emailID string) {
-	ctx = logging.AppendCtx(ctx, slog.String("group_id", groupID))
-	var writeErr error
-	for attempt := range 2 {
-		var ids []string
-		var revision uint64
-		var isNew bool
-
-		entry, err := h.groupIndexKV.Get(groupID)
-		switch {
-		case err == nil:
-			revision = entry.Revision()
-			if jsonErr := json.Unmarshal(entry.Value(), &ids); jsonErr != nil {
-				slog.WarnContext(ctx, "corrupted group index, resetting", logging.ErrKey, jsonErr)
-				ids = nil
-			}
-		case errors.Is(err, natsgo.ErrKeyNotFound):
-			isNew = true
-		default:
-			slog.WarnContext(ctx, "failed to read group index, aborting append", logging.ErrKey, err)
-			return
-		}
-
-		ids = append(ids, emailID)
-		b, _ := json.Marshal(ids)
-
-		if isNew {
-			_, writeErr = h.groupIndexKV.Put(groupID, b)
-		} else {
-			_, writeErr = h.groupIndexKV.Update(groupID, b, revision)
-		}
-
-		if writeErr == nil {
-			return
-		}
-		if attempt == 0 {
-			slog.DebugContext(ctx, "group index write conflict, retrying")
+		if err := h.store.AppendToGroup(ctx, groupID, emailID); err != nil {
+			slog.WarnContext(ctx, "failed to append email to group index", logging.ErrKey, err, "email_id", emailID, "group_id", groupID)
 		}
 	}
-	slog.WarnContext(ctx, "failed to update group index after retry", logging.ErrKey, writeErr)
 }
 
 func replyError(ctx context.Context, respond func([]byte) error, reason string) {

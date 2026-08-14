@@ -11,19 +11,19 @@ import (
 
 	natsgo "github.com/nats-io/nats.go"
 
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
 )
 
 // GetEmailStatusHandler handles NATS requests on the get_email_status subject.
 type GetEmailStatusHandler struct {
-	recipientsKV natsgo.KeyValue
-	groupIndexKV natsgo.KeyValue
+	store domain.TrackingStore
 }
 
-// NewGetEmailStatusHandler creates a handler backed by recipientsKV and groupIndexKV.
-func NewGetEmailStatusHandler(recipientsKV, groupIndexKV natsgo.KeyValue) *GetEmailStatusHandler {
-	return &GetEmailStatusHandler{recipientsKV: recipientsKV, groupIndexKV: groupIndexKV}
+// NewGetEmailStatusHandler creates a handler backed by store.
+func NewGetEmailStatusHandler(store domain.TrackingStore) *GetEmailStatusHandler {
+	return &GetEmailStatusHandler{store: store}
 }
 
 // Handle processes a single NATS message.
@@ -54,22 +54,15 @@ func (h *GetEmailStatusHandler) HandleData(ctx context.Context, data []byte, res
 
 func (h *GetEmailStatusHandler) handleByEmailID(ctx context.Context, respond func([]byte) error, emailID string) {
 	ctx = logging.AppendCtx(ctx, slog.String("email_id", emailID))
-	entry, err := h.recipientsKV.Get(emailID)
+	record, err := h.store.GetRecord(ctx, emailID)
 	if err != nil {
-		if errors.Is(err, natsgo.ErrKeyNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			slog.DebugContext(ctx, "recipient record not found")
 			replyError(ctx, respond, "not found")
 		} else {
-			slog.ErrorContext(ctx, "failed to read recipient record from KV", logging.ErrKey, err)
+			slog.ErrorContext(ctx, "failed to read recipient record", logging.ErrKey, err)
 			replyError(ctx, respond, "internal error")
 		}
-		return
-	}
-
-	var record api.EmailRecipientRecord
-	if err := json.Unmarshal(entry.Value(), &record); err != nil {
-		slog.ErrorContext(ctx, "failed to unmarshal recipient record", logging.ErrKey, err)
-		replyError(ctx, respond, "internal error")
 		return
 	}
 
@@ -86,43 +79,16 @@ func (h *GetEmailStatusHandler) handleByEmailID(ctx context.Context, respond fun
 
 func (h *GetEmailStatusHandler) handleByGroupID(ctx context.Context, respond func([]byte) error, groupID string) {
 	ctx = logging.AppendCtx(ctx, slog.String("group_id", groupID))
-	entry, err := h.groupIndexKV.Get(groupID)
+	records, err := h.store.GetGroupRecords(ctx, groupID)
 	if err != nil {
-		if errors.Is(err, natsgo.ErrKeyNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			slog.DebugContext(ctx, "group index not found")
 			replyError(ctx, respond, "not found")
 		} else {
-			slog.ErrorContext(ctx, "failed to read group index from KV", logging.ErrKey, err)
+			slog.ErrorContext(ctx, "failed to read group records", logging.ErrKey, err)
 			replyError(ctx, respond, "internal error")
 		}
 		return
-	}
-
-	var emailIDs []string
-	if err := json.Unmarshal(entry.Value(), &emailIDs); err != nil {
-		slog.ErrorContext(ctx, "failed to unmarshal group index", logging.ErrKey, err)
-		replyError(ctx, respond, "internal error")
-		return
-	}
-
-	records := make([]api.EmailRecipientRecord, 0, len(emailIDs))
-	for _, emailID := range emailIDs {
-		recEntry, err := h.recipientsKV.Get(emailID)
-		if err != nil {
-			if errors.Is(err, natsgo.ErrKeyNotFound) {
-				slog.DebugContext(ctx, "recipient record not found during group status lookup", "email_id", emailID)
-				continue
-			}
-			slog.ErrorContext(ctx, "failed to read recipient record from KV during group status lookup", logging.ErrKey, err, "email_id", emailID)
-			replyError(ctx, respond, "internal error")
-			return
-		}
-		var record api.EmailRecipientRecord
-		if err := json.Unmarshal(recEntry.Value(), &record); err != nil {
-			slog.WarnContext(ctx, "failed to unmarshal recipient record during group status lookup", logging.ErrKey, err, "email_id", emailID)
-			continue
-		}
-		records = append(records, record)
 	}
 
 	b, err := json.Marshal(records)

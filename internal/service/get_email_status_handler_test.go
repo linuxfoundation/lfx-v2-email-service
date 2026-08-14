@@ -13,12 +13,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/service"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/service/mocks"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
 )
 
-func seedRecipient(t *testing.T, kv *mocks.KeyValue, emailID, groupID string) api.EmailRecipientRecord {
+func seedRecipient(t *testing.T, store *mocks.TrackingStore, emailID, groupID string) api.EmailRecipientRecord {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
 	record := api.EmailRecipientRecord{
@@ -28,19 +29,13 @@ func seedRecipient(t *testing.T, kv *mocks.KeyValue, emailID, groupID string) ap
 		Subject: "Hello",
 		SentAt:  now,
 	}
-	b, err := json.Marshal(record)
-	require.NoError(t, err)
-	_, err = kv.Put(emailID, b)
-	require.NoError(t, err)
+	store.PutRecord(emailID, record)
 	return record
 }
 
-func seedGroupIndex(t *testing.T, kv *mocks.KeyValue, groupID string, emailIDs []string) {
+func seedGroupIndex(t *testing.T, store *mocks.TrackingStore, groupID string, emailIDs []string) {
 	t.Helper()
-	b, err := json.Marshal(emailIDs)
-	require.NoError(t, err)
-	_, err = kv.Put(groupID, b)
-	require.NoError(t, err)
+	store.PutGroup(groupID, emailIDs)
 }
 
 func TestGetEmailStatusHandler_HandleData(t *testing.T) {
@@ -49,7 +44,7 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 	tests := []struct {
 		name        string
 		payload     any
-		setup       func(recipients, groupIndex *mocks.KeyValue)
+		setup       func(store *mocks.TrackingStore)
 		wantErrMsg  string
 		wantRecord  *api.EmailRecipientRecord
 		wantRecords *[]api.EmailRecipientRecord
@@ -72,8 +67,8 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 		{
 			name:    "email_id happy path",
 			payload: api.GetEmailStatusRequest{EmailID: "email-1"},
-			setup: func(recipients, _ *mocks.KeyValue) {
-				seedRecipient(t, recipients, "email-1", "group-1")
+			setup: func(store *mocks.TrackingStore) {
+				seedRecipient(t, store, "email-1", "group-1")
 			},
 			wantRecord: &api.EmailRecipientRecord{EmailID: "email-1", GroupID: "group-1", To: "user@example.com", Subject: "Hello"},
 		},
@@ -85,18 +80,18 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 		{
 			name:    "email_id KV internal error",
 			payload: api.GetEmailStatusRequest{EmailID: "bad-key"},
-			setup: func(recipients, _ *mocks.KeyValue) {
-				recipients.GetErrFor = map[string]error{"bad-key": errors.New("kv unavailable")}
+			setup: func(store *mocks.TrackingStore) {
+				store.GetErrFor = map[string]error{"bad-key": errors.New("kv unavailable")}
 			},
 			wantErrMsg: "internal error",
 		},
 		{
 			name:    "group_id happy path",
 			payload: api.GetEmailStatusRequest{GroupID: "grp-a"},
-			setup: func(recipients, groupIndex *mocks.KeyValue) {
-				seedRecipient(t, recipients, "e1", "grp-a")
-				seedRecipient(t, recipients, "e2", "grp-a")
-				seedGroupIndex(t, groupIndex, "grp-a", []string{"e1", "e2"})
+			setup: func(store *mocks.TrackingStore) {
+				seedRecipient(t, store, "e1", "grp-a")
+				seedRecipient(t, store, "e2", "grp-a")
+				seedGroupIndex(t, store, "grp-a", []string{"e1", "e2"})
 			},
 			wantRecords: &[]api.EmailRecipientRecord{
 				{EmailID: "e1", GroupID: "grp-a", To: "user@example.com", Subject: "Hello"},
@@ -111,20 +106,20 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 		{
 			name:    "group_id — missing recipient records skipped",
 			payload: api.GetEmailStatusRequest{GroupID: "grp-b"},
-			setup: func(recipients, groupIndex *mocks.KeyValue) {
-				seedRecipient(t, recipients, "exists", "grp-b")
-				seedGroupIndex(t, groupIndex, "grp-b", []string{"exists", "gone"})
+			setup: func(store *mocks.TrackingStore) {
+				seedRecipient(t, store, "exists", "grp-b")
+				seedGroupIndex(t, store, "grp-b", []string{"exists", "gone"})
 			},
 			wantRecords: &[]api.EmailRecipientRecord{
 				{EmailID: "exists", GroupID: "grp-b", To: "user@example.com", Subject: "Hello"},
 			},
 		},
 		{
-			name:    "group_id — recipient KV internal error fails request",
+			name:    "group_id — recipient store internal error fails request",
 			payload: api.GetEmailStatusRequest{GroupID: "grp-c"},
-			setup: func(recipients, groupIndex *mocks.KeyValue) {
-				seedGroupIndex(t, groupIndex, "grp-c", []string{"e-bad"})
-				recipients.GetErrFor = map[string]error{"e-bad": errors.New("kv unavailable")}
+			setup: func(store *mocks.TrackingStore) {
+				seedGroupIndex(t, store, "grp-c", []string{"e-bad"})
+				store.GetErrFor = map[string]error{"e-bad": errors.New("kv unavailable")}
 			},
 			wantErrMsg: "internal error",
 		},
@@ -134,13 +129,12 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			recipients := mocks.NewKeyValue()
-			groupIndex := mocks.NewKeyValue()
+			store := mocks.NewTrackingStore()
 			if tc.setup != nil {
-				tc.setup(recipients, groupIndex)
+				tc.setup(store)
 			}
 
-			handler := service.NewGetEmailStatusHandler(recipients, groupIndex)
+			handler := service.NewGetEmailStatusHandler(store)
 
 			var data []byte
 			switch v := tc.payload.(type) {
@@ -192,3 +186,6 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 		})
 	}
 }
+
+// Compile-time assertion: domain.NullTrackingStore satisfies domain.TrackingStore.
+var _ domain.TrackingStore = domain.NullTrackingStore{}
