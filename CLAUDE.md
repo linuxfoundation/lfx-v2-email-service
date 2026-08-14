@@ -157,11 +157,45 @@ When the work is done and no more code commits are planned:
 1. **Wait for every running review to complete.**
 2. **If any returned review flags Critical or reasonable Important:** add a fix commit, launch all three reviewers again on the new state, wait, and loop until clean or explicitly documented as a trade-off.
 3. **Full-branch sweep — only if the branch has more than one commit.** Launch `lfx-skills:lfx-general-code-reviewer`, `lfx-skills:lfx-email-service-code-reviewer`, and `lfx-skills:lfx-email-service-learnings-reviewer` again with prompt **`target repo: lfx-v2-email-service\nbranch\n\nReview the branch's diff against origin/main.`**. Address any new findings, then re-run all three sweeps until clean.
-4. **Run `/email-service-pr-readiness`** for branch and PR-shape checks.
-5. **Run `/email-service-preflight`** for mechanical Go validation and the PR change summary.
-6. **Only then push and open the PR.** Use the standard PR title format:
+4. **Audit CLAUDE.md and docs/ for currency.** Run `git diff origin/main...HEAD --name-only` and compare every relevant section of `CLAUDE.md` and every file under `docs/` against the actual code in the branch. See **Docs currency checklist** below for the full lookup table. Commit any updates in the same PR — do not open a PR with stale documentation.
+5. **Run `/email-service-pr-readiness`** for branch and PR-shape checks.
+6. **Run `/email-service-preflight`** for mechanical Go validation and the PR change summary.
+7. **Only then push and open the PR.** Use the standard PR title format:
    `<type>(<scope>): <summary> [<ticket>]`
    Types: `feat` | `fix` | `refactor` | `docs` | `chore`. Scope is optional but recommended. Ticket reference is optional — include `[LFXV2-XXXX]` when a ticket exists; omit the bracket entirely when there is no ticket. Do not use a placeholder like `[LFXV2-0000]`.
+
+### Docs currency checklist
+
+**Do not open a PR until `CLAUDE.md` and all relevant `docs/` files match the code on the branch.**
+
+#### CLAUDE.md sections to verify
+
+| Changed area | CLAUDE.md section(s) to check |
+|---|---|
+| New or removed file in `internal/domain/` | **Architecture** layout, **Testing Patterns** |
+| New or removed file in `internal/infrastructure/` | **Architecture** layout |
+| New or removed file in `internal/service/` or `internal/service/mocks/` | **Architecture** layout, **Testing Patterns** |
+| Any handler constructor signature change | **Testing Patterns** (mock references, `HandleData` shape) |
+| New NATS subject or KV bucket | **NATS Subjects**, **NATS KV**, **Adding a New NATS Subject** |
+| Any `cmd/email-service/main.go` wiring change | **Key design decisions** |
+| New, removed, or renamed env variable; default changed | **Environment Variables** table |
+| New design decision or invariant | **Key design decisions** |
+
+#### docs/ files to verify
+
+| Changed area | File |
+|---|---|
+| NATS subject, payload shape, response, error string | `docs/email-service-contract.md` |
+| KV bucket, tracking record field, engagement event handling | `docs/email-engagement-tracking.md` |
+| Helm value, secret name, NATS KV bucket CR | `docs/service-helm-chart.md` |
+
+#### What counts as stale
+
+- A type, interface, struct, or package exists in code but is absent from the Architecture layout.
+- A mock, test helper, or test pattern reference points to a deleted or renamed symbol.
+- A design decision or invariant changed in code but is not recorded in **Key design decisions**.
+- Conditional behavior was removed or added (e.g. "subjects are conditionally subscribed" → "always subscribed") but the doc still says the old thing.
+- An env variable was added, renamed, or had its default changed without an update to the **Environment Variables** table.
 
 ### Post-PR iteration (responding to bot feedback on an open PR)
 
