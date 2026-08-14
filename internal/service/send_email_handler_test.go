@@ -185,7 +185,7 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			t.Parallel()
 
 			sender := &mockSender{err: tc.senderErr, emailID: tc.emailID, groupID: tc.groupID}
-			handler := service.NewSendEmailHandler(sender, domain.NullTrackingStore{}, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+			handler := service.NewSendEmailHandler(sender, domain.NullTrackingStore{}, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
 			var data []byte
 			switch v := tc.payload.(type) {
@@ -241,7 +241,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 
 		store := mocks.NewTrackingStore()
 		sender := &mockSender{emailID: "email-1", groupID: "group-1"}
-		handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
 		req := api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-1"}
 		data, err := json.Marshal(req)
@@ -263,7 +263,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 
 		store := mocks.NewTrackingStore()
 		sender := &mockSender{emailID: "email-2", groupID: "group-2"}
-		handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
 		req := api.SendEmailRequest{To: "bob@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-2"}
 		data, _ := json.Marshal(req)
@@ -281,7 +281,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 
 		for _, id := range []string{"email-a", "email-b"} {
 			sender := &mockSender{emailID: id, groupID: "group-3"}
-			handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+			handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 			req := api.SendEmailRequest{To: "c@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-3"}
 			data, _ := json.Marshal(req)
 			handler.HandleData(context.Background(), data, func([]byte) error { return nil })
@@ -297,7 +297,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 
 		store := mocks.NewTrackingStore()
 		sender := &mockSender{emailID: "", groupID: ""}
-		handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
 		req := api.SendEmailRequest{To: "d@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
@@ -312,7 +312,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 
 		store := mocks.NewTrackingStore()
 		sender := &mockSender{emailID: "email-nogroupid", groupID: ""}
-		handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
 		req := api.SendEmailRequest{To: "f@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
@@ -330,7 +330,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 
 		store := mocks.NewTrackingStore()
 		sender := &mockSender{emailID: "email-x", groupID: "group-x", err: errors.New("smtp down")}
-		handler := service.NewSendEmailHandler(sender, store, []string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
 		req := api.SendEmailRequest{To: "e@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
@@ -351,7 +351,7 @@ func TestSendEmailHandler_RecipientDomainAllowlist(t *testing.T) {
 
 	makeHandler := func(recipientDomains []string) (*service.SendEmailHandler, *mockSender) {
 		s := &mockSender{emailID: "email-r", groupID: "group-r"}
-		h := service.NewSendEmailHandler(s, domain.NullTrackingStore{}, nil, nil, recipientDomains)
+		h := service.NewSendEmailHandler(s, domain.NullTrackingStore{}, domain.NewAddressPolicy(nil, nil, recipientDomains))
 		return h, s
 	}
 

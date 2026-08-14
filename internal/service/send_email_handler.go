@@ -7,8 +7,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
-	"net/mail"
 	"strings"
 	"time"
 
@@ -22,37 +22,16 @@ import (
 
 // SendEmailHandler handles inbound NATS requests on the send_email subject.
 type SendEmailHandler struct {
-	sender                  domain.Sender
-	store                   domain.TrackingStore
-	allowedFromDomains      []string // lower-cased exact match; empty slice = reject any explicit From
-	allowedReplyToDomains   []string // lower-cased base domains; subdomain suffix matching applies
-	allowedRecipientDomains []string // lower-cased base domains; subdomain suffix matching applies; empty = permit all
+	sender domain.Sender
+	store  domain.TrackingStore
+	policy domain.AddressPolicy
 }
 
 // NewSendEmailHandler creates a SendEmailHandler.
 // store must not be nil; use domain.NullTrackingStore{} when tracking is unavailable.
-// allowedFromDomains is the list of permitted domains for the per-message From override.
-// An empty slice means no per-message From override is permitted.
-// allowedReplyToDomains is the list of permitted base domains for reply_to.
-// allowedRecipientDomains is the list of permitted base domains for the recipient address;
-// subdomain suffix matching applies. An empty slice means all recipient domains are permitted.
-func NewSendEmailHandler(sender domain.Sender, store domain.TrackingStore, allowedFromDomains, allowedReplyToDomains, allowedRecipientDomains []string) *SendEmailHandler {
-	normalize := func(domains []string) []string {
-		out := make([]string, 0, len(domains))
-		for _, d := range domains {
-			if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
-				out = append(out, d)
-			}
-		}
-		return out
-	}
-	return &SendEmailHandler{
-		sender:                  sender,
-		store:                   store,
-		allowedFromDomains:      normalize(allowedFromDomains),
-		allowedReplyToDomains:   normalize(allowedReplyToDomains),
-		allowedRecipientDomains: normalize(allowedRecipientDomains),
-	}
+// policy carries the three address allowlists; construct it with domain.NewAddressPolicy.
+func NewSendEmailHandler(sender domain.Sender, store domain.TrackingStore, policy domain.AddressPolicy) *SendEmailHandler {
+	return &SendEmailHandler{sender: sender, store: store, policy: policy}
 }
 
 // Handle processes a single NATS message.
@@ -84,28 +63,14 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	// to prevent test mail from reaching real users' personal addresses. A blocked recipient
 	// returns an empty success response (not an error) so callers don't treat expected
 	// non-prod filtering as a delivery failure.
-	if len(h.allowedRecipientDomains) > 0 {
-		allowed := false
-		addr, parseErr := mail.ParseAddress(req.To)
-		if parseErr != nil {
+	if len(h.policy.AllowedRecipientDomains) > 0 {
+		allowed, err := h.policy.IsRecipientAllowed(req.To)
+		if err != nil {
 			slog.WarnContext(ctx, "send email request has malformed recipient address, skipping send",
-				"to", redaction.RedactEmail(req.To), logging.ErrKey, parseErr)
-		} else {
-			// Use LastIndex so that RFC-valid quoted local parts containing "@" don't
-			// cause mis-classification; the domain is always after the final "@".
-			if at := strings.LastIndex(addr.Address, "@"); at >= 0 {
-				domain := strings.ToLower(addr.Address[at+1:])
-				for _, d := range h.allowedRecipientDomains {
-					if domain == d || strings.HasSuffix(domain, "."+d) {
-						allowed = true
-						break
-					}
-				}
-			}
-			if !allowed {
-				slog.WarnContext(ctx, "send email request recipient domain not in allowlist, skipping send",
-					"to", redaction.RedactEmail(req.To))
-			}
+				"to", redaction.RedactEmail(req.To), logging.ErrKey, err)
+		} else if !allowed {
+			slog.WarnContext(ctx, "send email request recipient domain not in allowlist, skipping send",
+				"to", redaction.RedactEmail(req.To))
 		}
 		if !allowed {
 			resp, _ := json.Marshal(api.SendEmailResponse{})
@@ -118,55 +83,38 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 
 	// Validate per-message From override when provided.
 	if req.From != "" {
-		addr, err := mail.ParseAddress(req.From)
-		if err != nil {
-			slog.WarnContext(ctx, "send email request has invalid from address", "from", redaction.RedactEmail(req.From), logging.ErrKey, err)
-			replyError(ctx, respond, "invalid from address")
-			return
-		}
-		parts := strings.SplitN(addr.Address, "@", 2)
-		if len(parts) != 2 {
-			slog.WarnContext(ctx, "send email request from address missing domain", "from", redaction.RedactEmail(req.From))
-			replyError(ctx, respond, "invalid from address")
-			return
-		}
-		domain := strings.ToLower(parts[1])
-		allowed := false
-		for _, d := range h.allowedFromDomains {
-			if d == domain {
-				allowed = true
-				break
+		if err := h.policy.ValidateFrom(req.From); err != nil {
+			if errors.Is(err, domain.ErrAddressMalformed) {
+				slog.WarnContext(ctx, "send email request has invalid from address", "from", redaction.RedactEmail(req.From), logging.ErrKey, err)
+				replyError(ctx, respond, "invalid from address")
+			} else {
+				parts := strings.SplitN(req.From, "@", 2)
+				d := req.From
+				if len(parts) == 2 {
+					d = strings.ToLower(parts[1])
+				}
+				slog.WarnContext(ctx, "send email request from domain not in allowlist", "domain", d)
+				replyError(ctx, respond, "from address domain not allowed")
 			}
-		}
-		if !allowed {
-			slog.WarnContext(ctx, "send email request from domain not in allowlist", "domain", domain)
-			replyError(ctx, respond, "from address domain not allowed")
 			return
 		}
 	}
 
 	if req.ReplyTo != "" {
-		addr, err := mail.ParseAddress(req.ReplyTo)
-		if err != nil {
-			slog.WarnContext(ctx, "send email request has invalid reply_to address", "reply_to", redaction.RedactEmail(req.ReplyTo), logging.ErrKey, err)
-			replyError(ctx, respond, "invalid reply_to address")
-			return
-		}
-		parts := strings.SplitN(addr.Address, "@", 2)
-		if len(parts) == 2 {
-			domain := strings.ToLower(parts[1])
-			allowed := false
-			for _, d := range h.allowedReplyToDomains {
-				if domain == d || strings.HasSuffix(domain, "."+d) {
-					allowed = true
-					break
+		if err := h.policy.ValidateReplyTo(req.ReplyTo); err != nil {
+			if errors.Is(err, domain.ErrAddressMalformed) {
+				slog.WarnContext(ctx, "send email request has invalid reply_to address", "reply_to", redaction.RedactEmail(req.ReplyTo), logging.ErrKey, err)
+				replyError(ctx, respond, "invalid reply_to address")
+			} else {
+				parts := strings.SplitN(req.ReplyTo, "@", 2)
+				d := req.ReplyTo
+				if len(parts) == 2 {
+					d = strings.ToLower(parts[1])
 				}
-			}
-			if !allowed {
-				slog.WarnContext(ctx, "send email request reply_to domain not in allowlist", "domain", domain)
+				slog.WarnContext(ctx, "send email request reply_to domain not in allowlist", "domain", d)
 				replyError(ctx, respond, "reply_to address domain not allowed")
-				return
 			}
+			return
 		}
 	}
 
