@@ -115,13 +115,14 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 			},
 		},
 		{
-			name:    "group_id — recipient store internal error fails request",
+			name:    "group_id — unreadable recipient records silently skipped",
 			payload: api.GetEmailStatusRequest{GroupID: "grp-c"},
 			setup: func(store *mocks.TrackingStore) {
 				seedGroupIndex(t, store, "grp-c", []string{"e-bad"})
 				store.GetErrFor = map[string]error{"e-bad": errors.New("kv unavailable")}
 			},
-			wantErrMsg: "internal error",
+			// Per-record errors are best-effort skipped; the handler returns an empty list, not an error.
+			wantRecords: &[]api.EmailRecipientRecord{},
 		},
 	}
 

@@ -62,14 +62,36 @@ func TestStore_AppendToGroup(t *testing.T) {
 
 	t.Run("appends to existing entry", func(t *testing.T) {
 		t.Parallel()
-		store, _, _ := newStore(t)
+		store, _, groupIndexKV := newStore(t)
 		require.NoError(t, store.AppendToGroup(context.Background(), "g2", "e1"))
 		require.NoError(t, store.AppendToGroup(context.Background(), "g2", "e2"))
 
-		records, err := store.GetGroupRecords(context.Background(), "g2")
-		// No actual recipient records seeded — group index exists but records are absent → empty slice, no error.
+		// Assert the raw group-index value contains both IDs so we verify e2 was
+		// actually appended and not silently lost by GetGroupRecords skipping absent records.
+		entry, err := groupIndexKV.Get("g2")
 		require.NoError(t, err)
-		assert.Empty(t, records)
+		raw := string(entry.Value())
+		assert.Contains(t, raw, "e1")
+		assert.Contains(t, raw, "e2")
+	})
+
+	t.Run("concurrent first-send: Create loses race, retries via Update", func(t *testing.T) {
+		t.Parallel()
+		store, _, groupIndexKV := newStore(t)
+
+		// Pre-create the key as if another goroutine won the race.
+		_, err := groupIndexKV.Create("g-race", []byte(`["winner"]`))
+		require.NoError(t, err)
+
+		// AppendToGroup should detect ErrKeyExists on Create and fall through to
+		// a second attempt using Update.
+		require.NoError(t, store.AppendToGroup(context.Background(), "g-race", "e-late"))
+
+		entry, err := groupIndexKV.Get("g-race")
+		require.NoError(t, err)
+		raw := string(entry.Value())
+		assert.Contains(t, raw, "winner")
+		assert.Contains(t, raw, "e-late")
 	})
 }
 
@@ -87,8 +109,9 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		require.NoError(t, store.AppendToGroup(context.Background(), "g1", "e1"))
 		require.NoError(t, store.AppendToGroup(context.Background(), "g1", "e2"))
 
-		got, err := store.GetGroupRecords(context.Background(), "g1")
+		got, totalIDs, err := store.GetGroupRecords(context.Background(), "g1")
 		require.NoError(t, err)
+		assert.Equal(t, 2, totalIDs)
 		require.Len(t, got, 2)
 		assert.Equal(t, "e1", got[0].EmailID)
 		assert.Equal(t, "e2", got[1].EmailID)
@@ -97,11 +120,11 @@ func TestStore_GetGroupRecords(t *testing.T) {
 	t.Run("returns ErrNotFound for unknown group", func(t *testing.T) {
 		t.Parallel()
 		store, _, _ := newStore(t)
-		_, err := store.GetGroupRecords(context.Background(), "unknown")
+		_, _, err := store.GetGroupRecords(context.Background(), "unknown")
 		assert.ErrorIs(t, err, domain.ErrNotFound)
 	})
 
-	t.Run("silently skips absent individual records", func(t *testing.T) {
+	t.Run("silently skips absent individual records, totalIDs reflects index count", func(t *testing.T) {
 		t.Parallel()
 		store, _, groupIndexKV := newStore(t)
 
@@ -113,8 +136,9 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		_, err := groupIndexKV.Put("g2", b)
 		require.NoError(t, err)
 
-		got, err := store.GetGroupRecords(context.Background(), "g2")
+		got, totalIDs, err := store.GetGroupRecords(context.Background(), "g2")
 		require.NoError(t, err)
+		assert.Equal(t, 2, totalIDs, "totalIDs must reflect raw index count, not fetched record count")
 		require.Len(t, got, 1)
 		assert.Equal(t, "e-exists", got[0].EmailID)
 	})
@@ -156,17 +180,15 @@ func TestStore_UpdateRecord(t *testing.T) {
 		r := api.EmailRecipientRecord{EmailID: "e-conflict", GroupID: "g1", To: "a@b.com", Subject: "Hi", SentAt: time.Now().UTC()}
 		require.NoError(t, store.WriteRecord(context.Background(), "e-conflict", r))
 
-		// Bump the revision externally to simulate a concurrent write — the first
-		// UpdateRecord attempt will fail with ErrWrongRevision, triggering the retry.
-		entry, err := recipientsKV.Get("e-conflict")
-		require.NoError(t, err)
-		_, err = recipientsKV.Update("e-conflict", entry.Value(), entry.Revision())
-		require.NoError(t, err)
+		// Force the first Update to fail unconditionally so the retry path is exercised.
+		// The second attempt reads the current revision and succeeds normally.
+		recipientsKV.UpdateErrOnce = true
 
-		err = store.UpdateRecord(context.Background(), "e-conflict", func(rec *api.EmailRecipientRecord) {
+		err := store.UpdateRecord(context.Background(), "e-conflict", func(rec *api.EmailRecipientRecord) {
 			rec.Delivered = true
 		})
 		require.NoError(t, err)
+		assert.False(t, recipientsKV.UpdateErrOnce, "UpdateErrOnce must have been consumed by the retry")
 
 		got, err := store.GetRecord(context.Background(), "e-conflict")
 		require.NoError(t, err)

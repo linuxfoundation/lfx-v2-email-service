@@ -79,7 +79,7 @@ func (h *GetEmailStatusHandler) handleByEmailID(ctx context.Context, respond fun
 
 func (h *GetEmailStatusHandler) handleByGroupID(ctx context.Context, respond func([]byte) error, groupID string) {
 	ctx = logging.AppendCtx(ctx, slog.String("group_id", groupID))
-	records, err := h.store.GetGroupRecords(ctx, groupID)
+	records, _, err := h.store.GetGroupRecords(ctx, groupID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			slog.DebugContext(ctx, "group index not found")

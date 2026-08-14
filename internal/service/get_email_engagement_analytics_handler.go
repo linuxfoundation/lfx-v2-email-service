@@ -47,7 +47,7 @@ func (h *GetEmailEngagementAnalyticsHandler) HandleData(ctx context.Context, dat
 
 	ctx = logging.AppendCtx(ctx, slog.String("group_id", req.GroupID))
 
-	records, err := h.store.GetGroupRecords(ctx, req.GroupID)
+	records, totalIDs, err := h.store.GetGroupRecords(ctx, req.GroupID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			slog.DebugContext(ctx, "group index not found")
@@ -61,7 +61,7 @@ func (h *GetEmailEngagementAnalyticsHandler) HandleData(ctx context.Context, dat
 
 	resp := api.GetEmailEngagementAnalyticsResponse{
 		GroupID:   req.GroupID,
-		TotalSent: len(records),
+		TotalSent: totalIDs,
 	}
 	for _, record := range records {
 		if record.Delivered {

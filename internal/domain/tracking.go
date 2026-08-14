@@ -23,9 +23,10 @@ var ErrNotFound = errors.New("not found")
 //
 // GetRecord retrieves a recipient record by emailID; returns ErrNotFound when absent.
 //
-// GetGroupRecords returns all recipient records for a group_id; returns ErrNotFound
-// when the group itself is absent, and silently skips individual records that have
-// been deleted or have not yet been written.
+// GetGroupRecords returns all readable recipient records for a group_id and the
+// total number of email IDs in the group index. Returns ErrNotFound when the
+// group itself is absent. Individual records that are absent or unreadable are
+// silently skipped; totalIDs always reflects the raw index count.
 //
 // UpdateRecord fetches the record for emailID, applies fn in place, and writes it
 // back with optimistic concurrency (one retry on conflict). If the record does not
@@ -34,7 +35,7 @@ type TrackingStore interface {
 	WriteRecord(ctx context.Context, emailID string, r api.EmailRecipientRecord) error
 	AppendToGroup(ctx context.Context, groupID, emailID string) error
 	GetRecord(ctx context.Context, emailID string) (api.EmailRecipientRecord, error)
-	GetGroupRecords(ctx context.Context, groupID string) ([]api.EmailRecipientRecord, error)
+	GetGroupRecords(ctx context.Context, groupID string) (records []api.EmailRecipientRecord, totalIDs int, err error)
 	UpdateRecord(ctx context.Context, emailID string, fn func(*api.EmailRecipientRecord)) error
 }
 
@@ -54,8 +55,8 @@ func (NullTrackingStore) GetRecord(_ context.Context, _ string) (api.EmailRecipi
 	return api.EmailRecipientRecord{}, ErrNotFound
 }
 
-func (NullTrackingStore) GetGroupRecords(_ context.Context, _ string) ([]api.EmailRecipientRecord, error) {
-	return nil, ErrNotFound
+func (NullTrackingStore) GetGroupRecords(_ context.Context, _ string) ([]api.EmailRecipientRecord, int, error) {
+	return nil, 0, ErrNotFound
 }
 
 func (NullTrackingStore) UpdateRecord(_ context.Context, _ string, _ func(*api.EmailRecipientRecord)) error {

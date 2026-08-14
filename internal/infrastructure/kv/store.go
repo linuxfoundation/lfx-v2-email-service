@@ -72,7 +72,10 @@ func (s *Store) AppendToGroup(ctx context.Context, groupID, emailID string) erro
 		b, _ := json.Marshal(ids)
 
 		if isNew {
-			_, writeErr = s.groupIndexKV.Put(groupID, b)
+			_, writeErr = s.groupIndexKV.Create(groupID, b)
+			if writeErr != nil && !errors.Is(writeErr, natsgo.ErrKeyExists) {
+				return fmt.Errorf("kv create group index: %w", writeErr)
+			}
 		} else {
 			_, writeErr = s.groupIndexKV.Update(groupID, b, revision)
 		}
@@ -104,36 +107,37 @@ func (s *Store) GetRecord(_ context.Context, emailID string) (api.EmailRecipient
 	return r, nil
 }
 
-// GetGroupRecords returns all EmailRecipientRecord values belonging to groupID.
+// GetGroupRecords returns all EmailRecipientRecord values belonging to groupID
+// and the total number of email IDs recorded in the group index.
 // Returns domain.ErrNotFound when the group index key does not exist.
-// Individual recipient records that are absent are silently skipped.
-func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.EmailRecipientRecord, error) {
+// Individual recipient records that are absent or unreadable are silently
+// skipped; the returned totalIDs reflects the raw index count regardless.
+func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.EmailRecipientRecord, int, error) {
 	entry, err := s.groupIndexKV.Get(groupID)
 	if err != nil {
 		if errors.Is(err, natsgo.ErrKeyNotFound) {
-			return nil, domain.ErrNotFound
+			return nil, 0, domain.ErrNotFound
 		}
-		return nil, fmt.Errorf("kv get group index: %w", err)
+		return nil, 0, fmt.Errorf("kv get group index: %w", err)
 	}
 
 	var emailIDs []string
 	if err := json.Unmarshal(entry.Value(), &emailIDs); err != nil {
-		return nil, fmt.Errorf("unmarshal group index: %w", err)
+		return nil, 0, fmt.Errorf("unmarshal group index: %w", err)
 	}
 
-	records := make([]api.EmailRecipientRecord, 0, len(emailIDs))
+	totalIDs := len(emailIDs)
+	records := make([]api.EmailRecipientRecord, 0, totalIDs)
 	for _, emailID := range emailIDs {
 		r, err := s.GetRecord(ctx, emailID)
 		if err != nil {
-			if errors.Is(err, domain.ErrNotFound) {
-				slog.DebugContext(ctx, "recipient record absent during group lookup, skipping", "email_id", emailID, "group_id", groupID)
-				continue
-			}
-			return nil, fmt.Errorf("kv get recipient record during group lookup (email_id=%s): %w", emailID, err)
+			slog.WarnContext(ctx, "skipping unreadable recipient record during group lookup",
+				"email_id", emailID, "group_id", groupID, logging.ErrKey, err)
+			continue
 		}
 		records = append(records, r)
 	}
-	return records, nil
+	return records, totalIDs, nil
 }
 
 // UpdateRecord fetches the record for emailID, applies fn, and writes it back

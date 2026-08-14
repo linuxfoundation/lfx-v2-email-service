@@ -5,7 +5,6 @@ package mocks
 
 import (
 	"context"
-	"errors"
 	"sync"
 
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
@@ -16,8 +15,8 @@ import (
 // Construct with NewTrackingStore and pre-seed records with PutRecord / PutGroup.
 // Inject errors via WriteErr, AppendErr, GetErrFor, and GroupErrFor.
 //
-// GetGroupRecords delegates individual-record fetches through GetRecord, so errors
-// injected via GetErrFor are visible to group-level callers as well.
+// GetGroupRecords skips any per-record error (including those injected via GetErrFor),
+// matching the best-effort fan-out semantics of kv.Store.
 type TrackingStore struct {
 	mu          sync.RWMutex
 	records     map[string]api.EmailRecipientRecord
@@ -106,36 +105,35 @@ func (m *TrackingStore) GetRecord(_ context.Context, emailID string) (api.EmailR
 	return r, nil
 }
 
-// GetGroupRecords returns records for all email_ids in the group index.
+// GetGroupRecords returns records for all email_ids in the group index and the
+// total number of IDs in that index.
 // Returns domain.ErrNotFound when the group itself is absent.
-// Individual records that are absent (ErrNotFound) are silently skipped.
-// Any other per-record error (injected via GetErrFor) propagates as a fatal error.
-func (m *TrackingStore) GetGroupRecords(ctx context.Context, groupID string) ([]api.EmailRecipientRecord, error) {
+// All per-record errors (absent records, injected errors via GetErrFor, etc.)
+// are silently skipped; totalIDs reflects the raw index count.
+func (m *TrackingStore) GetGroupRecords(ctx context.Context, groupID string) ([]api.EmailRecipientRecord, int, error) {
 	if err, ok := m.GroupErrFor[groupID]; ok {
-		return nil, err
+		return nil, 0, err
 	}
 	m.mu.RLock()
 	ids, ok := m.groups[groupID]
 	if !ok {
 		m.mu.RUnlock()
-		return nil, domain.ErrNotFound
+		return nil, 0, domain.ErrNotFound
 	}
 	idsCopy := make([]string, len(ids))
 	copy(idsCopy, ids)
 	m.mu.RUnlock()
 
-	out := make([]api.EmailRecipientRecord, 0, len(idsCopy))
+	totalIDs := len(idsCopy)
+	out := make([]api.EmailRecipientRecord, 0, totalIDs)
 	for _, id := range idsCopy {
 		r, err := m.GetRecord(ctx, id)
 		if err != nil {
-			if errors.Is(err, domain.ErrNotFound) {
-				continue
-			}
-			return nil, err
+			continue
 		}
 		out = append(out, r)
 	}
-	return out, nil
+	return out, totalIDs, nil
 }
 
 func (m *TrackingStore) UpdateRecord(_ context.Context, emailID string, fn func(*api.EmailRecipientRecord)) error {

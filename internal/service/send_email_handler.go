@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -88,12 +89,7 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 				slog.WarnContext(ctx, "send email request has invalid from address", "from", redaction.RedactEmail(req.From), logging.ErrKey, err)
 				replyError(ctx, respond, "invalid from address")
 			} else {
-				parts := strings.SplitN(req.From, "@", 2)
-				d := req.From
-				if len(parts) == 2 {
-					d = strings.ToLower(parts[1])
-				}
-				slog.WarnContext(ctx, "send email request from domain not in allowlist", "domain", d)
+				slog.WarnContext(ctx, "send email request from domain not in allowlist", "domain", domainFromAddress(req.From))
 				replyError(ctx, respond, "from address domain not allowed")
 			}
 			return
@@ -106,12 +102,7 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 				slog.WarnContext(ctx, "send email request has invalid reply_to address", "reply_to", redaction.RedactEmail(req.ReplyTo), logging.ErrKey, err)
 				replyError(ctx, respond, "invalid reply_to address")
 			} else {
-				parts := strings.SplitN(req.ReplyTo, "@", 2)
-				d := req.ReplyTo
-				if len(parts) == 2 {
-					d = strings.ToLower(parts[1])
-				}
-				slog.WarnContext(ctx, "send email request reply_to domain not in allowlist", "domain", d)
+				slog.WarnContext(ctx, "send email request reply_to domain not in allowlist", "domain", domainFromAddress(req.ReplyTo))
 				replyError(ctx, respond, "reply_to address domain not allowed")
 			}
 			return
@@ -155,6 +146,20 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 			slog.WarnContext(ctx, "failed to append email to group index", logging.ErrKey, err, "email_id", emailID, "group_id", groupID)
 		}
 	}
+}
+
+// domainFromAddress extracts the host part of an RFC 5322 address for logging.
+// It parses the address properly so display-name "@" characters do not
+// interfere (e.g. `"Jane @ Home" <x@evil.com>` → `"evil.com"`).
+// Falls back to returning the raw string if parsing fails.
+func domainFromAddress(addr string) string {
+	if parsed, err := mail.ParseAddress(addr); err == nil {
+		parts := strings.SplitN(parsed.Address, "@", 2)
+		if len(parts) == 2 {
+			return strings.ToLower(parts[1])
+		}
+	}
+	return addr
 }
 
 func replyError(ctx context.Context, respond func([]byte) error, reason string) {
