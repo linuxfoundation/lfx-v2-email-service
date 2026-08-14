@@ -187,5 +187,6 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 	}
 }
 
-// Compile-time assertion: domain.NullTrackingStore satisfies domain.TrackingStore.
+// Compile-time assertions: both concrete types satisfy domain.TrackingStore.
 var _ domain.TrackingStore = domain.NullTrackingStore{}
+var _ domain.TrackingStore = (*mocks.TrackingStore)(nil)

@@ -16,6 +16,10 @@ var ErrNotFound = errors.New("not found")
 // TrackingStore is the interface for reading and writing email tracking records.
 // All implementations must be safe for concurrent use.
 //
+// Available reports whether the underlying store is functional. It returns false
+// for NullTrackingStore (used when NATS KV buckets are unavailable at startup)
+// and true for kv.Store. Callers in main.go use this to decide whether to start
+// the SES engagement poller; handlers never call it.
 // WriteRecord stores a new recipient record keyed by emailID.
 // AppendToGroup appends emailID to the group's list (creating the list if absent)
 // using optimistic concurrency — retries once on write conflict.
@@ -27,6 +31,7 @@ var ErrNotFound = errors.New("not found")
 // back with optimistic concurrency (one retry on conflict). If the record does not
 // exist it returns nil without calling fn — expected for late-arriving SES events.
 type TrackingStore interface {
+	Available() bool
 	WriteRecord(ctx context.Context, emailID string, r api.EmailRecipientRecord) error
 	AppendToGroup(ctx context.Context, groupID, emailID string) error
 	GetRecord(ctx context.Context, emailID string) (api.EmailRecipientRecord, error)
@@ -36,7 +41,10 @@ type TrackingStore interface {
 
 // NullTrackingStore is a no-op TrackingStore used when the NATS KV buckets are
 // unavailable at startup. All writes succeed silently; all reads return ErrNotFound.
+// Available returns false so callers can distinguish it from a live store.
 type NullTrackingStore struct{}
+
+func (NullTrackingStore) Available() bool { return false }
 
 func (NullTrackingStore) WriteRecord(_ context.Context, _ string, _ api.EmailRecipientRecord) error {
 	return nil

@@ -106,7 +106,7 @@ func main() {
 			cancel()
 			os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
 		}
-		if _, ok := store.(domain.NullTrackingStore); ok {
+		if !store.Available() {
 			slog.Error("SES_EVENTING_ENABLED is true but NATS KV (email-recipients bucket) is unavailable")
 			cancel()
 			os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
@@ -249,29 +249,31 @@ func subscribeHandlers(
 	}
 	slog.Info("subscribed to NATS subject", "subject", api.SendEmailSubject, "queue", api.QueueGroup)
 
-	if _, ok := store.(domain.NullTrackingStore); !ok {
-		statusHandler := service.NewGetEmailStatusHandler(store)
-		if _, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-			spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailStatusSubject)
-			defer span.End()
-			statusHandler.Handle(spanCtx, msg)
-		}); err != nil {
-			msgCancel()
-			return fmt.Errorf("nats subscribe %s: %w", api.GetEmailStatusSubject, err)
-		}
-		slog.Info("subscribed to NATS subject", "subject", api.GetEmailStatusSubject)
-
-		analyticsHandler := service.NewGetEmailEngagementAnalyticsHandler(store)
-		if _, err := nc.QueueSubscribe(api.GetEmailEngagementAnalyticsSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-			spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailEngagementAnalyticsSubject)
-			defer span.End()
-			analyticsHandler.Handle(spanCtx, msg)
-		}); err != nil {
-			msgCancel()
-			return fmt.Errorf("nats subscribe %s: %w", api.GetEmailEngagementAnalyticsSubject, err)
-		}
-		slog.Info("subscribed to NATS subject", "subject", api.GetEmailEngagementAnalyticsSubject)
+	if !store.Available() {
+		slog.Warn("NATS KV tracking unavailable: status and analytics handlers will respond with not-found")
 	}
+
+	statusHandler := service.NewGetEmailStatusHandler(store)
+	if _, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+		spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailStatusSubject)
+		defer span.End()
+		statusHandler.Handle(spanCtx, msg)
+	}); err != nil {
+		msgCancel()
+		return fmt.Errorf("nats subscribe %s: %w", api.GetEmailStatusSubject, err)
+	}
+	slog.Info("subscribed to NATS subject", "subject", api.GetEmailStatusSubject)
+
+	analyticsHandler := service.NewGetEmailEngagementAnalyticsHandler(store)
+	if _, err := nc.QueueSubscribe(api.GetEmailEngagementAnalyticsSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+		spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailEngagementAnalyticsSubject)
+		defer span.End()
+		analyticsHandler.Handle(spanCtx, msg)
+	}); err != nil {
+		msgCancel()
+		return fmt.Errorf("nats subscribe %s: %w", api.GetEmailEngagementAnalyticsSubject, err)
+	}
+	slog.Info("subscribed to NATS subject", "subject", api.GetEmailEngagementAnalyticsSubject)
 
 	return nil
 }
