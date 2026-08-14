@@ -71,7 +71,6 @@ internal/infrastructure/nats/       → NATS tracing helpers (ExtractAndStartCon
 internal/infrastructure/observability/ → OpenTelemetry SDK setup (traces, metrics, logs via autoexport)
 internal/logging/                   → structured log helpers (AppendCtx, ErrKey, InitStructuredLogConfig)
 pkg/api/                            → PUBLIC: NATS subjects, KV bucket names, wire types (callers import this)
-pkg/constants/                      → DEPRECATED — stale subject strings; do not import (see Key design decisions)
 pkg/redaction/                      → email address redaction for logs
 ```
 
@@ -81,11 +80,10 @@ pkg/redaction/                      → email address redaction for logs
 - **pkg/api is the public contract.** Any service that wants to send email imports
   `github.com/linuxfoundation/lfx-v2-email-service/pkg/api` for the subject constant
   and `SendEmailRequest` type. Never expose `internal/` packages to callers.
-- **`pkg/constants` is deprecated — do not use.** The package `pkg/constants/nats.go`
-  contains a stale subject string (`"lfx.email-service.send"`) that does **not** match
-  the live subject (`"lfx.email-service.send_email"`). All subject constants, queue
+- **`pkg/constants` must not be recreated.** The subject string `"lfx.email-service.send"` is
+  stale and does **not** match the live subject (`"lfx.email-service.send_email"`). This package
+  does **not exist in the repository** — do not create it. All subject constants, queue
   group names, and KV bucket names are canonically defined in `pkg/api/nats.go`.
-  Never import `pkg/constants` in new or modified code.
 - **NoOpSender for local dev.** `EMAIL_ENABLED` defaults to `false` (NoOpSender logs
   instead of sending). Set `EMAIL_ENABLED=true` to enable real SMTP delivery.
 - **Queue group for horizontal scaling.** The subscription uses queue group
@@ -93,8 +91,7 @@ pkg/redaction/                      → email address redaction for logs
 - **Handle always responds.** The NATS handler calls `msg.Respond` on every path
   (success → JSON `SendEmailResponse`, failure → JSON `SendEmailErrorResponse`) so
   callers' `RequestWithContext` never hangs.
-- **30-second SMTP timeout.** `SMTPSender.Send` applies a hard 30-second deadline to
-  the blocking SMTP dial+send call (`smtpTimeout` constant in `internal/infrastructure/smtp/sender.go`).
+- **30-second SMTP bounded wait.** `SMTPSender.Send` runs `smtp.SendMail` in a goroutine and waits up to 30 seconds (`smtpTimeout` constant in `internal/infrastructure/smtp/sender.go`). If the deadline fires, `Send` returns an error to the caller; the underlying network connection may continue briefly in the background goroutine until the OS-level TCP timeout fires.
   Do not add outer retries that ignore this timeout — they will compound rather than bound latency.
 
 ## Development Workflow
@@ -109,7 +106,7 @@ pkg/redaction/                      → email address redaction for logs
 | `main.BuildTime` | `date -u` at build time | `"unknown"` |
 | `main.GitCommit` | `git rev-parse --short HEAD` | `"unknown"` |
 
-These are logged at startup and exposed on the health endpoint. Do not add runtime version-detection logic — the injected values are the canonical source of truth. Do not strip the `LDFLAGS` variable from the Makefile.
+These are injected at link time only. Do not add runtime version-detection logic — the injected values are the canonical source of truth. Do not strip the `LDFLAGS` variable from the Makefile.
 
 ### Prerequisites
 
@@ -129,7 +126,7 @@ make lint             # golangci-lint run
 make fmt              # go fmt + gofmt -s (no goimports)
 make check            # gofmt check + lint + license-check (does not run tests)
 make license-check    # standalone license-header check for all .go files
-make docker-build     # build Docker image (ghcr.io/linuxfoundation/lfx-v2-email-service)
+make docker-build     # build Docker image (ghcr.io/linuxfoundation/lfx-v2-email-service/email-service)
 make helm-install       # helm upgrade --install (defaults; requires cluster access)
 make helm-install-local # helm upgrade --install with values.local.yaml overlay
 make helm-templates     # render chart templates to stdout (no cluster needed)
@@ -219,9 +216,9 @@ nats req lfx.email-service.send_email \
 
 All constants are in `pkg/api/nats.go`.
 
-> **Do not use `pkg/constants`.** It contains a stale subject (`"lfx.email-service.send"`)
-> that differs from the live subject and will silently route to a dead subject. It exists
-> only for historical reference and must not be imported.
+> **Do not create `pkg/constants`.** The subject string `"lfx.email-service.send"` is stale
+> and does not match the live subject. This package does not exist in the repository — do not
+> create it. All subject constants are in `pkg/api/nats.go`.
 
 ## NATS KV
 
@@ -253,7 +250,7 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
 
 **Open-event deduplication:** SNS may redeliver the same event. Each `OPEN` entry stores the SNS `MessageId` as `EventID`; the handler skips any open event whose `MessageId` is already in `OpenedAtList`.
 
-**KV write conflict retry:** the handler retries the `KeyValue.Update` once on revision conflict (`ErrWrongRevision`) before giving up and returning an error (which keeps the SQS message in-flight for redelivery).
+**KV write conflict retry:** the handler retries the `KeyValue.Update` once on any update error before giving up and returning an error (which keeps the SQS message in-flight for redelivery).
 
 ## Environment Variables
 
@@ -284,7 +281,7 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
 | `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Ratio argument for ratio-based samplers (0.0–1.0) |
 | `OTEL_PROPAGATORS` | `tracecontext,baggage` | Comma-separated propagator names (via `autoprop`) |
 | `OTEL_SERVICE_NAME` | `lfx-v2-email-service` | Service name in trace/metric metadata |
-| `OTEL_SERVICE_VERSION` | _(empty)_ | Set by the Helm chart from the image tag; overrides build-injected version in OTel resource |
+| `OTEL_SERVICE_VERSION` | _(empty)_ | Set via `app.otel.serviceVersion` in Helm values; empty by default (not auto-derived from the image tag) |
 
 ## Testing Patterns
 
@@ -313,15 +310,20 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
 2. Add a handler struct in `internal/service/` following the `SendEmailHandler` pattern.
 3. Register the `QueueSubscribe` in `cmd/email-service/main.go`.
 4. Add a table-driven test for `HandleData`.
-5. **Start a consumer span at the top of every `Handle` / `HandleData` method** using
-   `nats.ExtractAndStartConsumerSpan` from `internal/infrastructure/nats` and call
-   `span.End()` (deferred) before returning. This propagates distributed traces from
+5. **Start a consumer span in the `QueueSubscribe` callback** in `cmd/email-service/main.go`
+   using `nats.ExtractAndStartConsumerSpan` from `internal/infrastructure/nats`, and pass
+   the resulting `spanCtx` to `Handle`. Call `span.End()` (deferred) in the same callback.
+   Do not start the span inside `Handle` or `HandleData` — `HandleData` has no `*natsgo.Msg`
+   for header extraction, and starting it in `Handle` would duplicate spans since `main.go`
+   already creates one before calling `Handle`. This propagates distributed traces from
    callers through to the handler. Omitting this step silently breaks cross-service
    traces for the new subject.
 
 ```go
-ctx, span := nats.ExtractAndStartConsumerSpan(ctx, msg, api.YourNewSubject)
+// In the QueueSubscribe callback in main.go:
+spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.YourNewSubject)
 defer span.End()
+yourHandler.Handle(spanCtx, msg)
 ```
 
 ## Code Conventions
