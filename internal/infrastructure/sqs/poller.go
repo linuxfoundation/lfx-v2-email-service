@@ -13,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
+
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
 )
 
 // MessageHandler is called for each received SQS message.
@@ -64,7 +66,7 @@ func (p *Poller) Run(ctx context.Context) error {
 			}
 			consecutiveErrors++
 			slog.ErrorContext(ctx, "sqs receive message failed",
-				"error", err,
+				logging.ErrKey, err,
 				"consecutive_errors", consecutiveErrors,
 				"max", p.maxConsecutiveErrors,
 			)
@@ -87,14 +89,14 @@ func (p *Poller) Run(ctx context.Context) error {
 		consecutiveErrors = 0
 
 		if len(output.Messages) > 0 {
-			slog.InfoContext(ctx, "sqs received messages", "count", len(output.Messages))
+			slog.DebugContext(ctx, "sqs received messages", "count", len(output.Messages))
 		}
 
 		for _, msg := range output.Messages {
-			slog.InfoContext(ctx, "sqs processing message", "message_id", aws.ToString(msg.MessageId))
+			slog.DebugContext(ctx, "sqs processing message", "message_id", aws.ToString(msg.MessageId))
 			if err := p.handler(ctx, msg); err != nil {
 				slog.WarnContext(ctx, "sqs message handler failed, leaving in queue",
-					"error", err,
+					logging.ErrKey, err,
 					"message_id", aws.ToString(msg.MessageId),
 				)
 				continue
@@ -105,7 +107,7 @@ func (p *Poller) Run(ctx context.Context) error {
 			})
 			if delErr != nil {
 				slog.WarnContext(ctx, "failed to delete sqs message after processing",
-					"error", delErr,
+					logging.ErrKey, delErr,
 					"message_id", aws.ToString(msg.MessageId),
 				)
 			}
