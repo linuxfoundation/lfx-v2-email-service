@@ -72,6 +72,11 @@ config/secrets.yml
 # Local Helm values (copy from values.local.example.yaml)
 charts/lfx-v2-email-service/values.local.yaml
 
+# Claude and Cursor local tooling
+.claude/worktrees/
+.cursor/
+AWSCLIV2.pkg
+
 # Docker files
 .dockerignore
 

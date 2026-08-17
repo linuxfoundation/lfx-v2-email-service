@@ -21,6 +21,7 @@ import (
 	natsgo "github.com/nats-io/nats.go"
 
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
+	kvinfra "github.com/linuxfoundation/lfx-v2-email-service/internal/infrastructure/kv"
 	natstracing "github.com/linuxfoundation/lfx-v2-email-service/internal/infrastructure/nats"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/infrastructure/observability"
 	smtpinfra "github.com/linuxfoundation/lfx-v2-email-service/internal/infrastructure/smtp"
@@ -77,7 +78,7 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	nc, recipientsKV, groupIndexKV, err := setupNATSAndKV(ctx, env.NatsURL)
+	nc, store, kvAvailable, err := setupNATSAndKV(ctx, env.NatsURL)
 	if err != nil {
 		slog.Error("failed to connect to NATS", logging.ErrKey, err)
 		cancel()
@@ -88,8 +89,10 @@ func main() {
 	slog.Info("reply_to address allowlist configured", "allowed_domains", env.SMTP.AllowedReplyToDomains)
 	slog.Info("recipient address allowlist configured", "allowed_domains", env.SMTP.AllowedRecipientDomains)
 
+	addrPolicy := domain.NewAddressPolicy(env.SMTP.AllowedFromDomains, env.SMTP.AllowedReplyToDomains, env.SMTP.AllowedRecipientDomains)
+
 	wg.Add(2) // HTTP server + NATS drain
-	if err := subscribeHandlers(ctx, nc, sender, recipientsKV, groupIndexKV, env.SMTP.AllowedFromDomains, env.SMTP.AllowedReplyToDomains, env.SMTP.AllowedRecipientDomains, &wg, done); err != nil {
+	if err := subscribeHandlers(ctx, nc, sender, store, addrPolicy, kvAvailable, &wg, done); err != nil {
 		slog.Error("failed to subscribe NATS handlers", logging.ErrKey, err)
 		cancel()
 		os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
@@ -103,7 +106,7 @@ func main() {
 			cancel()
 			os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
 		}
-		if recipientsKV == nil {
+		if !kvAvailable {
 			slog.Error("SES_EVENTING_ENABLED is true but NATS KV (email-recipients bucket) is unavailable")
 			cancel()
 			os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
@@ -115,7 +118,7 @@ func main() {
 			os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
 		}
 		sqsClient := awssqs.NewFromConfig(awsCfg)
-		engagementHandler := service.NewEngagementEventHandler(recipientsKV)
+		engagementHandler := service.NewEngagementEventHandler(store)
 		poller := sqsinfra.NewPoller(sqsClient, env.SESEngagementSQSURL, 3, engagementHandler.Handle)
 		wg.Add(1)
 		go func() {
@@ -172,7 +175,7 @@ func main() {
 	}
 }
 
-func setupNATSAndKV(ctx context.Context, natsURL string) (*natsgo.Conn, natsgo.KeyValue, natsgo.KeyValue, error) {
+func setupNATSAndKV(ctx context.Context, natsURL string) (*natsgo.Conn, domain.TrackingStore, bool, error) {
 	nc, err := natsgo.Connect(
 		natsURL,
 		natsgo.DrainTimeout(gracefulShutdownSeconds*time.Second),
@@ -188,38 +191,37 @@ func setupNATSAndKV(ctx context.Context, natsURL string) (*natsgo.Conn, natsgo.K
 		}),
 	)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("nats connect: %w", err)
+		return nil, nil, false, fmt.Errorf("nats connect: %w", err)
 	}
 
 	js, err := nc.JetStream()
 	if err != nil {
 		slog.Warn("JetStream not available, KV tracking disabled", logging.ErrKey, err)
-		return nc, nil, nil, nil
+		return nc, domain.NullTrackingStore{}, false, nil
 	}
 
 	recipientsKV, err := js.KeyValue(api.EmailRecipientsKVBucket)
 	if err != nil {
 		slog.Warn("KV bucket not found, tracking disabled", "bucket", api.EmailRecipientsKVBucket, logging.ErrKey, err)
-		return nc, nil, nil, nil
+		return nc, domain.NullTrackingStore{}, false, nil
 	}
 
 	groupIndexKV, err := js.KeyValue(api.EmailGroupIndexKVBucket)
 	if err != nil {
 		slog.Warn("KV bucket not found, tracking disabled", "bucket", api.EmailGroupIndexKVBucket, logging.ErrKey, err)
-		return nc, nil, nil, nil
+		return nc, domain.NullTrackingStore{}, false, nil
 	}
 
-	return nc, recipientsKV, groupIndexKV, nil
+	return nc, kvinfra.New(recipientsKV, groupIndexKV), true, nil
 }
 
 func subscribeHandlers(
 	ctx context.Context,
 	nc *natsgo.Conn,
 	sender domain.Sender,
-	recipientsKV, groupIndexKV natsgo.KeyValue,
-	allowedFromDomains []string,
-	allowedReplyToDomains []string,
-	allowedRecipientDomains []string,
+	store domain.TrackingStore,
+	addrPolicy domain.AddressPolicy,
+	kvAvailable bool,
 	wg *sync.WaitGroup,
 	done chan os.Signal,
 ) error {
@@ -237,7 +239,7 @@ func subscribeHandlers(
 		wg.Done()
 	})
 
-	sendHandler := service.NewSendEmailHandler(sender, recipientsKV, groupIndexKV, allowedFromDomains, allowedReplyToDomains, allowedRecipientDomains)
+	sendHandler := service.NewSendEmailHandler(sender, store, addrPolicy)
 	if _, err := nc.QueueSubscribe(api.SendEmailSubject, api.QueueGroup, func(msg *natsgo.Msg) {
 		spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.SendEmailSubject)
 		defer span.End()
@@ -248,29 +250,31 @@ func subscribeHandlers(
 	}
 	slog.Info("subscribed to NATS subject", "subject", api.SendEmailSubject, "queue", api.QueueGroup)
 
-	if recipientsKV != nil && groupIndexKV != nil {
-		statusHandler := service.NewGetEmailStatusHandler(recipientsKV, groupIndexKV)
-		if _, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-			spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailStatusSubject)
-			defer span.End()
-			statusHandler.Handle(spanCtx, msg)
-		}); err != nil {
-			msgCancel()
-			return fmt.Errorf("nats subscribe %s: %w", api.GetEmailStatusSubject, err)
-		}
-		slog.Info("subscribed to NATS subject", "subject", api.GetEmailStatusSubject)
-
-		analyticsHandler := service.NewGetEmailEngagementAnalyticsHandler(recipientsKV, groupIndexKV)
-		if _, err := nc.QueueSubscribe(api.GetEmailEngagementAnalyticsSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-			spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailEngagementAnalyticsSubject)
-			defer span.End()
-			analyticsHandler.Handle(spanCtx, msg)
-		}); err != nil {
-			msgCancel()
-			return fmt.Errorf("nats subscribe %s: %w", api.GetEmailEngagementAnalyticsSubject, err)
-		}
-		slog.Info("subscribed to NATS subject", "subject", api.GetEmailEngagementAnalyticsSubject)
+	if !kvAvailable {
+		slog.WarnContext(ctx, "NATS KV tracking unavailable: status and analytics handlers will respond with not-found")
 	}
+
+	statusHandler := service.NewGetEmailStatusHandler(store)
+	if _, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+		spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailStatusSubject)
+		defer span.End()
+		statusHandler.Handle(spanCtx, msg)
+	}); err != nil {
+		msgCancel()
+		return fmt.Errorf("nats subscribe %s: %w", api.GetEmailStatusSubject, err)
+	}
+	slog.Info("subscribed to NATS subject", "subject", api.GetEmailStatusSubject)
+
+	analyticsHandler := service.NewGetEmailEngagementAnalyticsHandler(store)
+	if _, err := nc.QueueSubscribe(api.GetEmailEngagementAnalyticsSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+		spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailEngagementAnalyticsSubject)
+		defer span.End()
+		analyticsHandler.Handle(spanCtx, msg)
+	}); err != nil {
+		msgCancel()
+		return fmt.Errorf("nats subscribe %s: %w", api.GetEmailEngagementAnalyticsSubject, err)
+	}
+	slog.Info("subscribed to NATS subject", "subject", api.GetEmailEngagementAnalyticsSubject)
 
 	return nil
 }

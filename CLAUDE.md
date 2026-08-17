@@ -62,9 +62,10 @@ Clean layered architecture:
 
 ```
 cmd/email-service/                  → entry point, wiring, config
-internal/domain/                    → interfaces (Sender)
+internal/domain/                    → interfaces (Sender, TrackingStore, AddressPolicy, NullTrackingStore)
 internal/service/                   → NATS message handlers (SendEmail, GetEmailStatus, GetEmailEngagementAnalytics, EngagementEvent)
-internal/service/mocks/             → test doubles for external interfaces (mocks.KeyValue satisfies natsgo.KeyValue)
+internal/service/mocks/             → test doubles (mocks.TrackingStore satisfies domain.TrackingStore)
+internal/infrastructure/kv/         → KV adapter (kv.Store implements domain.TrackingStore; owns JSON marshaling, CAS retry, group fan-out)
 internal/infrastructure/smtp/       → SMTPSender, NoOpSender, MIME builder
 internal/infrastructure/sqs/        → SQS long-poll loop (feeds EngagementEventHandler)
 internal/infrastructure/nats/       → NATS tracing helpers (ExtractAndStartConsumerSpan)
@@ -88,6 +89,7 @@ pkg/redaction/                      → email address redaction for logs
   instead of sending). Set `EMAIL_ENABLED=true` to enable real SMTP delivery.
 - **Queue group for horizontal scaling.** The subscription uses queue group
   `lfx.email-service.queue` so each message is delivered to exactly one pod.
+- **All four subjects are always subscribed.** Status and analytics handlers are subscribed unconditionally at startup. When NATS KV is unavailable, `NullTrackingStore` is wired in and all reads return `ErrNotFound`, which the handlers map to a `"not found"` error reply. Never skip a subscription based on KV availability — callers must not hang on `RequestWithContext`.
 - **Handle always responds.** The NATS handler calls `msg.Respond` on every path
   (success → JSON `SendEmailResponse`, failure → JSON `SendEmailErrorResponse`) so
   callers' `RequestWithContext` never hangs.
@@ -155,11 +157,45 @@ When the work is done and no more code commits are planned:
 1. **Wait for every running review to complete.**
 2. **If any returned review flags Critical or reasonable Important:** add a fix commit, launch all three reviewers again on the new state, wait, and loop until clean or explicitly documented as a trade-off.
 3. **Full-branch sweep — only if the branch has more than one commit.** Launch `lfx-skills:lfx-general-code-reviewer`, `lfx-skills:lfx-email-service-code-reviewer`, and `lfx-skills:lfx-email-service-learnings-reviewer` again with prompt **`target repo: lfx-v2-email-service\nbranch\n\nReview the branch's diff against origin/main.`**. Address any new findings, then re-run all three sweeps until clean.
-4. **Run `/email-service-pr-readiness`** for branch and PR-shape checks.
-5. **Run `/email-service-preflight`** for mechanical Go validation and the PR change summary.
-6. **Only then push and open the PR.** Use the standard PR title format:
+4. **Audit CLAUDE.md and docs/ for currency.** Run `git diff origin/main...HEAD --name-only` and compare every relevant section of `CLAUDE.md` and every file under `docs/` against the actual code in the branch. See **Docs currency checklist** below for the full lookup table. Commit any updates in the same PR — do not open a PR with stale documentation.
+5. **Run `/email-service-pr-readiness`** for branch and PR-shape checks.
+6. **Run `/email-service-preflight`** for mechanical Go validation and the PR change summary.
+7. **Only then push and open the PR.** Use the standard PR title format:
    `<type>(<scope>): <summary> [<ticket>]`
    Types: `feat` | `fix` | `refactor` | `docs` | `chore`. Scope is optional but recommended. Ticket reference is optional — include `[LFXV2-XXXX]` when a ticket exists; omit the bracket entirely when there is no ticket. Do not use a placeholder like `[LFXV2-0000]`.
+
+### Docs currency checklist
+
+**Do not open a PR until `CLAUDE.md` and all relevant `docs/` files match the code on the branch.**
+
+#### CLAUDE.md sections to verify
+
+| Changed area | CLAUDE.md section(s) to check |
+|---|---|
+| New or removed file in `internal/domain/` | **Architecture** layout, **Testing Patterns** |
+| New or removed file in `internal/infrastructure/` | **Architecture** layout |
+| New or removed file in `internal/service/` or `internal/service/mocks/` | **Architecture** layout, **Testing Patterns** |
+| Any handler constructor signature change | **Testing Patterns** (mock references, `HandleData` shape) |
+| New NATS subject or KV bucket | **NATS Subjects**, **NATS KV**, **Adding a New NATS Subject** |
+| Any `cmd/email-service/main.go` wiring change | **Key design decisions** |
+| New, removed, or renamed env variable; default changed | **Environment Variables** table |
+| New design decision or invariant | **Key design decisions** |
+
+#### docs/ files to verify
+
+| Changed area | File |
+|---|---|
+| NATS subject, payload shape, response, error string | `docs/email-service-contract.md` |
+| KV bucket, tracking record field, engagement event handling | `docs/email-engagement-tracking.md` |
+| Helm value, secret name, NATS KV bucket CR | `docs/service-helm-chart.md` |
+
+#### What counts as stale
+
+- A type, interface, struct, or package exists in code but is absent from the Architecture layout.
+- A mock, test helper, or test pattern reference points to a deleted or renamed symbol.
+- A design decision or invariant changed in code but is not recorded in **Key design decisions**.
+- Conditional behavior was removed or added (e.g. "subjects are conditionally subscribed" → "always subscribed") but the doc still says the old thing.
+- An env variable was added, renamed, or had its default changed without an update to the **Environment Variables** table.
 
 ### Post-PR iteration (responding to bot feedback on an open PR)
 
@@ -289,17 +325,18 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
 - **All tests run with `-race`** (`TEST_FLAGS=-race` in the Makefile). New tests must
   be safe under the race detector; avoid shared mutable state without synchronization.
 - **`mockSender`** in `internal/service/send_email_handler_test.go` — satisfies `domain.Sender`.
-- **`mocks.KeyValue`** in `internal/service/mocks/kv.go` — a thread-safe in-memory mock
-  that satisfies `natsgo.KeyValue`. Use it to test any handler that reads or writes the
-  NATS KV store; construct with `mocks.NewKeyValue()` and pre-seed entries with `kv.Put`.
-  `PutErr` and `GetErrFor` fields inject errors for specific keys. Do not write a new KV
-  mock — this one is already complete.
+- **`mocks.TrackingStore`** in `internal/service/mocks/tracking.go` — a thread-safe
+  in-memory mock that satisfies `domain.TrackingStore`. Construct with
+  `mocks.NewTrackingStore()` and pre-seed records with `PutRecord` / `PutGroup`.
+  `WriteErr`, `AppendErr`, `GetErrFor`, and `GroupErrFor` inject errors for specific
+  conditions. Use this for all handler tests that touch KV tracking — do not write a
+  new tracking mock.
 - **`HandleData`** on `SendEmailHandler` and `GetEmailStatusHandler` — testable entry
   point that takes raw bytes and a respond callback; `Handle` wraps it for real NATS
   messages. Use `HandleData` in tests instead of embedding a real NATS server.
 - **`EngagementEventHandler.Handle`** takes an `sqs/types.Message` (not raw bytes). Its
   test shape differs from the other handlers: construct the handler, call `Handle` directly
-  with a crafted `types.Message`, and assert KV side-effects via `mocks.KeyValue`. See
+  with a crafted `types.Message`, and assert KV side-effects via `mocks.TrackingStore`. See
   `internal/service/engagement_event_handler_test.go` for the pattern.
 - **Package `smtp` tests** use the unexported `buildEmailMessage` / `generateMessageID`
   / `generateBoundary` helpers directly (internal test package `package smtp`).

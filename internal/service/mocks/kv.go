@@ -31,13 +31,14 @@ func (e *kvEntry) Created() time.Time           { return time.Time{} }
 func (e *kvEntry) Operation() natsgo.KeyValueOp { return natsgo.KeyValuePut }
 
 // KeyValue is a thread-safe in-memory mock that satisfies natsgo.KeyValue.
-// Get, Put, Update, and PutString are functional. All other methods return an
-// "not implemented" error — they exist only to satisfy the interface.
+// Get, Put, Update, Create, and PutString are functional. All other methods
+// return a "not implemented" error — they exist only to satisfy the interface.
 type KeyValue struct {
-	mu        sync.RWMutex
-	entries   map[string]*kvEntry
-	PutErr    error            // if non-nil, Put returns this error
-	GetErrFor map[string]error // if a key is present, Get returns that error instead of looking up the entry
+	mu            sync.RWMutex
+	entries       map[string]*kvEntry
+	PutErr        error            // if non-nil, Put returns this error
+	GetErrFor     map[string]error // if a key is present, Get returns that error instead of looking up the entry
+	UpdateErrOnce bool             // if true, the next Update call fails with ErrWrongRevision and resets to false
 }
 
 // NewKeyValue returns an empty KeyValue mock.
@@ -75,6 +76,10 @@ func (m *KeyValue) Put(key string, value []byte) (uint64, error) {
 func (m *KeyValue) Update(key string, value []byte, last uint64) (uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.UpdateErrOnce {
+		m.UpdateErrOnce = false
+		return 0, ErrWrongRevision
+	}
 	e, ok := m.entries[key]
 	if !ok || e.revision != last {
 		return 0, ErrWrongRevision
@@ -87,8 +92,14 @@ func (m *KeyValue) Update(key string, value []byte, last uint64) (uint64, error)
 func (m *KeyValue) GetRevision(_ string, _ uint64) (natsgo.KeyValueEntry, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *KeyValue) Create(_ string, _ []byte) (uint64, error) {
-	return 0, errors.New("not implemented")
+func (m *KeyValue) Create(key string, value []byte) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.entries[key]; ok {
+		return 0, natsgo.ErrKeyExists
+	}
+	m.entries[key] = &kvEntry{key: key, value: append([]byte(nil), value...), revision: 1}
+	return 1, nil
 }
 func (m *KeyValue) Delete(_ string, _ ...natsgo.DeleteOpt) error {
 	return errors.New("not implemented")

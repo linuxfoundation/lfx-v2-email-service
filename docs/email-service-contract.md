@@ -93,11 +93,11 @@ Reply:
 
 - `email_id` lookup returns one `api.EmailRecipientRecord`.
 - `group_id` lookup returns a JSON array of `api.EmailRecipientRecord`.
-  The array may contain **fewer** entries than the group index lists: a recipient
-  record that is missing (`ErrKeyNotFound`) or fails to unmarshal is silently omitted
-  from the array rather than erroring, so the returned count can be less than the number
-  of `email_id`s originally sent for the group. (A non-`ErrKeyNotFound` KV read error on
-  a recipient still returns `internal error`.)
+  The array may contain **fewer** entries than the group index lists: any per-recipient
+  error (missing record, unmarshal failure, or transient KV read error) is silently
+  omitted from the array rather than erroring, so the returned count can be less than
+  the number of `email_id`s originally sent for the group. The response also includes
+  `total_sent` (the raw index count) so callers can detect partial results.
 - Error responses use `api.SendEmailErrorResponse`.
 
 Error values:

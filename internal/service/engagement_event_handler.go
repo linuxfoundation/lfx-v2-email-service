@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
-	natsgo "github.com/nats-io/nats.go"
 
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
 )
@@ -59,14 +59,14 @@ type sesDelivery struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// EngagementEventHandler parses SES engagement events from SQS and updates the recipients KV bucket.
+// EngagementEventHandler parses SES engagement events from SQS and updates the recipients store.
 type EngagementEventHandler struct {
-	recipientsKV natsgo.KeyValue
+	store domain.TrackingStore
 }
 
-// NewEngagementEventHandler creates a handler that writes to recipientsKV.
-func NewEngagementEventHandler(recipientsKV natsgo.KeyValue) *EngagementEventHandler {
-	return &EngagementEventHandler{recipientsKV: recipientsKV}
+// NewEngagementEventHandler creates a handler that updates records via store.
+func NewEngagementEventHandler(store domain.TrackingStore) *EngagementEventHandler {
+	return &EngagementEventHandler{store: store}
 }
 
 // Handle processes a single SQS message containing an SNS-wrapped SES event.
@@ -106,40 +106,16 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 
 	slog.DebugContext(ctx, "ses engagement event received", "event_type", strings.ToLower(eventType))
 
-	// Retry once on KV write conflict to avoid losing concurrent updates.
-	var lastUpdateErr error
-	for attempt := range 2 {
-		entry, err := h.recipientsKV.Get(emailID)
-		if err != nil {
-			slog.DebugContext(ctx, "no recipient record for email_id, skipping")
-			return nil
-		}
-
-		var record api.EmailRecipientRecord
-		if err := json.Unmarshal(entry.Value(), &record); err != nil {
-			slog.ErrorContext(ctx, "failed to unmarshal recipient record", logging.ErrKey, err)
-			return nil
-		}
-
-		applyEngagementEvent(&record, eventType, env.MessageID, event)
-
-		updated, err := json.Marshal(record)
-		if err != nil {
-			slog.ErrorContext(ctx, "failed to marshal updated recipient record", logging.ErrKey, err)
-			return nil
-		}
-
-		_, lastUpdateErr = h.recipientsKV.Update(emailID, updated, entry.Revision())
-		if lastUpdateErr == nil {
-			slog.DebugContext(ctx, "ses engagement event applied", "event_type", strings.ToLower(eventType))
-			return nil
-		}
-		if attempt == 0 {
-			slog.DebugContext(ctx, "recipient record write conflict, retrying")
-		}
+	err := h.store.UpdateRecord(ctx, emailID, func(record *api.EmailRecipientRecord) {
+		applyEngagementEvent(record, eventType, env.MessageID, event)
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to update recipient record", logging.ErrKey, err)
+		return fmt.Errorf("store update for email_id %s: %w", emailID, err)
 	}
-	slog.ErrorContext(ctx, "failed to update recipient record after retry", logging.ErrKey, lastUpdateErr)
-	return fmt.Errorf("kv update conflict unresolved for email_id %s", emailID)
+
+	slog.DebugContext(ctx, "ses engagement event applied", "event_type", strings.ToLower(eventType))
+	return nil
 }
 
 // applyEngagementEvent updates record fields based on the SES event type,
