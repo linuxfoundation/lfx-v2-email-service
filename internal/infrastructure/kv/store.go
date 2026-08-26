@@ -18,16 +18,26 @@ import (
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
 )
 
+// kvBucket is the subset of natsgo.KeyValue operations that Store needs.
+// natsgo.KeyValue satisfies this interface in production; tests supply a small
+// in-memory double without implementing the full vendor interface.
+type kvBucket interface {
+	Get(key string) (natsgo.KeyValueEntry, error)
+	Put(key string, value []byte) (revision uint64, err error)
+	Update(key string, value []byte, last uint64) (revision uint64, err error)
+	Create(key string, value []byte) (revision uint64, err error)
+}
+
 // Store implements domain.TrackingStore using two NATS JetStream KV buckets:
 // recipientsKV holds one EmailRecipientRecord per email_id, and groupIndexKV
 // holds a JSON []string of email_ids per group_id.
 type Store struct {
-	recipientsKV natsgo.KeyValue
-	groupIndexKV natsgo.KeyValue
+	recipientsKV kvBucket
+	groupIndexKV kvBucket
 }
 
 // New creates a Store backed by the given KV buckets.
-func New(recipientsKV, groupIndexKV natsgo.KeyValue) *Store {
+func New(recipientsKV, groupIndexKV kvBucket) *Store {
 	return &Store{recipientsKV: recipientsKV, groupIndexKV: groupIndexKV}
 }
 
