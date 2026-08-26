@@ -37,7 +37,7 @@ Do not move public payloads into `internal/`, and do not expose implementation p
 ## Testing
 
 - Prefer table-driven tests.
-- Use `internal/service/mocks.NewKeyValue()` for KV behavior.
+- Use `internal/service/mocks.NewTrackingStore()` for handler tests that touch KV tracking. KV store internals (CAS retry, group fan-out) are tested in `kv/store_test.go` via a package-local `fakeBucket` — do not add a new KV mock.
 - Test SMTP MIME details in same-package tests when unexported helpers are involved.
 - Run `make test` after implementation changes.
 

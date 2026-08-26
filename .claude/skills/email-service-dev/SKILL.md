@@ -40,7 +40,7 @@ internal/infrastructure/smtp/       SMTP/SES sender, MIME builder, NoOpSender
 internal/infrastructure/sqs/        SQS long-polling engagement-event consumer
 internal/logging/                   slog context helper and global logger setup
 internal/service/                   NATS handlers and SES engagement event handler
-internal/service/mocks/             TrackingStore and KeyValue mocks for unit tests
+internal/service/mocks/             TrackingStore mock for unit tests
 pkg/api/                            public NATS subjects, payloads, KV bucket constants
 pkg/redaction/                      email redaction helpers for logs
 charts/lfx-v2-email-service/        service-local Helm chart

@@ -395,7 +395,7 @@ lfx-v2-email-service/
 │       ├── get_email_status_handler.go            # Handles get_email_status
 │       ├── get_email_engagement_analytics_handler.go  # Handles get_email_engagement_analytics
 │       └── mocks/
-│           └── kv.go    # Thread-safe in-memory KeyValue mock for tests
+│           └── tracking.go  # Thread-safe in-memory TrackingStore mock for unit tests
 ├── pkg/
 │   ├── api/
 │   │   └── nats.go      # Public NATS subjects, request/response types, KV bucket constants

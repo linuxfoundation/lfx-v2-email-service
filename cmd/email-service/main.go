@@ -92,7 +92,7 @@ func main() {
 	addrPolicy := domain.NewAddressPolicy(env.SMTP.AllowedFromDomains, env.SMTP.AllowedReplyToDomains, env.SMTP.AllowedRecipientDomains)
 
 	if !kvAvailable {
-		slog.Warn("NATS KV tracking unavailable: status and analytics handlers will respond with not-found")
+		slog.WarnContext(ctx, "NATS KV tracking unavailable: status and analytics handlers will respond with not-found")
 	}
 
 	wg.Add(2) // HTTP server + NATS drain
