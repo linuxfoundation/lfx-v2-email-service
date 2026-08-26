@@ -5,24 +5,107 @@ package kv_test
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	natsgo "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	kvinfra "github.com/linuxfoundation/lfx-v2-email-service/internal/infrastructure/kv"
-	"github.com/linuxfoundation/lfx-v2-email-service/internal/service/mocks"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
 )
 
-func newStore(t *testing.T) (*kvinfra.Store, *mocks.KeyValue, *mocks.KeyValue) {
+// ── test double ──────────────────────────────────────────────────────────────
+// fakeBucket is an in-memory implementation of the 4-method kvBucket seam.
+// It implements exactly the methods Store calls; nothing more.
+
+var errWrongRevision = errors.New("wrong last revision")
+
+type fakeEntry struct {
+	key      string
+	value    []byte
+	revision uint64
+}
+
+func (e *fakeEntry) Bucket() string               { return "fake" }
+func (e *fakeEntry) Key() string                  { return e.key }
+func (e *fakeEntry) Value() []byte                { return append([]byte(nil), e.value...) }
+func (e *fakeEntry) Revision() uint64             { return e.revision }
+func (e *fakeEntry) Delta() uint64                { return 0 }
+func (e *fakeEntry) Created() time.Time           { return time.Time{} }
+func (e *fakeEntry) Operation() natsgo.KeyValueOp { return natsgo.KeyValuePut }
+
+type fakeBucket struct {
+	mu            sync.Mutex
+	entries       map[string]*fakeEntry
+	UpdateErrOnce bool // if true, the next Update call fails and resets to false
+}
+
+func newFakeBucket() *fakeBucket {
+	return &fakeBucket{entries: make(map[string]*fakeEntry)}
+}
+
+func (b *fakeBucket) Get(key string) (natsgo.KeyValueEntry, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	e, ok := b.entries[key]
+	if !ok {
+		return nil, natsgo.ErrKeyNotFound
+	}
+	return e, nil
+}
+
+func (b *fakeBucket) Put(key string, value []byte) (uint64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	rev := uint64(1)
+	if e, ok := b.entries[key]; ok {
+		rev = e.revision + 1
+	}
+	b.entries[key] = &fakeEntry{key: key, value: append([]byte(nil), value...), revision: rev}
+	return rev, nil
+}
+
+func (b *fakeBucket) Update(key string, value []byte, last uint64) (uint64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.UpdateErrOnce {
+		b.UpdateErrOnce = false
+		return 0, errWrongRevision
+	}
+	e, ok := b.entries[key]
+	if !ok || e.revision != last {
+		return 0, errWrongRevision
+	}
+	rev := e.revision + 1
+	b.entries[key] = &fakeEntry{key: key, value: append([]byte(nil), value...), revision: rev}
+	return rev, nil
+}
+
+func (b *fakeBucket) Create(key string, value []byte) (uint64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := b.entries[key]; ok {
+		return 0, natsgo.ErrKeyExists
+	}
+	b.entries[key] = &fakeEntry{key: key, value: append([]byte(nil), value...), revision: 1}
+	return 1, nil
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+func newStore(t *testing.T) (*kvinfra.Store, *fakeBucket, *fakeBucket) {
 	t.Helper()
-	recipientsKV := mocks.NewKeyValue()
-	groupIndexKV := mocks.NewKeyValue()
+	recipientsKV := newFakeBucket()
+	groupIndexKV := newFakeBucket()
 	return kvinfra.New(recipientsKV, groupIndexKV), recipientsKV, groupIndexKV
 }
+
+// ── tests ─────────────────────────────────────────────────────────────────────
 
 func TestStore_WriteRecord(t *testing.T) {
 	t.Parallel()

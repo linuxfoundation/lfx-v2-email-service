@@ -91,8 +91,12 @@ func main() {
 
 	addrPolicy := domain.NewAddressPolicy(env.SMTP.AllowedFromDomains, env.SMTP.AllowedReplyToDomains, env.SMTP.AllowedRecipientDomains)
 
+	if !kvAvailable {
+		slog.WarnContext(ctx, "NATS KV tracking unavailable: status and analytics handlers will respond with not-found")
+	}
+
 	wg.Add(2) // HTTP server + NATS drain
-	if err := subscribeHandlers(ctx, nc, sender, store, addrPolicy, kvAvailable, &wg, done); err != nil {
+	if err := subscribeHandlers(ctx, nc, sender, store, addrPolicy, &wg, done); err != nil {
 		slog.Error("failed to subscribe NATS handlers", logging.ErrKey, err)
 		cancel()
 		os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
@@ -221,7 +225,6 @@ func subscribeHandlers(
 	sender domain.Sender,
 	store domain.TrackingStore,
 	addrPolicy domain.AddressPolicy,
-	kvAvailable bool,
 	wg *sync.WaitGroup,
 	done chan os.Signal,
 ) error {
@@ -249,10 +252,6 @@ func subscribeHandlers(
 		return fmt.Errorf("nats subscribe %s: %w", api.SendEmailSubject, err)
 	}
 	slog.Info("subscribed to NATS subject", "subject", api.SendEmailSubject, "queue", api.QueueGroup)
-
-	if !kvAvailable {
-		slog.WarnContext(ctx, "NATS KV tracking unavailable: status and analytics handlers will respond with not-found")
-	}
 
 	statusHandler := service.NewGetEmailStatusHandler(store)
 	if _, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
