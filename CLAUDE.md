@@ -12,7 +12,7 @@ Development guide for Claude instances working on this service.
 > - `/email-service-dev` auto-attaches on Go, chart, and service-owned doc paths. It owns this repo's Go conventions, NATS request/reply handler shape, public `pkg/api` contract, SMTP/SES/SQS tracking behavior, KV tracking rules, tests, formatting, linting, and license headers.
 > - `/email-service-pr-readiness` checks PR shape only: branch, JIRA, conventional commits, rebase status, DCO + GPG signing, diff size, and protected files.
 > - `/email-service-preflight` runs the mechanical Go pre-PR pipeline: working tree, license headers, formatting, lint, build, tests, protected files, commit verification, and change summary.
-> - `email-service-code-reviewer` and `email-service-learnings-reviewer` are the repo-owned reviewer brains loaded by the work cycle's background review subagents (see **Work cycle** below) — they are not invoked by hand. The `local-code-review` and `local-learnings-review` directory symlinks beside them are stable discovery aliases for the same two skills.
+> - `email-service-code-reviewer` and `email-service-learnings-reviewer` are the repo-owned reviewer brains loaded by the work cycle's background review subagents (see **Work cycle** below) — they are not invoked by hand. The `local-code-review` and `local-learnings-review` directory symlinks beside them are the standard cross-repo alias paths to the same two skill directories, for path-based discovery by external consumers; they do not register as separate Skill-tool entries.
 >
 > If the plugin is missing, install with `/plugin marketplace add linuxfoundation/lfx-skills` then `/plugin install lfx-skills@lfx-skills`.
 
@@ -158,12 +158,14 @@ make helm-restart       # kubectl rollout restart the deployment
    base_sha: <git rev-parse HEAD^>
    review exactly: <base_sha>..<target_sha>
 
+   Lead your report with the commit or range you reviewed.
+
    Review the latest commit.
    ```
 
-   Append `extra: <focus>` on a new line only when there is a priority hint to add. Do NOT pass `branch` here. If this work cycle is launched from the LFX workspace parent, the `target repo:` line is required so all three reviewers operate in this repo. The pinned SHAs are the immutable identity of the run: every report leads with the commit or range it reviewed, and the parent verifies it matches the pinned `target_sha`. A report for any other commit does not count — see step 5.
+   Append `extra: <focus>` on a new line only when there is a priority hint to add. Do NOT pass `branch` here. If this work cycle is launched from the LFX workspace parent, the `target repo:` line is required so all three reviewers operate in this repo. The pinned SHAs are the immutable identity of the run: every child is instructed to lead its report with the commit or range it reviewed, and the parent verifies that against the pinned values. A report for any other commit or range does not count — see step 5.
 4. **Keep working.** Start the next commit while the reviewers run. Do not block on them.
-5. **When the reviews return:** roll every Critical finding and every reasonable Important finding into the next commit. Reviewer children only report — the parent session makes every fix. A child that failed to load its assigned skill, whose report leads with `INCOMPLETE`, or whose report reviewed a commit other than the pinned `target_sha`, is not a pass: resolve the cause and relaunch the complete three-child batch on the same pinned range.
+5. **When the reviews return:** roll every Critical finding and every reasonable Important finding into the next commit. Reviewer children only report — the parent session makes every fix. A child that failed to load its assigned skill, whose report leads with `INCOMPLETE`, or whose report reviewed a commit or range other than the pinned values (this check applies to full-branch sweep reports too), is not a pass: resolve the cause and relaunch the complete three-child batch on the same pinned range.
 
 ### Pre-PR (drain the queue, sweep cumulative state, then open)
 
@@ -180,10 +182,12 @@ When the work is done and no more code commits are planned:
    base_sha: <git merge-base origin/main HEAD>
    review exactly: <base_sha>...<target_sha>
 
+   Lead your report with the commit or range you reviewed.
+
    Review the branch's diff against origin/main.
    ```
 
-   Address any new findings, then re-run all three sweeps until clean.
+   Verify each sweep report's leading range against the pinned values exactly as in post-commit step 5. Address any new findings, then re-run all three sweeps until clean.
 4. **Audit CLAUDE.md and docs/ for currency.** Run `git diff origin/main...HEAD --name-only` and compare every relevant section of `CLAUDE.md` and every file under `docs/` against the actual code in the branch. See **Docs currency checklist** below for the full lookup table. Commit any updates in the same PR — do not open a PR with stale documentation.
 5. **Run `/email-service-pr-readiness`** for branch and PR-shape checks.
 6. **Run `/email-service-preflight`** for mechanical Go validation and the PR change summary.
