@@ -229,7 +229,7 @@ When the work is done and no more code commits are planned:
 - A design decision or invariant changed in code but is not recorded in **Key design decisions**.
 - Conditional behavior was removed or added (e.g. "subjects are conditionally subscribed" → "always subscribed") but the doc still says the old thing.
 - An env variable was added, renamed, or had its default changed without an update to the **Environment Variables** table.
-- A skill body or description names a reviewer, agent, or skill that the **Work cycle** no longer launches, or a file path that no longer exists.
+- A skill body or description names a reviewer, agent, skill, or file path that no longer exists. A reference retained for documented pinned-source equivalence is not stale while its target still exists.
 
 ### Post-PR iteration (responding to bot feedback on an open PR)
 
