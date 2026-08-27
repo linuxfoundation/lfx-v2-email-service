@@ -139,13 +139,13 @@ make helm-restart       # kubectl rollout restart the deployment
 
 ## Work cycle — post-commit and pre-PR reviews
 
-> **CRITICAL — while the branch is pre-PR, post-commit review is mandatory.** After every commit on the local branch, launch **three generic background review subagents in one parallel batch** via the Agent tool — every child `subagent_type: general-purpose`, `model: opus`, `run_in_background: true`. Each child explicitly loads exactly one review skill: (1) `lfx-skills:lfx-general-code-review`, (2) this repo's `email-service-code-reviewer`, (3) this repo's `email-service-learnings-reviewer` — then keep working while they run. Before opening a PR, every running review must return clean (or remaining findings explicitly documented as trade-offs), the **full-branch sweep** must run clean if the branch has more than one commit (`branch` keyword), AND `/email-service-pr-readiness` must clear every Critical finding before `/email-service-preflight` runs.
+> **CRITICAL — while the branch is pre-PR, post-commit review is mandatory.** After every development commit on the local branch (the final planned commit is covered by the mandatory full-branch sweep instead — see the final-commit rule in step 1), launch **three generic background review subagents in one parallel batch** via the Agent tool — every child `subagent_type: general-purpose`, `model: opus`, `run_in_background: true`. Each child explicitly loads exactly one review skill: (1) `lfx-skills:lfx-general-code-review`, (2) this repo's `email-service-code-reviewer`, (3) this repo's `email-service-learnings-reviewer` — then keep working while they run. Before opening a PR, every running review must return clean (or remaining findings explicitly documented as trade-offs), the **full-branch sweep** must run clean before every PR — mandatory even for a single-commit branch (`branch` keyword) — AND `/email-service-pr-readiness` must clear every Critical finding before `/email-service-preflight` runs.
 >
 > **Once the PR is open, do NOT invoke these pre-PR reviewers on iteration commits.** Copilot + `github-license-compliance[bot]` auto-trigger on every push and own the audit surface from that point (CodeRabbit is not enabled on this repo). The general, email-service, and learnings reviewers are pre-PR insurance only.
 
 ### Post-commit (pre-PR phase, after every commit, asynchronous)
 
-1. **Commit your work.** `git commit -s -S`. Do not wait for any prior review to finish.
+1. **Commit your work.** `git commit -s -S`. Do not wait for any prior review to finish. **Final-commit rule:** when the commit just made is the final planned commit and you are moving immediately into pre-PR, skip its post-commit batch — after draining earlier reviews, the mandatory full-branch sweep (Pre-PR step 3) covers it. If development resumes with further commits, return to normal per-commit review.
 2. **Immediately launch all three reviewer subagents in one parallel batch.** All three are generic children — `subagent_type: general-purpose`, `model: opus`, `run_in_background: true` — sent in a single message so they run concurrently. Each child's prompt tells it to load exactly one review skill and follow it against the shared review inputs (step 3), which carry the review-only rule:
    - Child 1 loads `lfx-skills:lfx-general-code-review`.
    - Child 2 loads this repo's `email-service-code-reviewer` skill (read `.claude/skills/email-service-code-reviewer/SKILL.md` directly if the Skill tool does not list it).
@@ -173,8 +173,8 @@ make helm-restart       # kubectl rollout restart the deployment
 When the work is done and no more code commits are planned:
 
 1. **Wait for every running review to complete.**
-2. **If any returned review flags Critical or reasonable Important:** add a fix commit, launch all three reviewers again on the new state, wait, and loop until clean or explicitly documented as a trade-off.
-3. **Full-branch sweep — only if the branch has more than one commit.** Launch the same three skill-loading children again (one parallel batch, `subagent_type: general-purpose`, `model: opus`, `run_in_background: true`, one skill each as in the post-commit steps), with the shared inputs pinned for the branch:
+2. **If any returned review flags Critical or reasonable Important:** add a fix commit. Fix commits made at this stage do not get their own per-commit batch — the full-branch sweep (step 3) covers them; rerun it on the new state and loop until clean or explicitly documented as a trade-off.
+3. **Full-branch sweep — mandatory before every PR, even for a single-commit branch.** This sweep covers the final planned commit, whose per-commit batch was skipped under the final-commit rule. Launch the three skill-loading children (one parallel batch, `subagent_type: general-purpose`, `model: opus`, `run_in_background: true`, one skill each as in the post-commit steps), with the shared inputs pinned for the branch:
 
    ```text
    target repo: lfx-v2-email-service
