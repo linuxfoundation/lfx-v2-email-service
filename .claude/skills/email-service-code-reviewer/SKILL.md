@@ -109,7 +109,7 @@ Load additional context by changed path:
 | --- | --- |
 | `pkg/api/**` | All handlers using the changed types/subjects, README usage examples, `docs/email-service-contract.md` |
 | `cmd/email-service/**` | `cmd/email-service/main.go`, `cmd/email-service/config.go`, chart values/templates touched by related env wiring |
-| `internal/service/**` | The changed handler, neighboring handler tests, `internal/service/mocks/kv.go`, `pkg/api/nats.go`, contract docs |
+| `internal/service/**` | The changed handler, neighboring handler tests, `internal/service/mocks/tracking.go`, `pkg/api/nats.go`, contract docs |
 | `internal/infrastructure/smtp/**` | SMTP sender/message tests, `docs/email-engagement-tracking.md`, contract docs for tracking IDs and error behavior |
 | `internal/infrastructure/sqs/**` or engagement handler changes | SQS poller, engagement handler tests, `docs/email-engagement-tracking.md`, chart env wiring |
 | `pkg/redaction/**` or logging changes | `internal/logging/logging.go`, local logging guidance in `CLAUDE.md` and `email-service-dev` |

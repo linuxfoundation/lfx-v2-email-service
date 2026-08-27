@@ -146,7 +146,7 @@ make helm-restart       # kubectl rollout restart the deployment
 ### Post-commit (pre-PR phase, after every commit, asynchronous)
 
 1. **Commit your work.** `git commit -s -S`. Do not wait for any prior review to finish.
-2. **Immediately launch all three reviewer subagents in one parallel batch.** All three are generic children — `subagent_type: general-purpose`, `model: opus`, `run_in_background: true` — sent in a single message so they run concurrently. Each child's prompt tells it to load exactly one review skill and follow it against the shared review inputs (step 3):
+2. **Immediately launch all three reviewer subagents in one parallel batch.** All three are generic children — `subagent_type: general-purpose`, `model: opus`, `run_in_background: true` — sent in a single message so they run concurrently. Each child's prompt tells it to load exactly one review skill and follow it against the shared review inputs (step 3), and that it is review-only — report findings; never edit tracked files, commit, push, or write to GitHub:
    - Child 1 loads `lfx-skills:lfx-general-code-review`.
    - Child 2 loads this repo's `email-service-code-reviewer` skill (read `.claude/skills/email-service-code-reviewer/SKILL.md` directly if the Skill tool does not list it).
    - Child 3 loads this repo's `email-service-learnings-reviewer` skill (read `.claude/skills/email-service-learnings-reviewer/SKILL.md` directly if the Skill tool does not list it).
@@ -158,14 +158,14 @@ make helm-restart       # kubectl rollout restart the deployment
    base_sha: <git rev-parse HEAD^>
    review exactly: <base_sha>..<target_sha>
 
-   Lead your report with the commit or range you reviewed.
+   Lead your report with the commit or range you reviewed, stated with full 40-character SHAs — unless the report is INCOMPLETE, in which case the INCOMPLETE line leads and the range follows on the next line.
 
    Review the latest commit.
    ```
 
-   Append `extra: <focus>` on a new line only when there is a priority hint to add. Do NOT pass `branch` here. If this work cycle is launched from the LFX workspace parent, the `target repo:` line is required so all three reviewers operate in this repo. The pinned SHAs are the immutable identity of the run: every child is instructed to lead its report with the commit or range it reviewed, and the parent verifies that against the pinned values. A report for any other commit or range does not count — see step 5.
+   Append `extra: <focus>` on a new line only when there is a priority hint to add. Do NOT pass `branch` here. If this work cycle is launched from the LFX workspace parent, the `target repo:` line is required so all three reviewers operate in this repo. The pinned SHAs are the immutable identity of the run: every child is instructed to lead its report with the commit or range it reviewed, and the parent verifies that against the pinned values. A report for any other commit or range does not count — see step 5. The lead-line instruction overrides the loaded skill's own report-header template where the two differ; the SHA lead line is what makes every report verifiable regardless of which skill produced it.
 4. **Keep working.** Start the next commit while the reviewers run. Do not block on them.
-5. **When the reviews return:** roll every Critical finding and every reasonable Important finding into the next commit. Reviewer children only report — the parent session makes every fix. A child that failed to load its assigned skill, whose report leads with `INCOMPLETE`, or whose report reviewed a commit or range other than the pinned values (this check applies to full-branch sweep reports too), is not a pass: resolve the cause and relaunch the complete three-child batch on the same pinned range.
+5. **When the reviews return:** roll every Critical finding and every reasonable Important finding into the next commit. Reviewer children only report — the parent session makes every fix. A child that failed to load its assigned skill, whose report leads with `INCOMPLETE`, or whose report reviewed a commit or range other than the pinned values (this check applies to full-branch sweep reports too), is not a pass. A mismatch from a child whose skill derives the diff from HEAD usually means the tree moved under it — a stale run, not a child failure. Either way the remedy is the same: resolve the cause, re-pin on the intended commit, and relaunch the complete three-child batch.
 
 ### Pre-PR (drain the queue, sweep cumulative state, then open)
 
@@ -182,12 +182,12 @@ When the work is done and no more code commits are planned:
    base_sha: <git merge-base origin/main HEAD>
    review exactly: <base_sha>...<target_sha>
 
-   Lead your report with the commit or range you reviewed.
+   Lead your report with the commit or range you reviewed, stated with full 40-character SHAs — unless the report is INCOMPLETE, in which case the INCOMPLETE line leads and the range follows on the next line.
 
    Review the branch's diff against origin/main.
    ```
 
-   Verify each sweep report's leading range against the pinned values exactly as in post-commit step 5. Address any new findings, then re-run all three sweeps until clean.
+   Verify each sweep report's SHA lead line against the pinned values exactly as in post-commit step 5 (the skills' own symbolic `origin/main...HEAD (<branch>, N commits)` header may follow it). Address any new findings, then re-run all three sweeps until clean.
 4. **Audit CLAUDE.md and docs/ for currency.** Run `git diff origin/main...HEAD --name-only` and compare every relevant section of `CLAUDE.md` and every file under `docs/` against the actual code in the branch. See **Docs currency checklist** below for the full lookup table. Commit any updates in the same PR — do not open a PR with stale documentation.
 5. **Run `/email-service-pr-readiness`** for branch and PR-shape checks.
 6. **Run `/email-service-preflight`** for mechanical Go validation and the PR change summary.
@@ -211,6 +211,7 @@ When the work is done and no more code commits are planned:
 | Any `cmd/email-service/main.go` wiring change | **Key design decisions** |
 | New, removed, or renamed env variable; default changed | **Environment Variables** table |
 | New design decision or invariant | **Key design decisions** |
+| New, removed, or renamed skill under `.claude/skills/`, or a change to the reviewer launch model | **Central LFX skills** bullet list, **Work cycle** |
 
 #### docs/ files to verify
 
@@ -227,6 +228,7 @@ When the work is done and no more code commits are planned:
 - A design decision or invariant changed in code but is not recorded in **Key design decisions**.
 - Conditional behavior was removed or added (e.g. "subjects are conditionally subscribed" → "always subscribed") but the doc still says the old thing.
 - An env variable was added, renamed, or had its default changed without an update to the **Environment Variables** table.
+- A skill body or description names a reviewer, agent, or skill that the **Work cycle** no longer launches, or a file path that no longer exists.
 
 ### Post-PR iteration (responding to bot feedback on an open PR)
 
