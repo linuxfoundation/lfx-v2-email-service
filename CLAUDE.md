@@ -161,9 +161,9 @@ make helm-restart       # kubectl rollout restart the deployment
    Review the latest commit.
    ```
 
-   Append `extra: <focus>` on a new line only when there is a priority hint to add. Do NOT pass `branch` here. If this work cycle is launched from the LFX workspace parent, the `target repo:` line is required so all three reviewers operate in this repo. The pinned SHAs are immutable for the run: children review exactly `<base_sha>..<target_sha>` even if HEAD moves while they work.
+   Append `extra: <focus>` on a new line only when there is a priority hint to add. Do NOT pass `branch` here. If this work cycle is launched from the LFX workspace parent, the `target repo:` line is required so all three reviewers operate in this repo. The pinned SHAs are the immutable identity of the run: every report leads with the commit or range it reviewed, and the parent verifies it matches the pinned `target_sha`. A report for any other commit does not count — see step 5.
 4. **Keep working.** Start the next commit while the reviewers run. Do not block on them.
-5. **When the reviews return:** roll every Critical finding and every reasonable Important finding into the next commit. Reviewer children only report — the parent session makes every fix. A child that failed to load its assigned skill, or whose report leads with `INCOMPLETE`, is not a pass: resolve the cause and relaunch the complete three-child batch on the same pinned range.
+5. **When the reviews return:** roll every Critical finding and every reasonable Important finding into the next commit. Reviewer children only report — the parent session makes every fix. A child that failed to load its assigned skill, whose report leads with `INCOMPLETE`, or whose report reviewed a commit other than the pinned `target_sha`, is not a pass: resolve the cause and relaunch the complete three-child batch on the same pinned range.
 
 ### Pre-PR (drain the queue, sweep cumulative state, then open)
 
