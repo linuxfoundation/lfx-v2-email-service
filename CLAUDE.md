@@ -146,7 +146,7 @@ make helm-restart       # kubectl rollout restart the deployment
 ### Post-commit (pre-PR phase, after every commit, asynchronous)
 
 1. **Commit your work.** `git commit -s -S`. Do not wait for any prior review to finish.
-2. **Immediately launch all three reviewer subagents in one parallel batch.** All three are generic children — `subagent_type: general-purpose`, `model: opus`, `run_in_background: true` — sent in a single message so they run concurrently. Each child's prompt tells it to load exactly one review skill and follow it against the shared review inputs (step 3), and that it is review-only — report findings; never edit tracked files, commit, push, or write to GitHub:
+2. **Immediately launch all three reviewer subagents in one parallel batch.** All three are generic children — `subagent_type: general-purpose`, `model: opus`, `run_in_background: true` — sent in a single message so they run concurrently. Each child's prompt tells it to load exactly one review skill and follow it against the shared review inputs (step 3), which carry the review-only rule:
    - Child 1 loads `lfx-skills:lfx-general-code-review`.
    - Child 2 loads this repo's `email-service-code-reviewer` skill (read `.claude/skills/email-service-code-reviewer/SKILL.md` directly if the Skill tool does not list it).
    - Child 3 loads this repo's `email-service-learnings-reviewer` skill (read `.claude/skills/email-service-learnings-reviewer/SKILL.md` directly if the Skill tool does not list it).
@@ -154,6 +154,7 @@ make helm-restart       # kubectl rollout restart the deployment
 
    ```text
    target repo: lfx-v2-email-service
+   review-only: report findings; never edit tracked files, commit, push, or write to GitHub
    target_sha: <git rev-parse HEAD>
    base_sha: <git rev-parse HEAD^>
    review exactly: <base_sha>..<target_sha>
@@ -178,6 +179,7 @@ When the work is done and no more code commits are planned:
    ```text
    target repo: lfx-v2-email-service
    branch
+   review-only: report findings; never edit tracked files, commit, push, or write to GitHub
    target_sha: <git rev-parse HEAD>
    base_sha: <git merge-base origin/main HEAD>
    review exactly: <base_sha>...<target_sha>
