@@ -146,7 +146,7 @@ make helm-restart       # kubectl rollout restart the deployment
 ### Post-commit (pre-PR phase, after every commit, asynchronous)
 
 1. **Commit your work.** `git commit -s -S`. Do not wait for any prior review to finish. **Final-commit rule:** when the commit just made is the final planned commit and you are moving immediately into pre-PR, launch NO post-commit batch for it — after draining earlier reviews, the mandatory full-branch sweep (Pre-PR step 3) covers it, and it is the only batch launched for that commit. If development resumes with further commits, return to normal per-commit review.
-2. **Immediately launch all three reviewer subagents in one parallel batch.** All three are generic children — `subagent_type: general-purpose`, `model: opus`, `run_in_background: true` — sent in a single message so they run concurrently. Each child's prompt tells it to load exactly one review skill and follow it against the shared review inputs (step 3), which carry the review-only rule:
+2. **Launch all three reviewer subagents in one parallel batch** — immediately if no batch is active; otherwise drain the running trio first (at most one batch may be active — see step 4). All three are generic children — `subagent_type: general-purpose`, `model: opus`, `run_in_background: true` — sent in a single message so they run concurrently. Each child's prompt tells it to load exactly one review skill and follow it against the shared review inputs (step 3), which carry the review-only rule:
    - Child 1 loads `lfx-skills:lfx-general-code-review`.
    - Child 2 loads this repo's `email-service-code-reviewer` skill (read `.claude/skills/email-service-code-reviewer/SKILL.md` directly if the Skill tool does not list it).
    - Child 3 loads this repo's `email-service-learnings-reviewer` skill (read `.claude/skills/email-service-learnings-reviewer/SKILL.md` directly if the Skill tool does not list it).
@@ -182,7 +182,7 @@ When the work is done and no more code commits are planned:
    review-only: report findings; never edit tracked files, commit, push, or write to GitHub
    target_sha: <git rev-parse HEAD>
    base_sha: <git merge-base origin/main HEAD>
-   review exactly: <base_sha>...<target_sha>
+   review exactly: <base_sha>..<target_sha>
 
    Lead your report with the commit or range you reviewed, stated with full 40-character SHAs — unless the report is INCOMPLETE, in which case the INCOMPLETE line leads and the range follows on the next line.
 
