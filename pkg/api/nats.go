@@ -32,6 +32,14 @@ const (
 	// EmailGroupIndexKVBucket is the NATS KV bucket that maps a group_id to the
 	// list of email_ids belonging to that group.
 	EmailGroupIndexKVBucket = "email-group-index"
+
+	// EmailFailedSubject is the NATS subject the email service publishes to when
+	// a sent email bounces or receives a spam complaint from SES. Callers may
+	// subscribe to this subject to receive real-time failure notifications
+	// without polling get_email_status. The payload is a JSON-encoded
+	// EmailFailedEvent. Publishing is best-effort: a publish failure is logged
+	// but does not affect the KV store update.
+	EmailFailedSubject = "lfx.email-service.email_failed"
 )
 
 // SendEmailRequest is the JSON payload published to SendEmailSubject.
@@ -119,4 +127,15 @@ type GetEmailEngagementAnalyticsResponse struct {
 	Opened       int    `json:"opened"`
 	UniqueOpened int    `json:"unique_opened"`
 	Failed       int    `json:"failed"`
+}
+
+// EmailFailedEvent is the payload published to EmailFailedSubject when a sent
+// email is reported as bounced or complained about by the receiving mail system.
+// Callers that stored the email_id returned by send_email can correlate this
+// event back to the original send without polling get_email_status.
+type EmailFailedEvent struct {
+	EmailID  string    `json:"email_id"`
+	GroupID  string    `json:"group_id,omitempty"`
+	Reason   string    `json:"reason"` // "bounce" or "complaint"
+	FailedAt time.Time `json:"failed_at"`
 }

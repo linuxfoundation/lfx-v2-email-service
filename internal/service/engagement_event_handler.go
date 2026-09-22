@@ -59,14 +59,29 @@ type sesDelivery struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// BouncePublisher publishes bounce/complaint notifications to a NATS subject.
+// *natsgo.Conn satisfies this interface directly.
+type BouncePublisher interface {
+	Publish(subject string, data []byte) error
+}
+
 // EngagementEventHandler parses SES engagement events from SQS and updates the recipients store.
 type EngagementEventHandler struct {
-	store domain.TrackingStore
+	store     domain.TrackingStore
+	publisher BouncePublisher // nil → publish step is skipped
 }
 
 // NewEngagementEventHandler creates a handler that updates records via store.
 func NewEngagementEventHandler(store domain.TrackingStore) *EngagementEventHandler {
 	return &EngagementEventHandler{store: store}
+}
+
+// WithBouncePublisher returns a copy of h configured to publish an
+// EmailFailedEvent to publisher whenever a BOUNCE or COMPLAINT SES event is
+// processed. Publishing is best-effort: a failure is logged but does not affect
+// the KV store update or the return value of Handle.
+func (h *EngagementEventHandler) WithBouncePublisher(p BouncePublisher) *EngagementEventHandler {
+	return &EngagementEventHandler{store: h.store, publisher: p}
 }
 
 // Handle processes a single SQS message containing an SNS-wrapped SES event.
@@ -106,8 +121,28 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 
 	slog.DebugContext(ctx, "ses engagement event received", "event_type", strings.ToLower(eventType))
 
+	isBounceOrComplaint := eventType == "BOUNCE" || eventType == "COMPLAINT"
+
+	// For bounce/complaint events capture the group_id and failed_at from the
+	// record inside the update callback so they are available for the publish
+	// step below, without a second store round-trip.
+	var (
+		capturedGroupID  string
+		capturedFailedAt time.Time
+		recordUpdated    bool
+	)
+
 	err := h.store.UpdateRecord(ctx, emailID, func(record *api.EmailRecipientRecord) {
 		applyEngagementEvent(record, eventType, env.MessageID, event)
+		if isBounceOrComplaint {
+			capturedGroupID = record.GroupID
+			if record.FailedAt != nil {
+				capturedFailedAt = *record.FailedAt
+			} else {
+				capturedFailedAt = time.Now().UTC()
+			}
+			recordUpdated = true
+		}
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to update recipient record", logging.ErrKey, err)
@@ -115,7 +150,32 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 	}
 
 	slog.DebugContext(ctx, "ses engagement event applied", "event_type", strings.ToLower(eventType))
+
+	if isBounceOrComplaint && recordUpdated && h.publisher != nil {
+		h.publishFailed(ctx, emailID, capturedGroupID, strings.ToLower(eventType), capturedFailedAt)
+	}
 	return nil
+}
+
+// publishFailed publishes an EmailFailedEvent to EmailFailedSubject.
+// Failures are logged but do not propagate — publishing is best-effort.
+func (h *EngagementEventHandler) publishFailed(ctx context.Context, emailID, groupID, reason string, failedAt time.Time) {
+	evt := api.EmailFailedEvent{
+		EmailID:  emailID,
+		GroupID:  groupID,
+		Reason:   reason,
+		FailedAt: failedAt,
+	}
+	data, err := json.Marshal(evt)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to marshal email_failed event", logging.ErrKey, err,
+			"email_id", emailID, "reason", reason)
+		return
+	}
+	if err := h.publisher.Publish(api.EmailFailedSubject, data); err != nil {
+		slog.WarnContext(ctx, "failed to publish email_failed event", logging.ErrKey, err,
+			"email_id", emailID, "reason", reason)
+	}
 }
 
 // applyEngagementEvent updates record fields based on the SES event type,
