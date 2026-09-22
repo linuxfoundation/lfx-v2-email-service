@@ -30,6 +30,12 @@ DISABLE_ERRORS_LINTERS:
   # a conflicting Schema URL at runtime (otel_test.go). Suppress until a compatible
   # upstream release aligns all exporters on the same semconv version.
   - REPOSITORY_GRYPE
+  # golang.org/x/crypto v0.57.0 (required to patch HIGH CVEs GO-2026-6354/6355)
+  # declares go 1.26.0 in its own go.mod, which go mod tidy propagates to the
+  # module directive. The MegaLinter image ships golangci-lint built with Go 1.25,
+  # which refuses to run against a go 1.26 module. golangci-lint still runs locally
+  # via `make lint`. Remove once the MegaLinter image is rebuilt with Go 1.26+.
+  - GO_GOLANGCI_LINT
 YAML_YAMLLINT_CONFIG_FILE: .yamllint
 SPELL_CSPELL_ANALYZE_FILE_NAMES: false
 # Ignore YAML files with templating macros; these typically fail linting and/or

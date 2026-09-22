@@ -37,10 +37,10 @@ The service publishes engagement events as they arrive from SES so callers can r
 
 | Constant | Subject | Payload |
 | --- | --- | --- |
-| `api.EmailDeliveredSubject` | `lfx.email-service.events.email_delivered` | `EmailDeliveredEvent` |
-| `api.EmailOpenedSubject` | `lfx.email-service.events.email_opened` | `EmailOpenedEvent` |
-| `api.EmailLinkClickedSubject` | `lfx.email-service.events.email_link_clicked` | `EmailLinkClickedEvent` |
-| `api.EmailFailedSubject` | `lfx.email-service.events.email_failed` | `EmailFailedEvent` |
+| `api.EmailDeliveredSubject` | `lfx.email-service.email_delivered` | `EmailDeliveredEvent` |
+| `api.EmailOpenedSubject` | `lfx.email-service.email_opened` | `EmailOpenedEvent` |
+| `api.EmailLinkClickedSubject` | `lfx.email-service.email_link_clicked` | `EmailLinkClickedEvent` |
+| `api.EmailFailedSubject` | `lfx.email-service.email_failed` | `EmailFailedEvent` |
 
 Push subjects are **best-effort**: a NATS publish failure is logged but does not affect the KV store update or the SQS message acknowledgement. Callers that require guaranteed delivery should poll `get_email_status` instead.
 
