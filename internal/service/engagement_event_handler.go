@@ -133,49 +133,62 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 
 	// Capture values from the record inside the update callback so they are
 	// available for the publish step below, without a second store round-trip.
+	// eventApplied is set only when applyEngagementEvent actually wrote new data
+	// (i.e. the event was not a deduplicated replay); publishing is skipped for
+	// replays to avoid duplicate downstream notifications.
 	var (
 		capturedGroupID    string
 		capturedAt         time.Time
 		capturedOpenCount  int
 		capturedClickLink  string
 		capturedClickCount int
-		recordFound        bool
+		eventApplied       bool
 	)
 
 	err := h.store.UpdateRecord(ctx, emailID, func(record *api.EmailRecipientRecord) {
-		applyEngagementEvent(record, eventType, env.MessageID, event)
+		eventApplied = applyEngagementEvent(record, eventType, env.MessageID, event)
+		if !eventApplied {
+			return // deduplicated or already-set; skip capture
+		}
 		capturedGroupID = record.GroupID
-		recordFound = true
+		// Read timestamps directly from the current SES event rather than from
+		// record aggregate fields (e.g. LastOpenedAt). Aggregate fields hold the
+		// maximum value across all events, which is incorrect when an older SES
+		// event arrives out-of-order after a newer one.
 		switch eventType {
 		case "DELIVERY":
-			if record.DeliveredAt != nil {
-				capturedAt = *record.DeliveredAt
-			} else {
-				capturedAt = time.Now().UTC()
+			var ts string
+			if event.Delivery != nil {
+				ts = event.Delivery.Timestamp
 			}
+			capturedAt = parseTimestamp(ts)
 		case "OPEN":
-			if record.LastOpenedAt != nil {
-				capturedAt = *record.LastOpenedAt
-			} else {
-				capturedAt = time.Now().UTC()
+			var ts string
+			if event.Open != nil {
+				ts = event.Open.Timestamp
 			}
+			capturedAt = parseTimestamp(ts)
 			capturedOpenCount = record.OpenCount
 		case "CLICK":
-			if record.LastClickedAt != nil {
-				capturedAt = *record.LastClickedAt
-			} else {
-				capturedAt = time.Now().UTC()
-			}
-			capturedClickCount = record.ClickCount
+			var ts string
 			if event.Click != nil {
+				ts = event.Click.Timestamp
 				capturedClickLink = event.Click.Link
 			}
-		case "BOUNCE", "COMPLAINT":
-			if record.FailedAt != nil {
-				capturedAt = *record.FailedAt
-			} else {
-				capturedAt = time.Now().UTC()
+			capturedAt = parseTimestamp(ts)
+			capturedClickCount = record.ClickCount
+		case "BOUNCE":
+			var ts string
+			if event.Bounce != nil {
+				ts = event.Bounce.Timestamp
 			}
+			capturedAt = parseTimestamp(ts)
+		case "COMPLAINT":
+			var ts string
+			if event.Complaint != nil {
+				ts = event.Complaint.Timestamp
+			}
+			capturedAt = parseTimestamp(ts)
 		}
 	})
 	if err != nil {
@@ -185,7 +198,7 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 
 	slog.DebugContext(ctx, "ses engagement event applied", "event_type", strings.ToLower(eventType))
 
-	if recordFound && h.publisher != nil {
+	if eventApplied && h.publisher != nil {
 		h.publishEngagementEvent(ctx, emailID, eventType, capturedGroupID, capturedAt, capturedOpenCount, capturedClickCount, capturedClickLink)
 	}
 	return nil
@@ -238,13 +251,16 @@ func (h *EngagementEventHandler) publishEngagementEvent(
 
 // applyEngagementEvent updates record fields based on the SES event type,
 // using SES-provided timestamps when available and falling back to time.Now().
-// snsMessageID is used to deduplicate replayed open and click events.
-func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessageID string, event sesEvent) {
+// snsMessageID deduplicates replayed OPEN and CLICK events.
+// Returns true when the record was modified, false when the event was a
+// no-op (duplicate SNS MessageId for OPEN/CLICK, or state already set for
+// single-fire events DELIVERY/BOUNCE/COMPLAINT).
+func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessageID string, event sesEvent) bool {
 	switch eventType {
 	case "OPEN":
 		for _, e := range record.OpenedAtList {
 			if e.EventID == snsMessageID {
-				return // already processed this SNS delivery
+				return false // already processed this SNS delivery
 			}
 		}
 		var ts string
@@ -258,10 +274,11 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		if record.LastOpenedAt == nil || t.After(*record.LastOpenedAt) {
 			record.LastOpenedAt = &t
 		}
+		return true
 	case "CLICK":
 		for _, c := range record.ClickList {
 			if c.EventID == snsMessageID {
-				return // already processed this SNS delivery
+				return false // already processed this SNS delivery
 			}
 		}
 		var ts, link string
@@ -276,37 +293,45 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		if record.LastClickedAt == nil || t.After(*record.LastClickedAt) {
 			record.LastClickedAt = &t
 		}
+		return true
 	case "DELIVERY":
-		if !record.Delivered {
-			var ts string
-			if event.Delivery != nil {
-				ts = event.Delivery.Timestamp
-			}
-			t := parseTimestamp(ts)
-			record.Delivered = true
-			record.DeliveredAt = &t
+		if record.Delivered {
+			return false
 		}
+		var ts string
+		if event.Delivery != nil {
+			ts = event.Delivery.Timestamp
+		}
+		t := parseTimestamp(ts)
+		record.Delivered = true
+		record.DeliveredAt = &t
+		return true
 	case "BOUNCE":
-		if !record.Failed {
-			var ts string
-			if event.Bounce != nil {
-				ts = event.Bounce.Timestamp
-			}
-			t := parseTimestamp(ts)
-			record.Failed = true
-			record.FailedAt = &t
+		if record.Failed {
+			return false
 		}
+		var ts string
+		if event.Bounce != nil {
+			ts = event.Bounce.Timestamp
+		}
+		t := parseTimestamp(ts)
+		record.Failed = true
+		record.FailedAt = &t
+		return true
 	case "COMPLAINT":
-		if !record.Failed {
-			var ts string
-			if event.Complaint != nil {
-				ts = event.Complaint.Timestamp
-			}
-			t := parseTimestamp(ts)
-			record.Failed = true
-			record.FailedAt = &t
+		if record.Failed {
+			return false
 		}
+		var ts string
+		if event.Complaint != nil {
+			ts = event.Complaint.Timestamp
+		}
+		t := parseTimestamp(ts)
+		record.Failed = true
+		record.FailedAt = &t
+		return true
 	}
+	return false
 }
 
 // parseTimestamp parses an RFC3339 timestamp string, falling back to time.Now().UTC().

@@ -16,6 +16,7 @@ Update it in the same PR as any change to SMTP tracking headers, SES/SQS handlin
 5. After successful SMTP delivery, `SendEmailHandler` writes an `EmailRecipientRecord` to `email-recipients` and appends the `email_id` to `email-group-index`.
 6. SES emits engagement events to SNS, SNS sends them to SQS, and the service's SQS poller consumes the queue.
 7. `EngagementEventHandler` extracts `email_id`, loads the KV record, applies the event, and writes the updated record back with optimistic locking.
+8. If the event was new (not a deduplicated replay), the handler publishes a typed push event to the appropriate NATS subject so subscribers can react in real time without polling.
 
 ## Tracking Headers
 
@@ -41,14 +42,28 @@ When `SES_EVENTING_ENABLED=true`, `email-recipients` is required. Missing AWS co
 
 Supported SES event types:
 
-| SES event | Record update |
-| --- | --- |
-| `DELIVERY` | Sets `delivered=true` and `delivered_at`. |
-| `OPEN` | Appends to `opened_at_list`, sets `opened=true`, updates `open_count` and `last_opened_at`. |
-| `BOUNCE` | Sets `failed=true` and `failed_at`. |
-| `COMPLAINT` | Sets `failed=true` and `failed_at`. |
+| SES event | Record update | NATS push subject |
+| --- | --- | --- |
+| `DELIVERY` | Sets `delivered=true` and `delivered_at`. Single-fire; subsequent events are ignored. | `api.EmailDeliveredSubject` |
+| `OPEN` | Appends to `opened_at_list`, sets `opened=true`, updates `open_count` and `last_opened_at`. Deduplicated by SNS `MessageId`. | `api.EmailOpenedSubject` |
+| `CLICK` | Appends to `click_list` (includes link and timestamp), sets `clicked=true`, updates `click_count` and `last_clicked_at`. Deduplicated by SNS `MessageId`. | `api.EmailLinkClickedSubject` |
+| `BOUNCE` | Sets `failed=true` and `failed_at`. Single-fire; subsequent events are ignored. | `api.EmailFailedSubject` (reason: `"bounce"`) |
+| `COMPLAINT` | Sets `failed=true` and `failed_at`. Single-fire; subsequent events are ignored. | `api.EmailFailedSubject` (reason: `"complaint"`) |
 
-Open events are deduplicated by SNS `MessageId`. Duplicate delivery, bounce, and complaint events are ignored once the matching boolean is set.
+OPEN and CLICK events are deduplicated by SNS `MessageId`. A replayed SQS delivery of the same
+event ID is silently dropped: the KV record is not modified and no NATS push is emitted. This
+prevents duplicate notifications when SQS redelivers a message after a transient visibility
+timeout.
+
+DELIVERY, BOUNCE, and COMPLAINT are single-fire: once the corresponding boolean (`delivered`,
+`failed`) is set, subsequent events of the same type are ignored and not re-published.
+
+Push events use the timestamp from the SES event itself, not an aggregate field such as
+`last_opened_at`. This ensures the published timestamp is accurate even when older SES events
+arrive out-of-order after a newer one.
+
+Push publishing is best-effort: a NATS failure is logged but does not affect the KV write or the
+SQS acknowledgement. See `docs/email-service-contract.md` for payload schemas.
 
 Unknown event types, malformed SNS/SES payloads, and missing tracking headers are treated as non-retryable skips (handler returns `nil`, SQS message is deleted).
 

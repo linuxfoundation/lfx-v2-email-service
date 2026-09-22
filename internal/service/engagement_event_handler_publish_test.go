@@ -332,3 +332,41 @@ func TestEngagementEventHandler_Handle_RecordNotFound_NoPublish(t *testing.T) {
 
 	assert.Empty(t, pub.calls, "no publish when record not found")
 }
+
+// Replaying an event with the same SNS MessageId must result in exactly one KV
+// entry and exactly one NATS publish. SQS delivers at-least-once; the second
+// delivery must be silently dropped without emitting a duplicate notification.
+func TestEngagementEventHandler_Handle_Deduplication_SameMessageID(t *testing.T) {
+	t.Parallel()
+
+	for _, eventType := range []string{"Open", "Click"} {
+		eventType := eventType
+		t.Run(eventType, func(t *testing.T) {
+			t.Parallel()
+
+			store := mocks.NewTrackingStore()
+			seedRecord(store)
+			pub := &mockPublisher{}
+			h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+			// sqsMsg always uses SNS MessageId "sns-msg-1"; calling Handle twice
+			// with the same message simulates an SQS at-least-once re-delivery.
+			msg := sqsMsg(t, eventType, testEmailID, testGroupID, testTimestamp)
+			require.NoError(t, h.Handle(context.Background(), msg))
+			require.NoError(t, h.Handle(context.Background(), msg))
+
+			// The replay is a no-op: only one NATS event must have been published.
+			assert.Len(t, pub.calls, 1, "replay must not emit a second NATS notification")
+
+			// The KV record must contain exactly one entry, not two.
+			record, ok := store.GetStoredRecord(testEmailID)
+			require.True(t, ok)
+			switch eventType {
+			case "Open":
+				assert.Equal(t, 1, record.OpenCount, "deduplication must not double-count opens")
+			case "Click":
+				assert.Equal(t, 1, record.ClickCount, "deduplication must not double-count clicks")
+			}
+		})
+	}
+}
