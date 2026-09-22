@@ -25,11 +25,6 @@ DISABLE_ERRORS_LINTERS:
   - REPOSITORY_TRIVY
   - REPOSITORY_CHECKOV
   - REPOSITORY_DEVSKIM
-  # The remaining grype findings are Low-severity CVEs in go.opentelemetry.io/otel
-  # indirect dependencies. Bumping the OTEL exporter family past v1.44.0 introduces
-  # a conflicting Schema URL at runtime (otel_test.go). Suppress until a compatible
-  # upstream release aligns all exporters on the same semconv version.
-  - REPOSITORY_GRYPE
   # golang.org/x/crypto v0.57.0 (required to patch HIGH CVEs GO-2026-6354/6355)
   # declares go 1.26.0 in its own go.mod, which go mod tidy propagates to the
   # module directive. The MegaLinter image ships golangci-lint built with Go 1.25,
