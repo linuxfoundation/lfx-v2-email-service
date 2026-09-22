@@ -29,6 +29,7 @@ type sesEvent struct {
 	EventType string        `json:"eventType"`
 	Mail      sesMail       `json:"mail"`
 	Open      *sesOpen      `json:"open"`
+	Click     *sesClick     `json:"click"`
 	Bounce    *sesBounce    `json:"bounce"`
 	Complaint *sesComplaint `json:"complaint"`
 	Delivery  *sesDelivery  `json:"delivery"`
@@ -47,6 +48,15 @@ type sesOpen struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// sesClick corresponds to the SES "Click" event, fired when a recipient clicks
+// a tracked link in the email.
+type sesClick struct {
+	Timestamp string `json:"timestamp"`
+	Link      string `json:"link"`
+	IPAddress string `json:"ipAddress"`
+	UserAgent string `json:"userAgent"`
+}
+
 type sesBounce struct {
 	Timestamp string `json:"timestamp"`
 }
@@ -59,16 +69,16 @@ type sesDelivery struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// BouncePublisher publishes bounce/complaint notifications to a NATS subject.
+// EngagementPublisher publishes engagement event notifications to NATS subjects.
 // *natsgo.Conn satisfies this interface directly.
-type BouncePublisher interface {
+type EngagementPublisher interface {
 	Publish(subject string, data []byte) error
 }
 
 // EngagementEventHandler parses SES engagement events from SQS and updates the recipients store.
 type EngagementEventHandler struct {
 	store     domain.TrackingStore
-	publisher BouncePublisher // nil → publish step is skipped
+	publisher EngagementPublisher // nil → publish step is skipped
 }
 
 // NewEngagementEventHandler creates a handler that updates records via store.
@@ -76,11 +86,11 @@ func NewEngagementEventHandler(store domain.TrackingStore) *EngagementEventHandl
 	return &EngagementEventHandler{store: store}
 }
 
-// WithBouncePublisher returns a copy of h configured to publish an
-// EmailFailedEvent to publisher whenever a BOUNCE or COMPLAINT SES event is
-// processed. Publishing is best-effort: a failure is logged but does not affect
-// the KV store update or the return value of Handle.
-func (h *EngagementEventHandler) WithBouncePublisher(p BouncePublisher) *EngagementEventHandler {
+// WithEngagementPublisher returns a copy of h configured to publish engagement
+// events (delivered, opened, link clicked, failed) to publisher as each SES
+// event is processed. Publishing is best-effort: a failure is logged but does
+// not affect the KV store update or the return value of Handle.
+func (h *EngagementEventHandler) WithEngagementPublisher(p EngagementPublisher) *EngagementEventHandler {
 	return &EngagementEventHandler{store: h.store, publisher: p}
 }
 
@@ -113,7 +123,7 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 
 	eventType := strings.ToUpper(event.EventType)
 	switch eventType {
-	case "OPEN", "DELIVERY", "BOUNCE", "COMPLAINT":
+	case "OPEN", "CLICK", "DELIVERY", "BOUNCE", "COMPLAINT":
 	default:
 		slog.DebugContext(ctx, "ignoring unknown ses event type", "event_type", event.EventType)
 		return nil
@@ -121,27 +131,51 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 
 	slog.DebugContext(ctx, "ses engagement event received", "event_type", strings.ToLower(eventType))
 
-	isBounceOrComplaint := eventType == "BOUNCE" || eventType == "COMPLAINT"
-
-	// For bounce/complaint events capture the group_id and failed_at from the
-	// record inside the update callback so they are available for the publish
-	// step below, without a second store round-trip.
+	// Capture values from the record inside the update callback so they are
+	// available for the publish step below, without a second store round-trip.
 	var (
-		capturedGroupID  string
-		capturedFailedAt time.Time
-		recordUpdated    bool
+		capturedGroupID    string
+		capturedAt         time.Time
+		capturedOpenCount  int
+		capturedClickLink  string
+		capturedClickCount int
+		recordFound        bool
 	)
 
 	err := h.store.UpdateRecord(ctx, emailID, func(record *api.EmailRecipientRecord) {
 		applyEngagementEvent(record, eventType, env.MessageID, event)
-		if isBounceOrComplaint {
-			capturedGroupID = record.GroupID
-			if record.FailedAt != nil {
-				capturedFailedAt = *record.FailedAt
+		capturedGroupID = record.GroupID
+		recordFound = true
+		switch eventType {
+		case "DELIVERY":
+			if record.DeliveredAt != nil {
+				capturedAt = *record.DeliveredAt
 			} else {
-				capturedFailedAt = time.Now().UTC()
+				capturedAt = time.Now().UTC()
 			}
-			recordUpdated = true
+		case "OPEN":
+			if record.LastOpenedAt != nil {
+				capturedAt = *record.LastOpenedAt
+			} else {
+				capturedAt = time.Now().UTC()
+			}
+			capturedOpenCount = record.OpenCount
+		case "CLICK":
+			if record.LastClickedAt != nil {
+				capturedAt = *record.LastClickedAt
+			} else {
+				capturedAt = time.Now().UTC()
+			}
+			capturedClickCount = record.ClickCount
+			if event.Click != nil {
+				capturedClickLink = event.Click.Link
+			}
+		case "BOUNCE", "COMPLAINT":
+			if record.FailedAt != nil {
+				capturedAt = *record.FailedAt
+			} else {
+				capturedAt = time.Now().UTC()
+			}
 		}
 	})
 	if err != nil {
@@ -151,36 +185,60 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 
 	slog.DebugContext(ctx, "ses engagement event applied", "event_type", strings.ToLower(eventType))
 
-	if isBounceOrComplaint && recordUpdated && h.publisher != nil {
-		h.publishFailed(ctx, emailID, capturedGroupID, strings.ToLower(eventType), capturedFailedAt)
+	if recordFound && h.publisher != nil {
+		h.publishEngagementEvent(ctx, emailID, eventType, capturedGroupID, capturedAt, capturedOpenCount, capturedClickCount, capturedClickLink)
 	}
 	return nil
 }
 
-// publishFailed publishes an EmailFailedEvent to EmailFailedSubject.
-// Failures are logged but do not propagate — publishing is best-effort.
-func (h *EngagementEventHandler) publishFailed(ctx context.Context, emailID, groupID, reason string, failedAt time.Time) {
-	evt := api.EmailFailedEvent{
-		EmailID:  emailID,
-		GroupID:  groupID,
-		Reason:   reason,
-		FailedAt: failedAt,
-	}
-	data, err := json.Marshal(evt)
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to marshal email_failed event", logging.ErrKey, err,
-			"email_id", emailID, "reason", reason)
+// publishEngagementEvent marshals and publishes the appropriate engagement
+// event payload for the given SES event type. Failures are logged but do not
+// propagate — publishing is best-effort.
+func (h *EngagementEventHandler) publishEngagementEvent(
+	ctx context.Context,
+	emailID, eventType, groupID string,
+	at time.Time,
+	openCount, clickCount int,
+	clickLink string,
+) {
+	var subject string
+	var payload any
+
+	switch eventType {
+	case "DELIVERY":
+		subject = api.EmailDeliveredSubject
+		payload = api.EmailDeliveredEvent{EmailID: emailID, GroupID: groupID, DeliveredAt: at}
+	case "OPEN":
+		subject = api.EmailOpenedSubject
+		payload = api.EmailOpenedEvent{EmailID: emailID, GroupID: groupID, OpenCount: openCount, OpenedAt: at}
+	case "CLICK":
+		subject = api.EmailLinkClickedSubject
+		payload = api.EmailLinkClickedEvent{EmailID: emailID, GroupID: groupID, Link: clickLink, ClickCount: clickCount, ClickedAt: at}
+	case "BOUNCE":
+		subject = api.EmailFailedSubject
+		payload = api.EmailFailedEvent{EmailID: emailID, GroupID: groupID, Reason: "bounce", FailedAt: at}
+	case "COMPLAINT":
+		subject = api.EmailFailedSubject
+		payload = api.EmailFailedEvent{EmailID: emailID, GroupID: groupID, Reason: "complaint", FailedAt: at}
+	default:
 		return
 	}
-	if err := h.publisher.Publish(api.EmailFailedSubject, data); err != nil {
-		slog.WarnContext(ctx, "failed to publish email_failed event", logging.ErrKey, err,
-			"email_id", emailID, "reason", reason)
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to marshal engagement event", logging.ErrKey, err,
+			"email_id", emailID, "event_type", strings.ToLower(eventType))
+		return
+	}
+	if err := h.publisher.Publish(subject, data); err != nil {
+		slog.WarnContext(ctx, "failed to publish engagement event", logging.ErrKey, err,
+			"email_id", emailID, "event_type", strings.ToLower(eventType))
 	}
 }
 
 // applyEngagementEvent updates record fields based on the SES event type,
 // using SES-provided timestamps when available and falling back to time.Now().
-// snsMessageID is used to deduplicate replayed open events.
+// snsMessageID is used to deduplicate replayed open and click events.
 func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessageID string, event sesEvent) {
 	switch eventType {
 	case "OPEN":
@@ -199,6 +257,24 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		record.OpenCount = len(record.OpenedAtList)
 		if record.LastOpenedAt == nil || t.After(*record.LastOpenedAt) {
 			record.LastOpenedAt = &t
+		}
+	case "CLICK":
+		for _, c := range record.ClickList {
+			if c.EventID == snsMessageID {
+				return // already processed this SNS delivery
+			}
+		}
+		var ts, link string
+		if event.Click != nil {
+			ts = event.Click.Timestamp
+			link = event.Click.Link
+		}
+		t := parseTimestamp(ts)
+		record.Clicked = true
+		record.ClickList = append(record.ClickList, api.ClickEvent{EventID: snsMessageID, Link: link, ClickedAt: t})
+		record.ClickCount = len(record.ClickList)
+		if record.LastClickedAt == nil || t.After(*record.LastClickedAt) {
+			record.LastClickedAt = &t
 		}
 	case "DELIVERY":
 		if !record.Delivered {

@@ -35,11 +35,29 @@ const (
 
 	// EmailFailedSubject is the NATS subject the email service publishes to when
 	// a sent email bounces or receives a spam complaint from SES. Callers may
-	// subscribe to this subject to receive real-time failure notifications
-	// without polling get_email_status. The payload is a JSON-encoded
-	// EmailFailedEvent. Publishing is best-effort: a publish failure is logged
-	// but does not affect the KV store update.
+	// subscribe to receive real-time failure notifications without polling
+	// get_email_status. The payload is a JSON-encoded EmailFailedEvent.
+	// Publishing is best-effort: a publish failure is logged but does not affect
+	// the KV store update.
 	EmailFailedSubject = "lfx.email-service.email_failed"
+
+	// EmailDeliveredSubject is the NATS subject the email service publishes to
+	// when SES confirms delivery of a sent email. The payload is a
+	// JSON-encoded EmailDeliveredEvent.
+	EmailDeliveredSubject = "lfx.email-service.email_delivered"
+
+	// EmailOpenedSubject is the NATS subject the email service publishes to
+	// when the open-tracking pixel in a sent email is loaded. The payload is a
+	// JSON-encoded EmailOpenedEvent. Multiple opens produce multiple publishes;
+	// callers should deduplicate by email_id if they only need a first-open
+	// signal.
+	EmailOpenedSubject = "lfx.email-service.email_opened"
+
+	// EmailLinkClickedSubject is the NATS subject the email service publishes
+	// to when a tracked link in a sent email is clicked. The payload is a
+	// JSON-encoded EmailLinkClickedEvent. Multiple clicks (different links or
+	// repeated clicks) each produce a separate publish.
+	EmailLinkClickedSubject = "lfx.email-service.email_link_clicked"
 )
 
 // SendEmailRequest is the JSON payload published to SendEmailSubject.
@@ -88,21 +106,33 @@ type OpenEvent struct {
 	OpenedAt time.Time `json:"opened_at"`
 }
 
+// ClickEvent records a single tracked-link click, keyed by the SNS MessageId
+// so replayed deliveries can be deduplicated.
+type ClickEvent struct {
+	EventID   string    `json:"event_id"`
+	Link      string    `json:"link"`
+	ClickedAt time.Time `json:"clicked_at"`
+}
+
 // EmailRecipientRecord is the value stored in EmailRecipientsKVBucket, keyed by email_id.
 type EmailRecipientRecord struct {
-	GroupID      string      `json:"group_id"`
-	EmailID      string      `json:"email_id"`
-	To           string      `json:"to"`
-	Subject      string      `json:"subject"`
-	SentAt       time.Time   `json:"sent_at"`
-	Delivered    bool        `json:"delivered"`
-	DeliveredAt  *time.Time  `json:"delivered_at,omitempty"`
-	Opened       bool        `json:"opened"`
-	OpenCount    int         `json:"open_count"`
-	OpenedAtList []OpenEvent `json:"opened_at_list,omitempty"`
-	LastOpenedAt *time.Time  `json:"last_opened_at,omitempty"`
-	Failed       bool        `json:"failed"`
-	FailedAt     *time.Time  `json:"failed_at,omitempty"`
+	GroupID       string       `json:"group_id"`
+	EmailID       string       `json:"email_id"`
+	To            string       `json:"to"`
+	Subject       string       `json:"subject"`
+	SentAt        time.Time    `json:"sent_at"`
+	Delivered     bool         `json:"delivered"`
+	DeliveredAt   *time.Time   `json:"delivered_at,omitempty"`
+	Opened        bool         `json:"opened"`
+	OpenCount     int          `json:"open_count"`
+	OpenedAtList  []OpenEvent  `json:"opened_at_list,omitempty"`
+	LastOpenedAt  *time.Time   `json:"last_opened_at,omitempty"`
+	Clicked       bool         `json:"clicked"`
+	ClickCount    int          `json:"click_count"`
+	ClickList     []ClickEvent `json:"click_list,omitempty"`
+	LastClickedAt *time.Time   `json:"last_clicked_at,omitempty"`
+	Failed        bool         `json:"failed"`
+	FailedAt      *time.Time   `json:"failed_at,omitempty"`
 }
 
 // GetEmailStatusRequest is the payload for GetEmailStatusSubject.
@@ -130,12 +160,44 @@ type GetEmailEngagementAnalyticsResponse struct {
 }
 
 // EmailFailedEvent is the payload published to EmailFailedSubject when a sent
-// email is reported as bounced or complained about by the receiving mail system.
-// Callers that stored the email_id returned by send_email can correlate this
-// event back to the original send without polling get_email_status.
+// email bounces or receives a spam complaint. Callers that stored the email_id
+// returned by send_email can correlate this event back to the original send
+// without polling get_email_status.
 type EmailFailedEvent struct {
 	EmailID  string    `json:"email_id"`
 	GroupID  string    `json:"group_id,omitempty"`
 	Reason   string    `json:"reason"` // "bounce" or "complaint"
 	FailedAt time.Time `json:"failed_at"`
+}
+
+// EmailDeliveredEvent is the payload published to EmailDeliveredSubject when
+// SES confirms that a sent email was successfully delivered to the recipient's
+// mail server.
+type EmailDeliveredEvent struct {
+	EmailID     string    `json:"email_id"`
+	GroupID     string    `json:"group_id,omitempty"`
+	DeliveredAt time.Time `json:"delivered_at"`
+}
+
+// EmailOpenedEvent is the payload published to EmailOpenedSubject when the
+// open-tracking pixel in a sent email is loaded by the recipient's mail client.
+// OpenCount reflects the total number of opens recorded for this email_id,
+// including the current one.
+type EmailOpenedEvent struct {
+	EmailID   string    `json:"email_id"`
+	GroupID   string    `json:"group_id,omitempty"`
+	OpenCount int       `json:"open_count"`
+	OpenedAt  time.Time `json:"opened_at"`
+}
+
+// EmailLinkClickedEvent is the payload published to EmailLinkClickedSubject
+// when a tracked link in a sent email is clicked. Link is the destination URL
+// that was clicked. ClickCount reflects the total number of link clicks
+// recorded for this email_id, including the current one.
+type EmailLinkClickedEvent struct {
+	EmailID    string    `json:"email_id"`
+	GroupID    string    `json:"group_id,omitempty"`
+	Link       string    `json:"link"`
+	ClickCount int       `json:"click_count"`
+	ClickedAt  time.Time `json:"clicked_at"`
 }

@@ -122,7 +122,7 @@ func main() {
 			os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
 		}
 		sqsClient := awssqs.NewFromConfig(awsCfg)
-		engagementHandler := service.NewEngagementEventHandler(store).WithBouncePublisher(nc)
+		engagementHandler := service.NewEngagementEventHandler(store).WithEngagementPublisher(nc)
 		poller := sqsinfra.NewPoller(sqsClient, env.SESEngagementSQSURL, 3, engagementHandler.Handle)
 		wg.Add(1)
 		go func() {
