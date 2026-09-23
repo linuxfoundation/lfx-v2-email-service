@@ -18,6 +18,15 @@ import (
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
 )
 
+// maxClickListEntries caps the number of ClickEvent entries stored in a KV
+// record. The email-recipients bucket has maxValueSize 65 536 bytes; each
+// ClickEvent is roughly 300–2 000 bytes depending on URL length, so an
+// unbounded list would overflow the bucket and make every subsequent CAS
+// update fail. Unique click deduplication is still performed against all
+// stored entries; events beyond the cap still update ClickCount and
+// LastClickedAt but are not appended to ClickList.
+const maxClickListEntries = 100
+
 // snsEnvelope is the outer SNS notification wrapper around the SES event JSON.
 type snsEnvelope struct {
 	MessageID string `json:"MessageId"`
@@ -288,8 +297,10 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		}
 		t := parseTimestamp(ts)
 		record.Clicked = true
-		record.ClickList = append(record.ClickList, api.ClickEvent{EventID: snsMessageID, Link: link, ClickedAt: t})
-		record.ClickCount = len(record.ClickList)
+		record.ClickCount++
+		if len(record.ClickList) < maxClickListEntries {
+			record.ClickList = append(record.ClickList, api.ClickEvent{EventID: snsMessageID, Link: link, ClickedAt: t})
+		}
 		if record.LastClickedAt == nil || t.After(*record.LastClickedAt) {
 			record.LastClickedAt = &t
 		}
