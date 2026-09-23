@@ -221,7 +221,7 @@ Published at most once per email (BOUNCE and COMPLAINT are single-fire; subseque
 | `sent_at` | UTC send timestamp. |
 | `delivered`, `delivered_at` | Delivery event status and timestamp. |
 | `opened`, `open_count`, `opened_at_list`, `last_opened_at` | Open event status, deduplicated event list (keyed by SNS `MessageId`), and aggregate count. |
-| `clicked`, `click_count`, `click_list`, `last_clicked_at` | Click event status, deduplicated click list (keyed by SNS `MessageId`, each entry includes `link` and `clicked_at`), and aggregate count. |
+| `clicked`, `click_count`, `click_event_ids`, `click_list`, `last_clicked_at` | Click event status, aggregate count, SNS `MessageId` dedup list (used for replay protection; bounded to 500 entries), bounded click history (bounded by the KV record size limit; each entry includes `link` and `clicked_at`), and latest click timestamp. |
 | `failed`, `failed_at` | Bounce or complaint status and timestamp. |
 
 `email-group-index` stores a JSON `[]string` of `email_id` values, keyed by `group_id`.

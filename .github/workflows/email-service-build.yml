@@ -31,4 +31,4 @@ jobs:
         run: go test ./... -v
 
       - name: Lint
-        run: make lint
+        uses: golangci/golangci-lint-action@v6.5.2  # v6.5.2

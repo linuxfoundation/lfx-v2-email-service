@@ -116,19 +116,25 @@ type ClickEvent struct {
 
 // EmailRecipientRecord is the value stored in EmailRecipientsKVBucket, keyed by email_id.
 type EmailRecipientRecord struct {
-	GroupID       string       `json:"group_id"`
-	EmailID       string       `json:"email_id"`
-	To            string       `json:"to"`
-	Subject       string       `json:"subject"`
-	SentAt        time.Time    `json:"sent_at"`
-	Delivered     bool         `json:"delivered"`
-	DeliveredAt   *time.Time   `json:"delivered_at,omitempty"`
-	Opened        bool         `json:"opened"`
-	OpenCount     int          `json:"open_count"`
-	OpenedAtList  []OpenEvent  `json:"opened_at_list,omitempty"`
-	LastOpenedAt  *time.Time   `json:"last_opened_at,omitempty"`
-	Clicked       bool         `json:"clicked"`
-	ClickCount    int          `json:"click_count"`
+	GroupID      string      `json:"group_id"`
+	EmailID      string      `json:"email_id"`
+	To           string      `json:"to"`
+	Subject      string      `json:"subject"`
+	SentAt       time.Time   `json:"sent_at"`
+	Delivered    bool        `json:"delivered"`
+	DeliveredAt  *time.Time  `json:"delivered_at,omitempty"`
+	Opened       bool        `json:"opened"`
+	OpenCount    int         `json:"open_count"`
+	OpenedAtList []OpenEvent `json:"opened_at_list,omitempty"`
+	LastOpenedAt *time.Time  `json:"last_opened_at,omitempty"`
+	Clicked      bool        `json:"clicked"`
+	ClickCount   int         `json:"click_count"`
+	// ClickEventIDs holds the SNS MessageId of every counted click for
+	// replay deduplication. It is bounded separately from ClickList so that
+	// dedup remains accurate even after the history list reaches the KV size
+	// limit. Populated from this version of the service onward; older records
+	// fall back to ClickList for dedup.
+	ClickEventIDs []string     `json:"click_event_ids,omitempty"`
 	ClickList     []ClickEvent `json:"click_list,omitempty"`
 	LastClickedAt *time.Time   `json:"last_clicked_at,omitempty"`
 	Failed        bool         `json:"failed"`

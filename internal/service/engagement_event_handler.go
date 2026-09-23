@@ -18,14 +18,18 @@ import (
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
 )
 
-// maxClickListEntries caps the number of ClickEvent entries stored in a KV
-// record. The email-recipients bucket has maxValueSize 65 536 bytes; each
-// ClickEvent is roughly 300–2 000 bytes depending on URL length, so an
-// unbounded list would overflow the bucket and make every subsequent CAS
-// update fail. Unique click deduplication is still performed against all
-// stored entries; events beyond the cap still update ClickCount and
-// LastClickedAt but are not appended to ClickList.
-const maxClickListEntries = 100
+// maxKVRecordBytes is the soft ceiling for an EmailRecipientRecord serialised
+// to JSON. The email-recipients bucket has maxValueSize 65 536 bytes; we leave
+// ~15 KB headroom so that other fields can grow without bumping against the
+// hard limit. ClickList is not appended to once the tentative serialised size
+// would exceed this threshold.
+const maxKVRecordBytes = 50_000
+
+// maxClickEventIDs caps the ClickEventIDs dedup list. Each entry is a 36-byte
+// UUID; 500 entries ≈ 18 KB, well within the KV size budget. Dedup tracking
+// is separated from the full ClickList so that replay protection remains
+// accurate even after the history list reaches the KV size limit.
+const maxClickEventIDs = 500
 
 // snsEnvelope is the outer SNS notification wrapper around the SES event JSON.
 type snsEnvelope struct {
@@ -285,9 +289,17 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		}
 		return true
 	case "CLICK":
+		// Dedup check: prefer ClickEventIDs (written by this version of the
+		// service) and fall back to ClickList for records written before
+		// ClickEventIDs was introduced.
+		for _, id := range record.ClickEventIDs {
+			if id == snsMessageID {
+				return false // already processed this SNS delivery
+			}
+		}
 		for _, c := range record.ClickList {
 			if c.EventID == snsMessageID {
-				return false // already processed this SNS delivery
+				return false // legacy dedup fallback for older records
 			}
 		}
 		var ts, link string
@@ -298,8 +310,18 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		t := parseTimestamp(ts)
 		record.Clicked = true
 		record.ClickCount++
-		if len(record.ClickList) < maxClickListEntries {
-			record.ClickList = append(record.ClickList, api.ClickEvent{EventID: snsMessageID, Link: link, ClickedAt: t})
+		// Always record the SNS MessageId for replay dedup. ClickEventIDs is
+		// bounded to maxClickEventIDs entries (each ~36 bytes) so it fits
+		// comfortably within the KV record size limit.
+		if len(record.ClickEventIDs) < maxClickEventIDs {
+			record.ClickEventIDs = append(record.ClickEventIDs, snsMessageID)
+		}
+		// Append to the history list only while the full record stays within
+		// the KV bucket size limit. Tentatively append, marshal, and roll
+		// back if the serialised size would exceed maxKVRecordBytes.
+		record.ClickList = append(record.ClickList, api.ClickEvent{EventID: snsMessageID, Link: link, ClickedAt: t})
+		if b, err := json.Marshal(record); err != nil || len(b) > maxKVRecordBytes {
+			record.ClickList = record.ClickList[:len(record.ClickList)-1]
 		}
 		if record.LastClickedAt == nil || t.After(*record.LastClickedAt) {
 			record.LastClickedAt = &t
