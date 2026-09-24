@@ -32,3 +32,9 @@ jobs:
 
       - name: Lint
         uses: golangci/golangci-lint-action@v6.5.2  # v6.5.2
+        with:
+          # Build golangci-lint from source using the Go toolchain set up
+          # above (go-version: stable = 1.26+). The pre-built release binaries
+          # are compiled with an older Go and refuse to analyse a go 1.26 module.
+          install-mode: goinstall
+          version: latest

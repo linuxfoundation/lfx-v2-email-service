@@ -27,8 +27,10 @@ const maxKVRecordBytes = 50_000
 
 // maxClickEventIDs caps the ClickEventIDs dedup list. Each entry is a 36-byte
 // UUID; 500 entries ≈ 18 KB, well within the KV size budget. Dedup tracking
-// is separated from the full ClickList so that replay protection remains
-// accurate even after the history list reaches the KV size limit.
+// is separated from the full ClickList so that replay protection is preserved
+// as long as the KV record has headroom. Both lists are enforced together
+// against maxKVRecordBytes (history rolled back first, dedup ID rolled back
+// last), so neither collection can overflow the bucket independently.
 const maxClickEventIDs = 500
 
 // snsEnvelope is the outer SNS notification wrapper around the SES event JSON.
@@ -310,18 +312,31 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		t := parseTimestamp(ts)
 		record.Clicked = true
 		record.ClickCount++
-		// Always record the SNS MessageId for replay dedup. ClickEventIDs is
-		// bounded to maxClickEventIDs entries (each ~36 bytes) so it fits
-		// comfortably within the KV record size limit.
+		// Enforce a single KV size budget across both the dedup list and the
+		// history list. We tentatively add both, then roll back in priority
+		// order: history first (large), dedup ID last (small).
+		//
+		// Dedup guarantee: once both collections are at capacity (the record
+		// has consumed its full KV size budget), subsequent unique click
+		// MessageIds are not stored. A redelivery of such a message will pass
+		// the dedup check and re-increment ClickCount. This is an explicit
+		// bounded-dedup-window trade-off; storing dedup state outside this
+		// KV record would require a separate key and is left to a follow-up.
+		idAdded := false
 		if len(record.ClickEventIDs) < maxClickEventIDs {
 			record.ClickEventIDs = append(record.ClickEventIDs, snsMessageID)
+			idAdded = true
 		}
-		// Append to the history list only while the full record stays within
-		// the KV bucket size limit. Tentatively append, marshal, and roll
-		// back if the serialised size would exceed maxKVRecordBytes.
 		record.ClickList = append(record.ClickList, api.ClickEvent{EventID: snsMessageID, Link: link, ClickedAt: t})
 		if b, err := json.Marshal(record); err != nil || len(b) > maxKVRecordBytes {
+			// History entry pushed the record over the limit — roll it back.
 			record.ClickList = record.ClickList[:len(record.ClickList)-1]
+			if idAdded {
+				// Check again: if just the ID still overflows, roll it back too.
+				if b2, err2 := json.Marshal(record); err2 != nil || len(b2) > maxKVRecordBytes {
+					record.ClickEventIDs = record.ClickEventIDs[:len(record.ClickEventIDs)-1]
+				}
+			}
 		}
 		if record.LastClickedAt == nil || t.After(*record.LastClickedAt) {
 			record.LastClickedAt = &t
