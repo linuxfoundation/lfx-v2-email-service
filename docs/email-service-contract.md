@@ -195,7 +195,7 @@ Published once per unique SNS `MessageId`. A replayed SQS delivery of the same O
 | `click_count` | int | Cumulative click count after this event. |
 | `clicked_at` | RFC3339 UTC | Timestamp of **this** SES CLICK event. |
 
-Published once per unique SNS `MessageId`. Replays are silently dropped.
+Published once per unique SNS `MessageId` **within the bounded deduplication window** (up to 500 unique click MessageIds per record, and subject to the KV record size limit). Once that window is exhausted, SQS replays of later clicks are not detected and will re-increment `click_count` and emit an additional push. Callers that need guaranteed at-most-once processing should deduplicate by `email_id` + `link` on their side.
 
 ### `EmailFailedEvent` (`api.EmailFailedSubject`)
 

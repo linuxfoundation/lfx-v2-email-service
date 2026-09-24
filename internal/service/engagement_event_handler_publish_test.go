@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -369,4 +370,169 @@ func TestEngagementEventHandler_Handle_Deduplication_SameMessageID(t *testing.T)
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// KV byte-budget boundary tests
+//
+// These tests exercise the three distinct outcomes of the byte-budget guard in
+// applyEngagementEvent when the record is near the 50 KB soft ceiling:
+//
+//   1. Only the ClickList history entry is rolled back (dedup ID fits).
+//   2. Both the ClickList entry and the ClickEventID are rolled back.
+//   3. The bounded-dedup-window: once no ID can be stored, replays are not
+//      detected and re-increment ClickCount (documented trade-off).
+//
+// The subject field is used to pad the record to a predictable size. No
+// omitempty tag is applied to it so it is always serialised.
+// ---------------------------------------------------------------------------
+
+// makeClickSNSMsg builds an SQS message wrapping a Click SES event with a
+// caller-supplied SNS MessageId and link, bypassing the sqsMsg helper's fixed
+// MessageId "sns-msg-1".
+func makeClickSNSMsg(t *testing.T, snsID, link, emailID, groupID, timestamp string) types.Message {
+	t.Helper()
+	sesMsg := map[string]any{
+		"eventType": "Click",
+		"mail": map[string]any{
+			"headers": []map[string]any{
+				{"name": "X-LFX-TRACKING-ID", "value": groupID + "/" + emailID},
+			},
+		},
+		"click": map[string]any{
+			"timestamp": timestamp,
+			"link":      link,
+			"ipAddress": "1.2.3.4",
+			"userAgent": "Mozilla/5.0",
+		},
+	}
+	inner, err := json.Marshal(sesMsg)
+	if err != nil {
+		t.Fatalf("makeClickSNSMsg: marshal inner: %v", err)
+	}
+	outer, err := json.Marshal(map[string]string{"MessageId": snsID, "Message": string(inner)})
+	if err != nil {
+		t.Fatalf("makeClickSNSMsg: marshal outer: %v", err)
+	}
+	body := string(outer)
+	return types.Message{Body: &body}
+}
+
+// TestEngagementEventHandler_Click_HistoryRolledBackAtSizeLimit verifies that
+// when a new ClickList entry would push the record over the 50 KB soft ceiling
+// but the 36-byte dedup ID alone fits, only the history entry is rolled back.
+// ClickCount and the dedup ID are still recorded.
+func TestEngagementEventHandler_Click_HistoryRolledBackAtSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	// Subject padded to ~48 000 chars gives a base record of ~48 200 bytes after
+	// Clicked/ClickCount modifications — well under the 50 KB ceiling.
+	// A 2 000-char link entry adds ~2 000 bytes and would push the total past 50 KB,
+	// while the ~31-byte dedup ID alone keeps the record comfortably below the limit.
+	const subjectLen = 48_000
+	const longLinkLen = 2_000
+
+	store := mocks.NewTrackingStore()
+	store.PutRecord(testEmailID, api.EmailRecipientRecord{
+		EmailID: testEmailID,
+		GroupID: testGroupID,
+		Subject: strings.Repeat("x", subjectLen),
+	})
+
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+	longLink := strings.Repeat("l", longLinkLen)
+	msg := makeClickSNSMsg(t, "sns-big-link", longLink, testEmailID, testGroupID, testTimestamp)
+	require.NoError(t, h.Handle(context.Background(), msg))
+
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+
+	assert.Equal(t, 1, record.ClickCount, "ClickCount must be incremented")
+	assert.Len(t, record.ClickEventIDs, 1, "dedup ID must be retained when it fits within the size budget")
+	assert.Empty(t, record.ClickList, "ClickList entry must be rolled back to keep the record within the KV limit")
+
+	// The handler still publishes: the click was counted.
+	require.Len(t, pub.calls, 1)
+	assert.Equal(t, api.EmailLinkClickedSubject, pub.calls[0].subject)
+
+	// Final serialised record must fit within the KV bucket hard limit (65 536 bytes).
+	b, err := json.Marshal(record)
+	require.NoError(t, err)
+	assert.Less(t, len(b), 65_536, "serialised record must remain within the KV bucket hard limit")
+}
+
+// TestEngagementEventHandler_Click_IDRolledBackWhenRecordFull verifies that when
+// the base record is already at or above the 50 KB soft ceiling, both the ClickList
+// entry and the dedup ID are rolled back. ClickCount is still incremented because
+// that is a scalar increment that occurs unconditionally before the size check.
+func TestEngagementEventHandler_Click_IDRolledBackWhenRecordFull(t *testing.T) {
+	t.Parallel()
+
+	// A 49 800-char subject produces a base record of ~50 000 bytes — at or just
+	// above the soft ceiling — so even the 31-byte dedup ID would overflow it.
+	const subjectLen = 49_800
+
+	store := mocks.NewTrackingStore()
+	store.PutRecord(testEmailID, api.EmailRecipientRecord{
+		EmailID: testEmailID,
+		GroupID: testGroupID,
+		Subject: strings.Repeat("x", subjectLen),
+	})
+
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+	msg := makeClickSNSMsg(t, "sns-overflow", "https://example.com/link", testEmailID, testGroupID, testTimestamp)
+	require.NoError(t, h.Handle(context.Background(), msg))
+
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+
+	assert.Equal(t, 1, record.ClickCount, "ClickCount must be incremented")
+	assert.Empty(t, record.ClickEventIDs, "dedup ID must be rolled back when even the ID alone overflows the budget")
+	assert.Empty(t, record.ClickList, "ClickList must be empty")
+
+	// The handler still publishes the counted click.
+	require.Len(t, pub.calls, 1)
+	assert.Equal(t, api.EmailLinkClickedSubject, pub.calls[0].subject)
+}
+
+// TestEngagementEventHandler_Click_BoundedDedupWindow verifies the documented
+// bounded-dedup-window behaviour: once the KV record is full and no dedup ID can
+// be stored, a replay of the same SNS MessageId passes the dedup check and
+// re-increments ClickCount and emits an additional NATS push. This test
+// intentionally asserts the replay IS counted to confirm the documented trade-off.
+func TestEngagementEventHandler_Click_BoundedDedupWindow(t *testing.T) {
+	t.Parallel()
+
+	const subjectLen = 49_800
+
+	store := mocks.NewTrackingStore()
+	store.PutRecord(testEmailID, api.EmailRecipientRecord{
+		EmailID: testEmailID,
+		GroupID: testGroupID,
+		Subject: strings.Repeat("x", subjectLen),
+	})
+
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+	msg := makeClickSNSMsg(t, "sns-overflow", "https://example.com/link", testEmailID, testGroupID, testTimestamp)
+
+	// First delivery.
+	require.NoError(t, h.Handle(context.Background(), msg))
+	// SQS replay of the same message — dedup ID was not stored, so it is not detected.
+	require.NoError(t, h.Handle(context.Background(), msg))
+
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+
+	// Both the original and the replay increment ClickCount: this is the
+	// bounded-dedup-window trade-off documented in the contract.
+	assert.Equal(t, 2, record.ClickCount,
+		"replay must increment ClickCount once the dedup state is exhausted (bounded window)")
+	assert.Len(t, pub.calls, 2,
+		"each counted click emits a NATS notification, including the undetected replay")
 }

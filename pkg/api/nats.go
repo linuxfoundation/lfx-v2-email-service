@@ -129,11 +129,14 @@ type EmailRecipientRecord struct {
 	LastOpenedAt *time.Time  `json:"last_opened_at,omitempty"`
 	Clicked      bool        `json:"clicked"`
 	ClickCount   int         `json:"click_count"`
-	// ClickEventIDs holds the SNS MessageId of every counted click for
-	// replay deduplication. It is bounded separately from ClickList so that
-	// dedup remains accurate even after the history list reaches the KV size
-	// limit. Populated from this version of the service onward; older records
-	// fall back to ClickList for dedup.
+	// ClickEventIDs holds the SNS MessageId for replay deduplication of CLICK
+	// events. It is capped at 500 entries and, together with ClickList, must
+	// keep the total serialised record under the KV bucket size limit
+	// (~50 KB soft ceiling). Once both collections are at capacity, new click
+	// MessageIds cannot be stored and SQS replays of those later clicks will
+	// re-increment ClickCount — this is an explicit bounded-dedup-window
+	// trade-off. Populated from this version of the service onward; older
+	// records fall back to ClickList for dedup.
 	ClickEventIDs []string     `json:"click_event_ids,omitempty"`
 	ClickList     []ClickEvent `json:"click_list,omitempty"`
 	LastClickedAt *time.Time   `json:"last_clicked_at,omitempty"`

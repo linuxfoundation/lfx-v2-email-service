@@ -50,10 +50,14 @@ Supported SES event types:
 | `BOUNCE` | Sets `failed=true` and `failed_at`. Single-fire; subsequent events are ignored. | `api.EmailFailedSubject` (reason: `"bounce"`) |
 | `COMPLAINT` | Sets `failed=true` and `failed_at`. Single-fire; subsequent events are ignored. | `api.EmailFailedSubject` (reason: `"complaint"`) |
 
-OPEN and CLICK events are deduplicated by SNS `MessageId`. A replayed SQS delivery of the same
-event ID is silently dropped: the KV record is not modified and no NATS push is emitted. This
-prevents duplicate notifications when SQS redelivers a message after a transient visibility
-timeout.
+OPEN and CLICK events are deduplicated by SNS `MessageId` within a bounded
+deduplication window. A replayed SQS delivery of the same OPEN event is always
+silently dropped: the KV record is not modified and no NATS push is emitted. For
+CLICK events, replays are dropped as long as the SNS MessageId fits within the
+`click_event_ids` dedup list (capped at 500 entries and by the KV record size
+limit). Once that window is exhausted, replays of later clicks are not detected
+and will re-increment `ClickCount` and emit an additional NATS push. See
+`docs/email-service-contract.md` for the full deduplication contract.
 
 DELIVERY, BOUNCE, and COMPLAINT are single-fire: once the corresponding boolean (`delivered`,
 `failed`) is set, subsequent events of the same type are ignored and not re-published.
