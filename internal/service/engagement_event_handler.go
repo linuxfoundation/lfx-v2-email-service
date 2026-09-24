@@ -413,16 +413,26 @@ func parseTimestamp(s string) time.Time {
 // redactLink strips the query string and fragment from a URL to avoid storing
 // or publishing tokens, invite keys, or signed parameters that may be present
 // in SES tracked URLs. The scheme, host, and path are preserved so callers
-// can still identify which page was visited. If the URL cannot be parsed, the
-// original value is returned unchanged.
+// can still identify which page was visited.
+//
+// The function fails closed: if url.Parse returns an error, or if the parsed
+// URL has no host (e.g. a relative or malformed value), the query and fragment
+// are stripped by simple string cutting rather than returning the raw value
+// unchanged. This ensures sensitive components are never propagated even for
+// inputs that the url package cannot fully parse.
 func redactLink(raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return raw
+	if err == nil && u.Host != "" {
+		u.RawQuery = ""
+		u.Fragment = ""
+		return u.String()
 	}
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String()
+	// Fallback: strip from the first '?' or '#', whichever comes first.
+	s := raw
+	if i := strings.IndexAny(s, "?#"); i != -1 {
+		s = s[:i]
+	}
+	return s
 }
 
 // extractEmailID finds the X-LFX-TRACKING-ID header (format: group_id/email_id)
