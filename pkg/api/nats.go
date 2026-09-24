@@ -201,11 +201,15 @@ type EmailOpenedEvent struct {
 
 // EmailLinkClickedEvent is the payload published to EmailLinkClickedSubject
 // when a tracked link in a sent email is clicked. Link is the destination URL
-// that was clicked. ClickCount reflects the total number of link clicks
-// recorded for this email_id, including the current one.
+// with query string and fragment stripped (sensitive tokens are redacted).
+// ClickCount reflects the total number of link clicks recorded for this
+// email_id, including the current one. EventID is the SNS MessageId of the
+// SES Click event; consumers should use it as the stable deduplication key
+// for at-most-once semantics.
 type EmailLinkClickedEvent struct {
 	EmailID    string    `json:"email_id"`
 	GroupID    string    `json:"group_id,omitempty"`
+	EventID    string    `json:"event_id"`
 	Link       string    `json:"link"`
 	ClickCount int       `json:"click_count"`
 	ClickedAt  time.Time `json:"clicked_at"`

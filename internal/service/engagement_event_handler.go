@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -152,12 +153,13 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 	// (i.e. the event was not a deduplicated replay); publishing is skipped for
 	// replays to avoid duplicate downstream notifications.
 	var (
-		capturedGroupID    string
-		capturedAt         time.Time
-		capturedOpenCount  int
-		capturedClickLink  string
-		capturedClickCount int
-		eventApplied       bool
+		capturedGroupID      string
+		capturedAt           time.Time
+		capturedOpenCount    int
+		capturedClickLink    string
+		capturedClickCount   int
+		capturedClickEventID string
+		eventApplied         bool
 	)
 
 	err := h.store.UpdateRecord(ctx, emailID, func(record *api.EmailRecipientRecord) {
@@ -188,10 +190,11 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 			var ts string
 			if event.Click != nil {
 				ts = event.Click.Timestamp
-				capturedClickLink = event.Click.Link
+				capturedClickLink = redactLink(event.Click.Link)
 			}
 			capturedAt = parseTimestamp(ts)
 			capturedClickCount = record.ClickCount
+			capturedClickEventID = env.MessageID
 		case "BOUNCE":
 			var ts string
 			if event.Bounce != nil {
@@ -214,7 +217,7 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 	slog.DebugContext(ctx, "ses engagement event applied", "event_type", strings.ToLower(eventType))
 
 	if eventApplied && h.publisher != nil {
-		h.publishEngagementEvent(ctx, emailID, eventType, capturedGroupID, capturedAt, capturedOpenCount, capturedClickCount, capturedClickLink)
+		h.publishEngagementEvent(ctx, emailID, eventType, capturedGroupID, capturedAt, capturedOpenCount, capturedClickCount, capturedClickLink, capturedClickEventID)
 	}
 	return nil
 }
@@ -227,7 +230,7 @@ func (h *EngagementEventHandler) publishEngagementEvent(
 	emailID, eventType, groupID string,
 	at time.Time,
 	openCount, clickCount int,
-	clickLink string,
+	clickLink, clickEventID string,
 ) {
 	var subject string
 	var payload any
@@ -241,7 +244,7 @@ func (h *EngagementEventHandler) publishEngagementEvent(
 		payload = api.EmailOpenedEvent{EmailID: emailID, GroupID: groupID, OpenCount: openCount, OpenedAt: at}
 	case "CLICK":
 		subject = api.EmailLinkClickedSubject
-		payload = api.EmailLinkClickedEvent{EmailID: emailID, GroupID: groupID, Link: clickLink, ClickCount: clickCount, ClickedAt: at}
+		payload = api.EmailLinkClickedEvent{EmailID: emailID, GroupID: groupID, EventID: clickEventID, Link: clickLink, ClickCount: clickCount, ClickedAt: at}
 	case "BOUNCE":
 		subject = api.EmailFailedSubject
 		payload = api.EmailFailedEvent{EmailID: emailID, GroupID: groupID, Reason: "bounce", FailedAt: at}
@@ -307,11 +310,16 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		var ts, link string
 		if event.Click != nil {
 			ts = event.Click.Timestamp
-			link = event.Click.Link
+			// Strip query and fragment from the link before storage to avoid
+			// persisting tokens, invite keys, or signed parameters that may
+			// be present in tracked URLs.
+			link = redactLink(event.Click.Link)
 		}
 		t := parseTimestamp(ts)
 		record.Clicked = true
 		record.ClickCount++
+		// Tentatively apply all click fields (including LastClickedAt) before
+		// the size check so the budget covers the full mutation.
 		// Enforce a single KV size budget across both the dedup list and the
 		// history list. We tentatively add both, then roll back in priority
 		// order: history first (large), dedup ID last (small).
@@ -322,6 +330,14 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		// the dedup check and re-increment ClickCount. This is an explicit
 		// bounded-dedup-window trade-off; storing dedup state outside this
 		// KV record would require a separate key and is left to a follow-up.
+		var prevLastClickedAt *time.Time
+		if record.LastClickedAt != nil {
+			cp := *record.LastClickedAt
+			prevLastClickedAt = &cp
+		}
+		if record.LastClickedAt == nil || t.After(*record.LastClickedAt) {
+			record.LastClickedAt = &t
+		}
 		idAdded := false
 		if len(record.ClickEventIDs) < maxClickEventIDs {
 			record.ClickEventIDs = append(record.ClickEventIDs, snsMessageID)
@@ -335,11 +351,11 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 				// Check again: if just the ID still overflows, roll it back too.
 				if b2, err2 := json.Marshal(record); err2 != nil || len(b2) > maxKVRecordBytes {
 					record.ClickEventIDs = record.ClickEventIDs[:len(record.ClickEventIDs)-1]
+					// Also roll back LastClickedAt so a fully-over-budget click
+					// leaves no trace on the record beyond ClickCount.
+					record.LastClickedAt = prevLastClickedAt
 				}
 			}
-		}
-		if record.LastClickedAt == nil || t.After(*record.LastClickedAt) {
-			record.LastClickedAt = &t
 		}
 		return true
 	case "DELIVERY":
@@ -392,6 +408,21 @@ func parseTimestamp(s string) time.Time {
 		return time.Now().UTC()
 	}
 	return t.UTC()
+}
+
+// redactLink strips the query string and fragment from a URL to avoid storing
+// or publishing tokens, invite keys, or signed parameters that may be present
+// in SES tracked URLs. The scheme, host, and path are preserved so callers
+// can still identify which page was visited. If the URL cannot be parsed, the
+// original value is returned unchanged.
+func redactLink(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 // extractEmailID finds the X-LFX-TRACKING-ID header (format: group_id/email_id)

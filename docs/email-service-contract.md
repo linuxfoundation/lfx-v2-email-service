@@ -191,11 +191,12 @@ Published once per unique SNS `MessageId`. A replayed SQS delivery of the same O
 | --- | --- | --- |
 | `email_id` | string | Per-send UUID. |
 | `group_id` | string | Group ID. |
-| `link` | string | URL that was clicked. |
+| `event_id` | string | SNS `MessageId` of this SES CLICK event. Use as the deduplication key for at-most-once processing (see note below). |
+| `link` | string | URL that was clicked, with query string and fragment stripped to avoid exposing tokens or signed parameters. |
 | `click_count` | int | Cumulative click count after this event. |
 | `clicked_at` | RFC3339 UTC | Timestamp of **this** SES CLICK event. |
 
-Published once per unique SNS `MessageId` **within the bounded deduplication window** (up to 500 unique click MessageIds per record, and subject to the KV record size limit). Once that window is exhausted, SQS replays of later clicks are not detected and will re-increment `click_count` and emit an additional push. Callers that need guaranteed at-most-once processing should deduplicate by `email_id` + `link` on their side.
+Published once per unique SNS `MessageId` **within the bounded deduplication window** (up to 500 unique click MessageIds per record, and subject to the KV record size limit). Once that window is exhausted, SQS replays of later clicks are not detected and will re-increment `click_count` and emit an additional push. Consumers that need guaranteed at-most-once processing should deduplicate on `event_id`. Note: `email_id` + `link` is **not** a valid deduplication key because a recipient may legitimately click the same link multiple times, each producing a distinct `event_id`.
 
 ### `EmailFailedEvent` (`api.EmailFailedSubject`)
 
