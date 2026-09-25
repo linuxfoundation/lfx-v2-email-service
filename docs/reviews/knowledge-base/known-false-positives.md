@@ -7,10 +7,11 @@ Findings that match any pattern below MUST be dropped, regardless of which sourc
 file, bot, human) originally produced them. This list is the floor — even a quotable KB pattern
 does not survive if it matches a known false positive.
 
-Used by the `lfx-skills:lfx-email-service-learnings-reviewer` subagent (Step 4). Each entry was
+Used by the `/email-service-learnings-reviewer` skill (Step 4). Each entry was
 explicitly decided as noise-on-this-repo from the merged-PR corpus (PRs #1–#8), where the
 maintainer either declined the suggestion or it conflicts with an intentional design choice
-documented in the service docs.
+documented in the service docs, or was carried over from the retired repo conventions reviewer
+as a standing suppression.
 
 ---
 
@@ -111,6 +112,23 @@ downgraded to DEBUG or sampled to reduce volume.
 very high volume, this is fine."). These threads were left unresolved by choice on PR #6.
 
 **Source:** PR #6 `internal/infrastructure/sqs/poller.go:94` and `engagement_event_handler.go:104,136` — andrest50: "It's not very high volume, this is fine." / "This is fine."
+
+### Missing Goa / HTTP gateway / OpenFGA / indexer / template-engine surface flagged as a gap
+
+**Pattern matched:** any finding that this service lacks a Goa design, an HTTP API gateway
+route, an OpenFGA type or tuple emission, indexer publishing, or a template/rendering layer,
+framed as something the change should have added — unless the loaded email-service docs say
+the change should own that behavior.
+
+**Why false:** this is a thin NATS request/reply relay for pre-rendered content, not a Goa
+resource service; those surfaces are deliberately absent (see `CLAUDE.md` **Repo Role** and
+**Key design decisions**, and the `email-service-dev` skill). Conventions from other LFX repos
+do not apply here by default.
+
+**Source:** carried over from the retired `email-service-code-reviewer` skill (a standing
+suppression, not a PR comment): "Do not flag missing Goa, HTTP gateway, OpenFGA, indexer,
+newsletter rendering, or template behavior unless the loaded email-service docs say the change
+should own that behavior."
 
 ---
 
