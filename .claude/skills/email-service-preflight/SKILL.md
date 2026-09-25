@@ -2,9 +2,9 @@
 name: email-service-preflight
 description: >
   Repo-local mechanical pre-PR pipeline for lfx-v2-email-service. Runs Go
-  working-tree checks, license headers, formatting, lint, repo linters
-  (MegaLinter parity), build, tests, protected-file reporting, commit
-  verification, and PR change summary. Run after /email-service-pr-readiness.
+  working-tree checks, license headers, formatting, lint, build, tests,
+  protected-file reporting, commit verification, and PR change summary. Run
+  after /email-service-pr-readiness.
 allowed-tools: Bash, Read, Glob, Grep, Edit, Write, AskUserQuestion
 ---
 
@@ -47,8 +47,7 @@ Evaluate:
 - Uncommitted changes: identify them before running formatters. Ask whether to
   continue if the changes look unrelated to the PR.
 - No commits ahead of `<base>`: report that there is no branch diff to validate.
-- Commit messages missing `LFXV2-`: note it; `/email-service-pr-readiness`, which runs
-  first, owns that check. Do not re-audit PR shape here.
+- Commit messages missing `LFXV2-`: flag for the PR readiness follow-up.
 - Commits missing `Signed-off-by:`: flag before continuing.
 
 Do not revert or discard any changes.
@@ -75,22 +74,9 @@ Run:
 make license-check
 ```
 
-Note: `make license-check` only validates Go (`*.go`) files. CI's separate License Header
-Check (`.github/workflows/license-header-check.yml`, the shared `lfx-public-workflows` job)
-also covers `Makefile`, `Dockerfile`, `.gitignore`, `go.mod`, `*.sh`, `*.txt`, `*.yaml`,
-`*.yml`, `*.toml`, and `*.sql`, looking for the copyright line in the first 4 lines. It does
-not check Markdown. Mirror it for the changed files:
-
-```bash
-for f in $(git diff --name-only <base>...HEAD -- Makefile Dockerfile .gitignore go.mod '*.sh' '*.txt' '*.yaml' '*.yml' '*.toml' '*.sql'); do
-  [ -f "$f" ] && head -4 "$f" | grep -q 'Copyright The Linux Foundation and each contributor to LFX.' || echo "missing header: $f"
-done
-```
-
-Markdown headers are a repo convention, not CI-enforced: when adding or editing Markdown
-(other than the root `CLAUDE.md`, `AGENTS.md`, `README.md`, and `SECURITY.md`, which carry
-none), add the HTML-comment header manually and report changed `*.md` files that lack it as
-`WARN`.
+Note: `make license-check` only validates Go (`*.go`) files. It does not check
+Markdown or other file types — CI's separate License Header Check covers those.
+When adding or editing Markdown, add the HTML-comment header manually.
 
 In default mode, add the standard two-line header only when the file type and
 placement are clear. In dry-run mode, report missing headers without editing.
@@ -121,26 +107,6 @@ make lint
 
 This repo expects `golangci-lint run ./...`. If `golangci-lint` is missing,
 report the missing tool and do not replace it with a weaker lint result.
-
-## Check 3b: Repo Linters (MegaLinter parity)
-
-CI also runs MegaLinter (`.github/workflows/mega-linter.yml`, Go flavor, configured by
-`.mega-linter.yml`) over the whole repo: markdownlint, yamllint (`.yamllint`), `helm lint` on
-`charts/lfx-v2-email-service`, actionlint, and the security scanners. Mirror it:
-
-- Preferred, exact parity: `npx mega-linter-runner --flavor go` from the repo root. It needs
-  Docker, so per **Modes** stop and ask before running it.
-- Without Docker, run the deterministic subset on the changed files and report the rest as
-  `WARN - left to CI MegaLinter`:
-
-```bash
-git diff --name-only <base>...HEAD -- '*.md' | xargs -r npx markdownlint-cli2
-git diff --name-only <base>...HEAD -- '*.yaml' '*.yml' | xargs -r yamllint -c .yamllint
-git diff --quiet <base>...HEAD -- charts/ || helm lint charts/lfx-v2-email-service
-git diff --quiet <base>...HEAD -- .github/workflows/ || actionlint
-```
-
-Report a missing tool by name; do not substitute a weaker check for it.
 
 ## Check 4: Build
 
@@ -247,7 +213,6 @@ Working tree      PASS|FAIL|WARN - detail
 License headers   PASS|FAIL|WARN - detail
 Formatting        PASS|FAIL|WARN - detail
 Lint              PASS|FAIL|WARN - detail
-Repo linters      PASS|FAIL|WARN - detail
 Build             PASS|FAIL|WARN - detail
 Tests             PASS|FAIL|WARN - detail
 Protected files   PASS|FAIL|WARN - detail
@@ -258,9 +223,9 @@ READY FOR PR | READY WITH NOTES | ISSUES FOUND
 
 Verdict rules:
 
-- `ISSUES FOUND`: any failed license, lint, repo-linter, build, test, DCO, or GPG check.
+- `ISSUES FOUND`: any failed license, lint, build, test, DCO, or GPG check.
 - `READY WITH NOTES`: checks pass but uncommitted files, protected files, missing
-  JIRA references, repo linters left to CI, or dry-run-only findings remain to document.
+  JIRA references, or dry-run-only findings remain to document.
 - `READY FOR PR`: all checks pass with no remaining notes.
 
 If default mode changed files, end by listing the modified files and asking the

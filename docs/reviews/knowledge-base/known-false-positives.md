@@ -3,9 +3,10 @@
 
 # Known false positives — applied LAST in every knowledge-base review pass
 
-Findings that match any pattern below MUST be dropped, regardless of which source (KB pattern
-file, bot, human) originally produced them. This list is the floor — even a quotable KB pattern
-does not survive if it matches a known false positive.
+Knowledge-base reviewer findings that match any pattern below MUST be dropped, whichever KB
+pattern file produced them. This list is the floor of that reviewer's pass — even a quotable KB
+pattern does not survive if it matches a known false positive. It does not suppress findings of
+the general or security reviewers, or PR feedback from bots and humans.
 
 Used by the `/email-service-learnings-reviewer` skill (Step 4), and only by it: the general and
 security reviewers of the pre-PR round do not read this file, so it filters knowledge-base

@@ -11,7 +11,7 @@ Development guide for Claude instances working on this service.
 >
 > - `/email-service-dev` auto-attaches on Go, chart, and service-owned doc paths. It owns this repo's Go conventions, NATS request/reply handler shape, public `pkg/api` contract, SMTP/SES/SQS tracking behavior, KV tracking rules, tests, formatting, linting, and license headers.
 > - `/email-service-pr-readiness` checks PR shape only: branch, JIRA, conventional commits, rebase status, DCO + GPG signing, diff size, and protected files.
-> - `/email-service-preflight` runs the mechanical Go pre-PR pipeline: working tree, license headers, formatting, lint, repo linters (MegaLinter parity), build, tests, protected files, commit verification, and change summary.
+> - `/email-service-preflight` runs the mechanical Go pre-PR pipeline: working tree, license headers, formatting, lint, build, tests, protected files, commit verification, and change summary.
 > - `/email-service-learnings-reviewer` is the repo-owned review knowledge-base brain (`docs/reviews/knowledge-base/`); it is the KB review skill named under **Pre-PR review** below and is loaded by `/lfx-skills:lfx-pre-pr-review`, not invoked by hand. General quality and this repo's written conventions are covered in that same round by the central general reviewer.
 >
 > If the plugin is missing, install with `/plugin marketplace add linuxfoundation/lfx-skills` then `/plugin install lfx-skills@lfx-skills`.
@@ -140,16 +140,21 @@ make helm-restart       # kubectl rollout restart the deployment
 ## Pre-PR review
 
 > **IMPORTANT — follow this exactly.** When the implementation is complete
-> and committed and you are about to open a PR, load
-> `/lfx-skills:lfx-pre-pr-review` with the Skill tool and follow it. It runs
-> **one** review round of the whole branch — general, security and
-> knowledge-base reviewers in parallel — once, right before the PR. Two rules
-> bear repeating here: **all accepted findings from that round land in
-> exactly one fix commit** (none if there is nothing to fix); and **once the
-> PR is open there are no local reviews of any kind** — iterate only on the
-> PR's bot and human feedback, still running tests and checks. Do not work
-> from memory: **reload the skill before each step** of the round — before
-> launching the reviewers, before the fix commit, before opening the PR.
+> and committed and you are about to open a PR:
+>
+> 1. **Review once.** Load `/lfx-skills:lfx-pre-pr-review` with the Skill
+>    tool and follow it. It runs **one** review round of the whole branch —
+>    general, security and knowledge-base reviewers in parallel — and lands
+>    **all accepted findings from that round in exactly one fix commit**
+>    (none if there is nothing to fix). Do not work from memory: **reload the
+>    skill before each step** of the round — before launching the reviewers
+>    and before the fix commit.
+> 2. **Preflight.** Run the `Preflight` value below and make it pass. It is
+>    deterministic checks, not a review: fix what it reports in its own
+>    commit(s), as many as it takes, and rerun it — never the reviewers.
+> 3. **Open the PR.** From then on there are **no local reviews of any
+>    kind** — iterate only on the PR's bot and human feedback, still running
+>    tests and checks.
 
 - KB review skill: `/email-service-learnings-reviewer`
 - Preflight: `/email-service-pr-readiness origin/main`, then `/email-service-preflight origin/main --dry-run`
