@@ -536,3 +536,81 @@ func TestEngagementEventHandler_Click_BoundedDedupWindow(t *testing.T) {
 	assert.Len(t, pub.calls, 2,
 		"each counted click emits a NATS notification, including the undetected replay")
 }
+
+// ---------------------------------------------------------------------------
+// redactLink integration — stored KV value and published NATS event must
+// never retain query or fragment components from SES tracked URLs.
+// ---------------------------------------------------------------------------
+
+// TestEngagementEventHandler_Click_LinkRedaction_StoredAndPublished confirms
+// that when a Click event arrives with a URL that contains a query string and
+// a fragment, both the record persisted to the KV store and the NATS publish
+// payload have those components stripped.
+func TestEngagementEventHandler_Click_LinkRedaction_StoredAndPublished(t *testing.T) {
+	t.Parallel()
+
+	// A representative SES-style tracked URL with a signed token and a
+	// fragment — both must be absent from every output.
+	const rawLink = "https://click.example.com/r?token=s3cr3t&uid=abc123#section"
+	const wantLink = "https://click.example.com/r"
+
+	store := mocks.NewTrackingStore()
+	seedRecord(store)
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+	msg := makeClickSNSMsg(t, "sns-redact-1", rawLink, testEmailID, testGroupID, testTimestamp)
+	require.NoError(t, h.Handle(context.Background(), msg))
+
+	// 1. KV record must store the redacted link.
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok, "record must be persisted")
+	require.Len(t, record.ClickList, 1, "one ClickList entry expected")
+	assert.Equal(t, wantLink, record.ClickList[0].Link,
+		"stored ClickList link must have query and fragment stripped")
+	assert.NotContains(t, record.ClickList[0].Link, "s3cr3t",
+		"token must not appear in stored link")
+
+	// 2. NATS publish payload must also carry the redacted link.
+	require.Len(t, pub.calls, 1, "exactly one NATS publish expected")
+	var published api.EmailLinkClickedEvent
+	require.NoError(t, json.Unmarshal(pub.calls[0].data, &published))
+	assert.Equal(t, wantLink, published.Link,
+		"published link must have query and fragment stripped")
+	assert.NotContains(t, published.Link, "s3cr3t",
+		"token must not appear in published link")
+}
+
+// TestEngagementEventHandler_Click_LinkRedaction_RelativeURLFallback covers
+// the fail-closed fallback path: a relative or host-less URL must have its
+// query stripped even though url.Parse cannot return a usable Host.
+func TestEngagementEventHandler_Click_LinkRedaction_RelativeURLFallback(t *testing.T) {
+	t.Parallel()
+
+	const rawLink = "/track/open?token=leaked&ref=email"
+	const wantLink = "/track/open"
+
+	store := mocks.NewTrackingStore()
+	seedRecord(store)
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+	msg := makeClickSNSMsg(t, "sns-redact-relative", rawLink, testEmailID, testGroupID, testTimestamp)
+	require.NoError(t, h.Handle(context.Background(), msg))
+
+	// KV record must store the redacted link.
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+	require.Len(t, record.ClickList, 1)
+	assert.Equal(t, wantLink, record.ClickList[0].Link,
+		"fallback redaction must strip query from relative URL")
+	assert.NotContains(t, record.ClickList[0].Link, "leaked")
+
+	// NATS payload must also be redacted.
+	require.Len(t, pub.calls, 1)
+	var published api.EmailLinkClickedEvent
+	require.NoError(t, json.Unmarshal(pub.calls[0].data, &published))
+	assert.Equal(t, wantLink, published.Link,
+		"fallback redaction must strip query from published relative URL")
+	assert.NotContains(t, published.Link, "leaked")
+}

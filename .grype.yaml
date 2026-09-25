@@ -6,12 +6,6 @@
 # Each entry documents why the suppression is safe and when to revisit.
 
 ignore:
-  # google.golang.org/grpc v1.84.0 — DoS via malformed compressed message.
-  # Fixed in v1.82.2 / v1.83.2 / v1.85.0-dev (no stable v1.84.x patch yet).
-  # We are pinned here because grpc v1.83.x pulls x/crypto v0.55.0 (HIGH CVEs
-  # GO-2026-6354/6355); revisit when grpc v1.85.0 stable is released.
-  - vulnerability: GHSA-2v4p-qf9q-27wj
-
   # go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.20.0.
   # Fixed in v0.21.0, but bumping the entire OTEL exporter family introduces a
   # "conflicting Schema URL" panic in TestSetupOTelSDKSmoke (schema 1.43.0 vs
