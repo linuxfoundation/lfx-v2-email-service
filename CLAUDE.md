@@ -11,7 +11,7 @@ Development guide for Claude instances working on this service.
 >
 > - `/email-service-dev` auto-attaches on Go, chart, and service-owned doc paths. It owns this repo's Go conventions, NATS request/reply handler shape, public `pkg/api` contract, SMTP/SES/SQS tracking behavior, KV tracking rules, tests, formatting, linting, and license headers.
 > - `/email-service-pr-readiness` checks PR shape only: branch, JIRA, conventional commits, rebase status, DCO + GPG signing, diff size, and protected files.
-> - `/email-service-preflight` runs the mechanical Go pre-PR pipeline: working tree, license headers, formatting, lint, build, tests, protected files, commit verification, and change summary.
+> - `/email-service-preflight` runs the mechanical Go pre-PR pipeline: working tree, license headers, formatting, lint, repo linters (MegaLinter parity), build, tests, protected files, commit verification, and change summary.
 > - `/email-service-learnings-reviewer` is the repo-owned review knowledge-base brain (`docs/reviews/knowledge-base/`); it is the KB review skill named under **Pre-PR review** below and is loaded by `/lfx-skills:lfx-pre-pr-review`, not invoked by hand. General quality and this repo's written conventions are covered in that same round by the central general reviewer.
 >
 > If the plugin is missing, install with `/plugin marketplace add linuxfoundation/lfx-skills` then `/plugin install lfx-skills@lfx-skills`.
@@ -152,7 +152,7 @@ make helm-restart       # kubectl rollout restart the deployment
 > launching the reviewers, before the fix commit, before opening the PR.
 
 - KB review skill: `/email-service-learnings-reviewer`
-- Preflight: `make check && make test`
+- Preflight: `/email-service-pr-readiness origin/main`, then `/email-service-preflight origin/main --dry-run`
 
 ## Post-PR review
 
@@ -369,6 +369,8 @@ yourHandler.Handle(spanCtx, msg)
 ```
 
 ## Code Conventions
+
+The full Go conventions for this repo live in `.claude/skills/email-service-dev/SKILL.md` and its `references/go-conventions.md` (package boundaries, handler shape, logging, testing); they are authoritative for any Go, chart, or service-owned doc change, alongside the contract docs under **Authoritative Repo Docs**. The essentials:
 
 - `slog.DebugContext` for success paths, `slog.WarnContext` for recoverable issues,
   `slog.ErrorContext` for unexpected failures.

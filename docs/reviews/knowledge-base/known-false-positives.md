@@ -1,17 +1,19 @@
 <!-- Copyright The Linux Foundation and each contributor to LFX. -->
 <!-- SPDX-License-Identifier: MIT -->
 
-# Known false positives — applied LAST in every review pass
+# Known false positives — applied LAST in every knowledge-base review pass
 
 Findings that match any pattern below MUST be dropped, regardless of which source (KB pattern
 file, bot, human) originally produced them. This list is the floor — even a quotable KB pattern
 does not survive if it matches a known false positive.
 
-Used by the `/email-service-learnings-reviewer` skill (Step 4). Each entry was
-explicitly decided as noise-on-this-repo from the merged-PR corpus (PRs #1–#8), where the
-maintainer either declined the suggestion or it conflicts with an intentional design choice
-documented in the service docs, or was carried over from the retired repo conventions reviewer
-as a standing suppression.
+Used by the `/email-service-learnings-reviewer` skill (Step 4), and only by it: the general and
+security reviewers of the pre-PR round do not read this file, so it filters knowledge-base
+findings, not theirs. Each entry was explicitly decided as noise-on-this-repo from the merged-PR
+corpus (PRs #1–#8), where the maintainer either declined the suggestion or it conflicts with an
+intentional design choice documented in the service docs — except entries whose **Source** line
+says they were carried over from the retired repo conventions reviewer
+(`email-service-code-reviewer`, retired 2026-09-25) as a standing suppression.
 
 ---
 
@@ -121,14 +123,17 @@ framed as something the change should have added — unless the loaded email-ser
 the change should own that behavior.
 
 **Why false:** this is a thin NATS request/reply relay for pre-rendered content, not a Goa
-resource service; those surfaces are deliberately absent (see `CLAUDE.md` **Repo Role** and
-**Key design decisions**, and the `email-service-dev` skill). Conventions from other LFX repos
-do not apply here by default.
+resource service; those surfaces are deliberately absent (`CLAUDE.md` **Service Overview**:
+"No templates, no template registry"; **Repo Role**: "It does not own template rendering,
+newsletter composition, newsletter persistence, FGA tuple emission, or indexer publishing";
+**Key design decisions**: "Pre-rendered only. No template engine."). Conventions from other LFX
+repos do not apply here by default.
 
-**Source:** carried over from the retired `email-service-code-reviewer` skill (a standing
-suppression, not a PR comment): "Do not flag missing Goa, HTTP gateway, OpenFGA, indexer,
-newsletter rendering, or template behavior unless the loaded email-service docs say the change
-should own that behavior."
+**Source:** carried over 2026-09-25 from the retired `email-service-code-reviewer` skill
+(`.claude/skills/email-service-code-reviewer/SKILL.md`, Step 3, at the last `main` revision
+before its removal) as a standing suppression, not a PR comment: "Do not invent conventions from
+other LFX repos. Do not flag missing Goa, HTTP gateway, OpenFGA, indexer, newsletter rendering, or
+template behavior unless the loaded email-service docs say the change should own that behavior."
 
 ---
 
@@ -138,6 +143,10 @@ When you encounter a finding from Copilot (or a human reviewer) the team has exp
 is not relevant for this repo:
 
 1. Add an entry here with **Pattern matched**, **Why false**, and a **Source** (PR #N + quote).
+   The one exception is a dated entry carried over from the retired repo conventions reviewer
+   (`email-service-code-reviewer`, retired 2026-09-25): its **Source** names that skill, the
+   carry-over date, and quotes the retired rule, and says it is not a PR comment. No new
+   carry-overs are expected; every future entry needs a PR citation.
 2. If the pattern was previously in a category `.md`, remove it there — do not keep a pattern in
    both files.
 3. If it is something the bots will surface forever (e.g. the license-compliance `go.mod`

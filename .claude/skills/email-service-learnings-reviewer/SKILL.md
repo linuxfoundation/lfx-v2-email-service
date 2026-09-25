@@ -1,15 +1,23 @@
 ---
 name: email-service-learnings-reviewer
-description: "Empirical-pattern review for lfx-v2-email-service. Audits the pinned change in the lfx-v2-email-service repo against `docs/reviews/knowledge-base/` — patterns extracted from past PR review comments on this repo. May be launched from the LFX workspace root, but always operates in `lfx-v2-email-service`. Findings are gated by KB matches: every finding must quote a pattern entry; unsourced findings are dropped. Reviews exactly the caller's pinned `git diff <base_sha> <target_sha>` — the whole branch, never a single commit. Renders a markdown review. Launched by the repo's pre-PR review block in CLAUDE.md as the knowledge-base reviewer, in parallel with `/lfx-skills:lfx-general-code-review`; not invoked by hand."
+description: "Empirical-pattern review for lfx-v2-email-service. Audits the pinned change in the lfx-v2-email-service repo against `docs/reviews/knowledge-base/` — patterns extracted from past PR review comments on this repo. May be launched from the LFX workspace root, but always operates in `lfx-v2-email-service`. Findings are gated by KB matches: every finding must quote a pattern entry; unsourced findings are dropped. Reviews exactly the caller's pinned `git diff <base_sha> <target_sha>` — the whole branch, never a single commit. Renders a markdown review. Launched by `/lfx-skills:lfx-pre-pr-review` (pointed at by the repo's pre-PR review block in CLAUDE.md) as the knowledge-base reviewer, in parallel with the general reviewer (`/lfx-skills:lfx-general-code-review`) and the security reviewer (`/lfx-skills:lfx-security-engineer`); not invoked by hand."
 ---
 <!-- Copyright The Linux Foundation and each contributor to LFX. -->
 <!-- SPDX-License-Identifier: MIT -->
 
 # LFX Email Service Learnings Reviewer
 
-You match the pinned change (`git diff <base_sha> <target_sha>`, as given by the caller) against the empirical pattern knowledge base in `docs/reviews/knowledge-base/`. Each pattern entry was extracted from a real PR review comment on this repo. **Findings are gated by KB matches:** every emitted finding must quote a pattern entry's rule ID + a phrase from its `**Pattern:**` or `**Detect:**` clause. If you can't quote, you drop.
+You match the pinned change (`git diff <base_sha> <target_sha>`, as given by the caller) against the
+empirical pattern knowledge base in `docs/reviews/knowledge-base/`. Each pattern entry was extracted
+from a real PR review comment on this repo. **Findings are gated by KB matches:** every emitted
+finding must quote a pattern entry's rule ID + a phrase from its `**Pattern:**` or `**Detect:**`
+clause. If you can't quote, you drop.
 
-Generic-rubric findings (security / performance / quality / architecture / testing intuitions not grounded in a KB entry) belong to `/lfx-skills:lfx-general-code-review`, which also audits the documented rule surface. You cover the empirical surface — the patterns the bots and human reviewers have actually flagged on this repo.
+Generic-rubric findings (performance / quality / architecture / testing intuitions not grounded in a
+KB entry) belong to the general reviewer, `/lfx-skills:lfx-general-code-review`, which also audits
+the documented rule surface; OWASP-class security findings belong to the security reviewer,
+`/lfx-skills:lfx-security-engineer`. Both run in the same round as you. You cover the empirical
+surface — the patterns the bots and human reviewers have actually flagged on this repo.
 
 > This is a **starter KB** (the repo had ~8 merged PRs at authoring; CodeRabbit is not enabled, so the bot surface is Copilot only). Expect it to grow. Do not invent patterns to fill gaps — only ship what a current KB entry's `Detect:` clause matches.
 
@@ -46,7 +54,7 @@ Run `git diff --stat <base_sha> <target_sha> && git diff <base_sha> <target_sha>
 
 Read files at the pinned revision, never from the moving working tree: added or modified code via `git show <target_sha>:<path>`, deleted code via `git show <base_sha>:<path>`, and the full current file (for `Detect:` checks in Step 3) via `git show <target_sha>:<path>`.
 
-If the diff is too big for context, save to `/tmp/email-learnings-reviewer-diff.patch` and read changed files individually at `<target_sha>`.
+If the diff is too big for context, save to `/tmp/email-learnings-reviewer-diff.patch` and read changed files individually at the pinned revisions above: added or modified files via `git show <target_sha>:<path>`, deleted files via `git show <base_sha>:<path>` (they do not exist at `<target_sha>`), and both revisions for a rename.
 
 ## Step 2 — Load pattern files (routed by diff)
 
@@ -92,7 +100,7 @@ For each pattern entry in every loaded pattern file (excluding `known-false-posi
    - **Citation:** quote the entry's `**Pattern:**` or `**Detect:**` phrase that triggered the match.
 3. **If you can't quote the entry, drop the finding.** The KB is the bar — no quote, no ship.
 
-**Findings without a matching pattern entry do not ship.** Generic code-review intuition belongs to `/lfx-skills:lfx-general-code-review`.
+**Findings without a matching pattern entry do not ship.** Generic code-review intuition belongs to `/lfx-skills:lfx-general-code-review`; security intuition belongs to `/lfx-skills:lfx-security-engineer`.
 
 ## Step 4 — Apply known false positives
 
@@ -125,6 +133,7 @@ If `extra` was applied, note it.
 - **PR-shape sanity** (branch / JIRA / commits / DCO+GPG / rebase / diff size) → `/email-service-pr-readiness`.
 - **Mechanical Go validation** (license headers, format, lint, build, tests, PR summary) → `/email-service-preflight`.
 - **Documented rule-surface audits** (CLAUDE.md, the `email-service-dev` skill, contract docs, chart docs, public `pkg/api` contract from documented rules) → `/lfx-skills:lfx-general-code-review`.
+- **OWASP-class security review** (auth, secrets, input handling, infra config) → `/lfx-skills:lfx-security-engineer`.
 - **Generic code-review intuition** not grounded in a KB pattern entry → drop.
 
 ## Constraints
