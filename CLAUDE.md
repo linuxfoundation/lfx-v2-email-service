@@ -12,7 +12,7 @@ Development guide for Claude instances working on this service.
 > - `/email-service-dev` auto-attaches on Go, chart, and service-owned doc paths. It owns this repo's Go conventions, NATS request/reply handler shape, public `pkg/api` contract, SMTP/SES/SQS tracking behavior, KV tracking rules, tests, formatting, linting, and license headers.
 > - `/email-service-pr-readiness` checks PR shape only: branch, JIRA, conventional commits, rebase status, DCO + GPG signing, diff size, and protected files.
 > - `/email-service-preflight` runs the mechanical Go pre-PR pipeline: working tree, license headers, formatting, lint, build, tests, protected files, commit verification, and change summary.
-> - `/email-service-code-reviewer` and `/email-service-learnings-reviewer` are the repo-owned reviewer brains loaded by the background review subagents described under **Pre-PR review** below — they are not invoked by hand.
+> - `/email-service-learnings-reviewer` is the repo-owned review knowledge-base brain (`docs/reviews/knowledge-base/`) loaded by one of the background review subagents described under **Pre-PR review** below — it is not invoked by hand. General quality and this repo's written conventions are covered there by the central `/lfx-skills:lfx-general-code-review`.
 >
 > If the plugin is missing, install with `/plugin marketplace add linuxfoundation/lfx-skills` then `/plugin install lfx-skills@lfx-skills`.
 
@@ -139,63 +139,45 @@ make helm-restart       # kubectl rollout restart the deployment
 
 ## Pre-PR review
 
-Before a PR exists, local review uses the same three reviewers in two modes: **post-commit review** while development continues, and one **full-branch review** immediately before opening the PR.
+Run **one** local review of the whole branch before opening the PR — never
+after individual commits, and never again once the PR exists.
 
-Every review batch launches exactly THREE generic background subagents together, all with `subagent_type: general-purpose`, `model: opus` (Opus 5), and `run_in_background: true`. At most one batch may be active. The reviewers load exactly one skill each:
+1. When the implementation is complete and committed, run `git fetch origin`
+   and pin the range: `base_sha=$(git merge-base origin/main HEAD)`,
+   `target_sha=$(git rev-parse HEAD)`.
+2. Launch **two** independent background subagents **in parallel**, one per
+   skill, each with `subagent_type: general-purpose`, `model: opus` (Opus 5.5),
+   `run_in_background: true`. Tell each to load exactly one skill with the
+   Skill tool and follow it: one loads `/lfx-skills:lfx-general-code-review`
+   (general quality plus this repo's written conventions, style and rules);
+   the other loads `/email-service-learnings-reviewer` (this repo's review knowledge base). Give each
+   the full 40-character `base_sha` and `target_sha`, the instruction to review
+   exactly `git diff <base_sha> <target_sha>`, and the report-only rule: they
+   never edit, commit, push or write GitHub state.
+3. Wait for both reports. A failed, empty or `INCOMPLETE` report is **not** a
+   clean review: fix the cause and relaunch that reviewer once; if it fails
+   again, stop and tell the developer.
+4. Verify every finding against the code. Address every Critical and every
+   reasonable Important finding in **EXACTLY ONE fix commit** (signed and
+   DCO-signed-off). No fix commit if there is nothing to fix. Never one commit
+   per finding.
+5. Run `make check && make test`. If it fails, fold the remedy into the fix commit with
+   `git commit --amend` (re-sign and re-sign-off); if review found nothing and
+   there is no fix commit yet, this remedy becomes the one fix commit. Rerun
+   the checks — but **do not rerun the reviewers**. The branch gains **at most one**
+   commit after the implementation — the single fix commit, or none at all —
+   never more.
+6. Open the PR.
 
-1. `/lfx-skills:lfx-general-code-review`
-2. `/email-service-code-reviewer`
-3. `/email-service-learnings-reviewer`
-
-The reviewers only report findings. They never edit tracked files, stage, commit, push, or write GitHub state; the parent performs all changes.
-
-### Shared reviewer prompt
-
-Give each reviewer one complete prompt. Start with its loading policy, then append the common instructions.
-
-- General: `Load /lfx-skills:lfx-general-code-review with the Skill tool. If that skill is unavailable, do not review unguided and do not read a replacement SKILL.md from any checkout or cache; return INCOMPLETE.`
-- Repo code: `Load /email-service-code-reviewer with the Skill tool. If and only if that skill is unavailable in this child's current session, locate the lfx-v2-email-service repo root and read <repo-root>/.claude/skills/email-service-code-reviewer/SKILL.md. Follow that file as the sole review guidance. Do not search another path or use another skill or agent. If the file is missing, return INCOMPLETE.`
-- Repo learnings: `Load /email-service-learnings-reviewer with the Skill tool. If and only if that skill is unavailable in this child's current session, locate the lfx-v2-email-service repo root and read <repo-root>/.claude/skills/email-service-learnings-reviewer/SKILL.md. Follow that file as the sole review guidance. Do not search another path or use another skill or agent. If the file is missing, return INCOMPLETE.`
-
-```text
-target repo: lfx-v2-email-service
-repo root: <absolute repo root>
-target_sha: <full target SHA>
-base_sha: <full base SHA>
-review exactly: git diff <full base SHA> <full target SHA>
-range label: <mode-specific range label>
-
-The repo root and SHA range above are authoritative. Do not re-derive the range from HEAD or origin/main. If the assigned skill tells you to derive the review range or changed-file list from HEAD, git show, or origin/main, replace that instruction with the exact pinned git diff above. Read added or modified code from <target_sha>:<path>, deleted code from <base_sha>:<path>, and both revisions for a rename. Never use a moving working-tree copy as code evidence. Load current rule, contract, checklist, architecture, and knowledge-base policy as the assigned skill directs.
-
-Report findings only. Follow the assigned skill's report conventions and return its complete findings. Prepend `Reviewed range: <full base SHA>..<full target SHA>`, then `Skill: /lfx-skills:lfx-general-code-review`, `Skill: /email-service-code-reviewer`, or `Skill: /email-service-learnings-reviewer`, matching that reviewer. If a repo reviewer used its allowed file fallback, append `; read from: <exact path>` to its Skill line. If incomplete, put `INCOMPLETE — <reason>` first, then the same two verification lines.
-```
-
-Accept a batch only when all three reviewers return non-empty, complete reports for the pinned full-SHA range, name their exact assigned `/...` skill, and report no unauthorized fallback path. If any reviewer fails these checks, reject the entire batch; never accept or rerun only one reviewer.
-
-### Mode 1 — Post-commit review
-
-Use this mode after normal development commits while work continues.
-
-1. Commit with `git commit -s -S`.
-2. Maintain `reviewed_through_sha`: the latest commit fully covered by an accepted post-commit batch. Before the first batch, initialize it to the parent of the first pending commit. Never advance it for a failed or incomplete batch.
-3. When no batch is active, set `base_sha=$reviewed_through_sha` and `target_sha=$(git rev-parse HEAD)`. Label a one-commit range `the latest commit`; if commits accumulated, label it `the commits since the last review`.
-4. Launch the three reviewers together with that exact range. If another batch is already active, let it finish; the next batch will cover everything from the unchanged `reviewed_through_sha` through the then-current `HEAD`.
-5. While remaining in Mode 1, if the batch is invalid and `HEAD` is unchanged, rerun all three with the same pins. If `HEAD` changed, rerun all three over the coalesced range from the unchanged `reviewed_through_sha` through current `HEAD`. Once work moves to Mode 2, do not rerun an invalid post-commit batch; Mode 2's whole-branch review replaces its coverage.
-6. After a valid batch, advance `reviewed_through_sha` to its `target_sha`. Verify its findings against current code and address every Critical and reasonable Important finding in a later commit; that commit is reviewed by the next post-commit batch.
-7. The final planned commit skips post-commit review and moves directly to Mode 2. Leave `reviewed_through_sha` unchanged. If development resumes before Mode 2 starts, the next post-commit batch covers the entire pending range from that unchanged SHA.
-
-### Mode 2 — Full-branch review before opening the PR
-
-Entering this mode ends post-commit review for this PR attempt. Finish any active post-commit batch and retain every finding that Mode 1 requires the parent to address. Do not retry an invalid post-commit batch; the whole-branch review below replaces its coverage. Do not return to Mode 1.
-
-1. Run `git fetch origin`, set `target_sha=$(git rev-parse HEAD)` and `base_sha=$(git merge-base origin/main HEAD)`, and launch the three reviewers together once against the whole branch range. Use the shared prompt with the range label `the branch's diff against origin/main` and review `git diff <full base SHA> <full target SHA>`. Never use `reviewed_through_sha` for this review.
-2. If the batch is operationally incomplete, it does not count as the review. Without editing files or creating commits, repeat step 1 so the unchanged branch is fetched, re-pinned, and reviewed by a complete three-reviewer batch until one valid result returns.
-3. Fix the retained post-commit findings and the issues raised by the whole-branch review, then complete the repository's documentation-currency updates. Commit all resulting changes with `git commit -s -S`, then run `/email-service-pr-readiness` and `/email-service-preflight` against the clean, committed `HEAD`. If either check requires fixes, apply the remedy appropriate to the finding—rewrite local commits for existing-history defects or create a new signed/DCO commit for file changes—then rerun the affected deterministic checks. Ensure every resulting commit is signed and carries DCO sign-off. Do not run the local reviewers again.
-4. Push and open the PR. From that point onward, use Post-PR review only.
+**Hard rules.** No local review runs after any individual commit. The
+reviewers are **never** rerun on the fix commit. From the moment the PR is
+open, **no local reviews of any kind**: iterate only on the PR's bot and human
+review feedback, still running tests and checks, and batch each round of fixes
+into as few commits as possible.
 
 ## Post-PR review
 
-Once the PR exists, never run the local post-commit reviewers or another local full-branch review. PR iteration uses Copilot and every other configured GitHub code-review agent/bot.
+Once the PR exists, no local reviews of any kind run (see **Pre-PR review**). PR iteration uses Copilot and every other configured GitHub code-review agent/bot.
 
 1. After every push, wait for the configured GitHub reviewers to finish reviewing the current head, then enumerate every unresolved review thread. Collect compatible feedback into a batch rather than making one-comment-at-a-time commits.
 2. Work in an isolated background task when safe so the developer can continue. Never allow two writers to edit the same worktree or race commits or pushes; otherwise handle the feedback synchronously.

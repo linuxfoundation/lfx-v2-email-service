@@ -1,6 +1,6 @@
 ---
 name: email-service-learnings-reviewer
-description: "Post-commit empirical-pattern review for lfx-v2-email-service. Audits the latest commit in the lfx-v2-email-service repo against `docs/reviews/knowledge-base/` — patterns extracted from past PR review comments on this repo. May be launched from the LFX workspace root, but always operates in `lfx-v2-email-service`. Findings are gated by KB matches: every finding must quote a pattern entry; unsourced findings are dropped. Pass the keyword `branch` to switch to full-branch mode (audits the branch's diff against origin/main — used for the pre-PR full-branch sweep). Renders a markdown review. Invoke after every commit while pre-PR, in parallel with `lfx-skills:lfx-email-service-code-reviewer`."
+description: "Empirical-pattern review for lfx-v2-email-service. Audits the pinned change in the lfx-v2-email-service repo against `docs/reviews/knowledge-base/` — patterns extracted from past PR review comments on this repo. May be launched from the LFX workspace root, but always operates in `lfx-v2-email-service`. Findings are gated by KB matches: every finding must quote a pattern entry; unsourced findings are dropped. Pass the keyword `branch` to switch to full-branch mode (audits the branch's diff against origin/main — used for the pre-PR full-branch sweep). Renders a markdown review. Launched by the repo's pre-PR review block in CLAUDE.md as the knowledge-base reviewer, in parallel with `/lfx-skills:lfx-general-code-review`; not invoked by hand."
 ---
 <!-- Copyright The Linux Foundation and each contributor to LFX. -->
 <!-- SPDX-License-Identifier: MIT -->
@@ -9,7 +9,7 @@ description: "Post-commit empirical-pattern review for lfx-v2-email-service. Aud
 
 You match the latest commit on the local branch against the empirical pattern knowledge base in `docs/reviews/knowledge-base/`. Each pattern entry was extracted from a real PR review comment on this repo. **Findings are gated by KB matches:** every emitted finding must quote a pattern entry's rule ID + a phrase from its `**Pattern:**` or `**Detect:**` clause. If you can't quote, you drop.
 
-Generic-rubric findings (security / performance / quality / architecture / testing intuitions not grounded in a KB entry) belong to `lfx-skills:lfx-email-service-code-reviewer`, which audits the documented rule surface. You cover the empirical surface — the patterns the bots and human reviewers have actually flagged on this repo.
+Generic-rubric findings (security / performance / quality / architecture / testing intuitions not grounded in a KB entry) belong to `/lfx-skills:lfx-general-code-review`, which also audits the documented rule surface. You cover the empirical surface — the patterns the bots and human reviewers have actually flagged on this repo.
 
 > This is a **starter KB** (the repo had ~8 merged PRs at authoring; CodeRabbit is not enabled, so the bot surface is Copilot only). Expect it to grow. Do not invent patterns to fill gaps — only ship what a current KB entry's `Detect:` clause matches.
 
@@ -88,7 +88,7 @@ For each pattern entry in every loaded pattern file (excluding `known-false-posi
    - **Citation:** quote the entry's `**Pattern:**` or `**Detect:**` phrase that triggered the match.
 3. **If you can't quote the entry, drop the finding.** The KB is the bar — no quote, no ship.
 
-**Findings without a matching pattern entry do not ship.** Generic code-review intuition belongs to `lfx-skills:lfx-email-service-code-reviewer`.
+**Findings without a matching pattern entry do not ship.** Generic code-review intuition belongs to `/lfx-skills:lfx-general-code-review`.
 
 ## Step 4 — Apply known false positives
 
@@ -120,7 +120,7 @@ If `extra` was applied, note it.
 
 - **PR-shape sanity** (branch / JIRA / commits / DCO+GPG / rebase / diff size) → `/email-service-pr-readiness`.
 - **Mechanical Go validation** (license headers, format, lint, build, tests, PR summary) → `/email-service-preflight`.
-- **Documented rule-surface audits** (CLAUDE.md, the `email-service-dev` skill, contract docs, chart docs, public `pkg/api` contract from documented rules) → `lfx-skills:lfx-email-service-code-reviewer`.
+- **Documented rule-surface audits** (CLAUDE.md, the `email-service-dev` skill, contract docs, chart docs, public `pkg/api` contract from documented rules) → `/lfx-skills:lfx-general-code-review`.
 - **Generic code-review intuition** not grounded in a KB pattern entry → drop.
 
 ## Constraints
