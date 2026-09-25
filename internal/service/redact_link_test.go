@@ -91,6 +91,7 @@ func TestRedactLink(t *testing.T) {
 			want: "https://example.com/account",
 		},
 		// Userinfo with basic-auth credentials (user:pass) must be stripped.
+		// secretlint-disable-next-line @secretlint/secretlint-rule-basicauth
 		{
 			name: "userinfo_basic_auth",
 			in:   "https://user:pass@example.com/",

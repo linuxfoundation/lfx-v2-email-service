@@ -287,8 +287,6 @@ nats req lfx.email-service.send_email \
 
 ## NATS Subjects
 
-| Constant | Value | Direction |
-|---|---|---|
 **Request/reply (caller-initiated):**
 
 | Constant | Value | Direction |
