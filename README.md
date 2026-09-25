@@ -326,12 +326,14 @@ should poll `get_email_status` instead.
 
 ### Subjects and payloads
 
-| Subject | Payload struct | Trigger |
-|---|---|---|
-| `lfx.email-service.email_delivered` | `api.EmailDeliveredEvent` | SES DELIVERY event |
-| `lfx.email-service.email_opened` | `api.EmailOpenedEvent` | SES OPEN event (deduplicated by SNS MessageId) |
-| `lfx.email-service.email_link_clicked` | `api.EmailLinkClickedEvent` | SES CLICK event (deduplicated within a bounded window) |
-| `lfx.email-service.email_failed` | `api.EmailFailedEvent` | SES BOUNCE or COMPLAINT event |
+Full field-level schemas are in [docs/email-service-contract.md — Engagement Push Events](docs/email-service-contract.md#engagement-push-events).
+
+| Subject | Payload struct | Trigger | Schema |
+|---|---|---|---|
+| `lfx.email-service.email_delivered` | `api.EmailDeliveredEvent` | SES DELIVERY event | [→](docs/email-service-contract.md#emaildeliveredevent-apiemaildeliveredsubject) |
+| `lfx.email-service.email_opened` | `api.EmailOpenedEvent` | SES OPEN event (deduplicated by SNS MessageId) | [→](docs/email-service-contract.md#emailopenedevent-apiemailopenedsubject) |
+| `lfx.email-service.email_link_clicked` | `api.EmailLinkClickedEvent` | SES CLICK event (deduplicated within a bounded window) | [→](docs/email-service-contract.md#emaillinkclickedevent-apiemaillinkclickedsubject) |
+| `lfx.email-service.email_failed` | `api.EmailFailedEvent` | SES BOUNCE or COMPLAINT event | [→](docs/email-service-contract.md#emailfailedevent-apiemailfailedsubject) |
 
 ### Subscribe with the NATS CLI
 
