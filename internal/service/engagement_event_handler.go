@@ -423,6 +423,7 @@ func parseTimestamp(s string) time.Time {
 func redactLink(raw string) string {
 	u, err := url.Parse(raw)
 	if err == nil && u.Host != "" {
+		u.User = nil
 		u.RawQuery = ""
 		u.Fragment = ""
 		return u.String()

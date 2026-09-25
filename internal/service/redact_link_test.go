@@ -83,6 +83,25 @@ func TestRedactLink(t *testing.T) {
 			in:   "https://example.com",
 			want: "https://example.com",
 		},
+		// Userinfo (token in username) must be stripped — credentials must
+		// never survive redaction regardless of query/fragment presence.
+		{
+			name: "userinfo_token_with_query",
+			in:   "https://reset-token@example.com/account?t=1#f",
+			want: "https://example.com/account",
+		},
+		// Userinfo with basic-auth credentials (user:pass) must be stripped.
+		{
+			name: "userinfo_basic_auth",
+			in:   "https://user:pass@example.com/",
+			want: "https://example.com/",
+		},
+		// Userinfo only, no query or fragment — userinfo must still be removed.
+		{
+			name: "userinfo_only_no_query",
+			in:   "https://token@example.com/path",
+			want: "https://example.com/path",
+		},
 	}
 
 	for _, tc := range cases {

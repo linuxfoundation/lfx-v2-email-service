@@ -614,3 +614,109 @@ func TestEngagementEventHandler_Click_LinkRedaction_RelativeURLFallback(t *testi
 		"fallback redaction must strip query from published relative URL")
 	assert.NotContains(t, published.Link, "leaked")
 }
+
+// ---------------------------------------------------------------------------
+// Single-fire replay tests
+//
+// DELIVERY, BOUNCE, and COMPLAINT are idempotent booleans: once the
+// corresponding flag is set, a replay of the same SQS message must not
+// emit a second NATS push. This is the publish counterpart to the KV
+// idempotency that the handler enforces via the eventApplied return value.
+// ---------------------------------------------------------------------------
+
+// TestEngagementEventHandler_Handle_Deduplication_SingleFireEvents verifies
+// that replaying a DELIVERY, BOUNCE, or COMPLAINT SQS message does not produce
+// a second NATS publish. The event is applied on the first delivery and silently
+// dropped on the second because applyEngagementEvent returns false.
+func TestEngagementEventHandler_Handle_Deduplication_SingleFireEvents(t *testing.T) {
+	t.Parallel()
+
+	for _, eventType := range []string{"DELIVERY", "BOUNCE", "COMPLAINT"} {
+		eventType := eventType
+		t.Run(eventType, func(t *testing.T) {
+			t.Parallel()
+
+			store := mocks.NewTrackingStore()
+			seedRecord(store)
+			pub := &mockPublisher{}
+			h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+			msg := sqsMsg(t, eventType, testEmailID, testGroupID, testTimestamp)
+
+			// First delivery: event is applied, push is emitted.
+			require.NoError(t, h.Handle(context.Background(), msg))
+			require.Len(t, pub.calls, 1, "first delivery must emit exactly one push")
+
+			// SQS replay: boolean is already set; applyEngagementEvent returns
+			// false so the handler must not publish a second notification.
+			require.NoError(t, h.Handle(context.Background(), msg))
+			assert.Len(t, pub.calls, 1,
+				"replay of %s must not emit a second NATS push", eventType)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Out-of-order OPEN timestamp test
+//
+// SQS is at-least-once and does not guarantee ordering. When an OPEN arrives
+// with a timestamp earlier than a previously recorded open, the published
+// EmailOpenedEvent.OpenedAt must reflect the SES sub-object timestamp, not
+// the aggregate LastOpenedAt. This verifies the handler captures the per-event
+// timestamp before the KV write rather than reading it back from the record.
+// ---------------------------------------------------------------------------
+
+// TestEngagementEventHandler_Handle_Open_OutOfOrderTimestamp verifies that the
+// published opened_at value comes from the current SES event, not from
+// record.LastOpenedAt. Seed the record with OpenCount=1, LastOpenedAt=T2, then
+// handle an OPEN with a new MessageId and timestamp T1 where T1 < T2.
+// The push must carry T1 and OpenCount must be incremented to 2.
+func TestEngagementEventHandler_Handle_Open_OutOfOrderTimestamp(t *testing.T) {
+	t.Parallel()
+
+	const (
+		t1 = "2026-01-01T10:00:00Z" // earlier — this is the new event's timestamp
+		t2 = "2026-01-02T12:00:00Z" // later   — already recorded as LastOpenedAt
+	)
+
+	t2Parsed := mustParseTime(t, t2)
+
+	store := mocks.NewTrackingStore()
+	// Seed a record that already has one open at T2 so LastOpenedAt is set.
+	existingEventID := "sns-msg-existing"
+	store.PutRecord(testEmailID, api.EmailRecipientRecord{
+		EmailID:      testEmailID,
+		GroupID:      testGroupID,
+		Opened:       true,
+		OpenCount:    1,
+		LastOpenedAt: &t2Parsed,
+		OpenedAtList: []api.OpenEvent{
+			{EventID: existingEventID, OpenedAt: t2Parsed},
+		},
+	})
+
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+	// Construct an OPEN with a new MessageId and the earlier timestamp T1.
+	msg := sqsMsg(t, "Open", testEmailID, testGroupID, t1, func(m map[string]any) {
+		m["open"] = map[string]any{"timestamp": t1, "ipAddress": "1.2.3.4", "userAgent": "Mozilla/5.0"}
+	})
+	// Override the SNS MessageId so it is distinct from the seed.
+	body := *msg.Body
+	body = strings.Replace(body, "sns-msg-1", "sns-msg-new", 1)
+	msg.Body = &body
+
+	require.NoError(t, h.Handle(context.Background(), msg))
+
+	require.Len(t, pub.calls, 1)
+	var evt api.EmailOpenedEvent
+	require.NoError(t, json.Unmarshal(pub.calls[0].data, &evt))
+
+	// The published timestamp must be T1 (the SES event timestamp), not T2.
+	assert.Equal(t, mustParseTime(t, t1), evt.OpenedAt,
+		"published opened_at must come from the current SES event, not LastOpenedAt")
+	// Open count must have incremented to 2.
+	assert.Equal(t, 2, evt.OpenCount,
+		"open_count must reflect the incremented value after the new event")
+}

@@ -390,6 +390,16 @@ func main() {
 		fmt.Printf("email %s delivered at %s\n", evt.EmailID, evt.DeliveredAt)
 	})
 
+	// React when an email is opened.
+	nc.Subscribe(emailapi.EmailOpenedSubject, func(msg *nats.Msg) {
+		var evt emailapi.EmailOpenedEvent
+		if err := json.Unmarshal(msg.Data, &evt); err != nil {
+			log.Println("decode error:", err)
+			return
+		}
+		fmt.Printf("email %s opened (total opens: %d) at %s\n", evt.EmailID, evt.OpenCount, evt.OpenedAt)
+	})
+
 	// React when a link is clicked (use event_id to deduplicate).
 	nc.Subscribe(emailapi.EmailLinkClickedSubject, func(msg *nats.Msg) {
 		var evt emailapi.EmailLinkClickedEvent

@@ -289,10 +289,25 @@ nats req lfx.email-service.send_email \
 
 | Constant | Value | Direction |
 |---|---|---|
+**Request/reply (caller-initiated):**
+
+| Constant | Value | Direction |
+|---|---|---|
 | `api.SendEmailSubject` | `lfx.email-service.send_email` | request/reply; reply is JSON `SendEmailResponse` |
 | `api.QueueGroup` | `lfx.email-service.queue` | queue group for all subscriptions |
 | `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | request/reply; payload `GetEmailStatusRequest` → `EmailRecipientRecord` for `email_id`, `[]EmailRecipientRecord` for `group_id` |
 | `api.GetEmailEngagementAnalyticsSubject` | `lfx.email-service.get_email_engagement_analytics` | request/reply; payload `GetEmailEngagementAnalyticsRequest` → `GetEmailEngagementAnalyticsResponse` |
+
+**Push (publish-only, service-initiated, best-effort):**
+
+| Constant | Value | Payload struct | Trigger |
+|---|---|---|---|
+| `api.EmailDeliveredSubject` | `lfx.email-service.email_delivered` | `api.EmailDeliveredEvent` | SES DELIVERY event |
+| `api.EmailOpenedSubject` | `lfx.email-service.email_opened` | `api.EmailOpenedEvent` | SES OPEN event (deduplicated by SNS MessageId) |
+| `api.EmailLinkClickedSubject` | `lfx.email-service.email_link_clicked` | `api.EmailLinkClickedEvent` | SES CLICK event (deduplicated within a bounded window; `EventID` = SNS MessageId) |
+| `api.EmailFailedSubject` | `lfx.email-service.email_failed` | `api.EmailFailedEvent` | SES BOUNCE or COMPLAINT event |
+
+Push publishing is best-effort: a NATS failure is logged but does not affect the KV write or SQS acknowledgement.
 
 All constants are in `pkg/api/nats.go`.
 
@@ -321,14 +336,19 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
 
 **Handled event types** (all others are silently dropped):
 
-| SES `eventType` | Effect on `EmailRecipientRecord` |
-|---|---|
-| `OPEN` | Sets `Opened=true`, appends to `OpenedAtList` (deduplicated by SNS `MessageId`), increments `OpenCount`, updates `LastOpenedAt` |
-| `DELIVERY` | Sets `Delivered=true`, records `DeliveredAt` (first delivery only) |
-| `BOUNCE` | Sets `Failed=true`, records `FailedAt` (first failure only) |
-| `COMPLAINT` | Sets `Failed=true`, records `FailedAt` (first failure only) |
+| SES `eventType` | Effect on `EmailRecipientRecord` | Push subject emitted |
+|---|---|---|
+| `OPEN` | Sets `Opened=true`, appends to `OpenedAtList` (deduplicated by SNS `MessageId`), increments `OpenCount`, updates `LastOpenedAt` | `api.EmailOpenedSubject` |
+| `CLICK` | Sets `Clicked=true`, appends link+timestamp to `ClickList`, increments `ClickCount`, updates `LastClickedAt`. Deduplicated by SNS `MessageId` via `ClickEventIDs` (bounded window, max 500 entries). URL userinfo, query string, and fragment are stripped before storage and publish (`redactLink`). | `api.EmailLinkClickedSubject` |
+| `DELIVERY` | Sets `Delivered=true`, records `DeliveredAt` (first delivery only) | `api.EmailDeliveredSubject` |
+| `BOUNCE` | Sets `Failed=true`, records `FailedAt` (first failure only) | `api.EmailFailedSubject` |
+| `COMPLAINT` | Sets `Failed=true`, records `FailedAt` (first failure only) | `api.EmailFailedSubject` |
 
 **Open-event deduplication:** SNS may redeliver the same event. Each `OPEN` entry stores the SNS `MessageId` as `EventID`; the handler skips any open event whose `MessageId` is already in `OpenedAtList`.
+
+**Click-event deduplication:** CLICK events are deduplicated via `ClickEventIDs []string` (SNS MessageIds, max 500 entries, also bounded by the 50 KB KV record soft limit). Once the window is full, SQS replays of later clicks are not detected and re-increment `ClickCount` — this is a documented trade-off. Consumers should use `EventID` in `EmailLinkClickedEvent` for at-most-once semantics.
+
+**Publish-after-KV:** after a successful KV write, the handler publishes the corresponding push event (best-effort — a NATS failure is logged but does not roll back the KV write or block SQS acknowledgement). DELIVERY, BOUNCE, and COMPLAINT are single-fire: the boolean guard (`Delivered`/`Failed`) prevents duplicate publishes on replays.
 
 **KV write conflict retry:** the handler retries the `KeyValue.Update` once on any update error before giving up and returning an error (which keeps the SQS message in-flight for redelivery).
 

@@ -56,7 +56,7 @@ silently dropped: the KV record is not modified and no NATS push is emitted. For
 CLICK events, replays are dropped as long as the SNS MessageId fits within the
 `click_event_ids` dedup list (capped at 500 entries and by the KV record size
 limit). Once that window is exhausted, replays of later clicks are not detected
-and will re-increment `ClickCount` and emit an additional NATS push. See
+and will re-increment `click_count` and emit an additional NATS push. See
 `docs/email-service-contract.md` for the full deduplication contract.
 
 DELIVERY, BOUNCE, and COMPLAINT are single-fire: once the corresponding boolean (`delivered`,
