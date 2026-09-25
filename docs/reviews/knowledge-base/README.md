@@ -20,11 +20,11 @@ quote from the actual comment.
 This KB is the **empirical** review surface — patterns that bots and human reviewers have
 actually flagged on this repo's PRs. It does **not** duplicate:
 
-- `lfx-skills:lfx-general-code-reviewer` — generic correctness / security / test intuition.
-- `lfx-skills:lfx-email-service-code-reviewer` — the documented rule surface (CLAUDE.md, the
-  `email-service-dev` skill, contract docs, chart docs).
+- `/lfx-skills:lfx-general-code-review` — generic correctness / security / test intuition, plus
+  the documented rule surface (CLAUDE.md, the `email-service-dev` skill, contract docs, chart
+  docs).
 
-It is consumed by the `lfx-skills:lfx-email-service-learnings-reviewer` subagent, which routes
+It is consumed by the `/email-service-learnings-reviewer` skill, which routes
 to the category files below by changed-file path, matches each entry's `Detect:` rule, and
 emits only findings it can quote from an entry (KB-match gate). `known-false-positives.md` is
 applied last as the floor filter.

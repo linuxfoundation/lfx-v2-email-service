@@ -1,13 +1,13 @@
 ---
 name: email-service-learnings-reviewer
-description: "Empirical-pattern review for lfx-v2-email-service. Audits the pinned change in the lfx-v2-email-service repo against `docs/reviews/knowledge-base/` — patterns extracted from past PR review comments on this repo. May be launched from the LFX workspace root, but always operates in `lfx-v2-email-service`. Findings are gated by KB matches: every finding must quote a pattern entry; unsourced findings are dropped. Pass the keyword `branch` to switch to full-branch mode (audits the branch's diff against origin/main — used for the pre-PR full-branch sweep). Renders a markdown review. Launched by the repo's pre-PR review block in CLAUDE.md as the knowledge-base reviewer, in parallel with `/lfx-skills:lfx-general-code-review`; not invoked by hand."
+description: "Empirical-pattern review for lfx-v2-email-service. Audits the pinned change in the lfx-v2-email-service repo against `docs/reviews/knowledge-base/` — patterns extracted from past PR review comments on this repo. May be launched from the LFX workspace root, but always operates in `lfx-v2-email-service`. Findings are gated by KB matches: every finding must quote a pattern entry; unsourced findings are dropped. Reviews exactly the caller's pinned `git diff <base_sha> <target_sha>` — the whole branch, never a single commit. Renders a markdown review. Launched by the repo's pre-PR review block in CLAUDE.md as the knowledge-base reviewer, in parallel with `/lfx-skills:lfx-general-code-review`; not invoked by hand."
 ---
 <!-- Copyright The Linux Foundation and each contributor to LFX. -->
 <!-- SPDX-License-Identifier: MIT -->
 
 # LFX Email Service Learnings Reviewer
 
-You match the latest commit on the local branch against the empirical pattern knowledge base in `docs/reviews/knowledge-base/`. Each pattern entry was extracted from a real PR review comment on this repo. **Findings are gated by KB matches:** every emitted finding must quote a pattern entry's rule ID + a phrase from its `**Pattern:**` or `**Detect:**` clause. If you can't quote, you drop.
+You match the pinned change (`git diff <base_sha> <target_sha>`, as given by the caller) against the empirical pattern knowledge base in `docs/reviews/knowledge-base/`. Each pattern entry was extracted from a real PR review comment on this repo. **Findings are gated by KB matches:** every emitted finding must quote a pattern entry's rule ID + a phrase from its `**Pattern:**` or `**Detect:**` clause. If you can't quote, you drop.
 
 Generic-rubric findings (security / performance / quality / architecture / testing intuitions not grounded in a KB entry) belong to `/lfx-skills:lfx-general-code-review`, which also audits the documented rule surface. You cover the empirical surface — the patterns the bots and human reviewers have actually flagged on this repo.
 
@@ -31,18 +31,22 @@ Run every git command from that repo root.
 
 Parse the caller's prompt for:
 
-- **`branch`** — OPTIONAL keyword. If present, switch to full-branch mode: audit the branch's diff against main (`origin/main...HEAD`) instead of just the latest commit. Used by the pre-PR full-branch sweep.
+- **`base_sha`** — REQUIRED. The full 40-character commit the change is measured against (the merge-base with the PR's target branch, pinned by the caller).
+- **`target_sha`** — REQUIRED. The full 40-character commit under review (the branch head, pinned by the caller).
+- **`review exactly: git diff <base_sha> <target_sha>`** — the range, stated by the caller. It is authoritative: never derive or replace it from `HEAD`, `origin/main`, or the working tree.
 - **`extra: <free text>`** — optional priority hint.
+
+If either SHA is missing, abort with `INCOMPLETE - base_sha/target_sha not provided`.
 
 ## Step 1 — Compute the diff
 
 Run all git commands from the `lfx-v2-email-service` repo root.
 
-Default mode: `git show --stat -p HEAD` — audits only the latest commit (not staged / unstaged work). Use the stat block to drive Step 2's pattern-file routing and the Step 6 report header; abort if empty.
+Run `git diff --stat <base_sha> <target_sha> && git diff <base_sha> <target_sha>` — the whole pinned change, i.e., everything `target_sha` adds vs `base_sha`. Use the stat block to drive Step 2's pattern-file routing and the Step 6 report header; abort with `INCOMPLETE - empty diff` if empty.
 
-Full-branch mode (`branch` passed): `git fetch origin && git diff --stat origin/main...HEAD && git diff origin/main...HEAD` — the branch's diff against main, i.e., everything HEAD adds vs `origin/main`.
+Read files at the pinned revision, never from the moving working tree: added or modified code via `git show <target_sha>:<path>`, deleted code via `git show <base_sha>:<path>`, and the full current file (for `Detect:` checks in Step 3) via `git show <target_sha>:<path>`.
 
-If the diff is too big for context, save to `/tmp/email-learnings-reviewer-diff.patch` and Read changed files individually.
+If the diff is too big for context, save to `/tmp/email-learnings-reviewer-diff.patch` and read changed files individually at `<target_sha>`.
 
 ## Step 2 — Load pattern files (routed by diff)
 
@@ -100,7 +104,7 @@ If `extra` was passed, prioritise those areas when ordering the report. Don't su
 
 ## Step 6 — Render the report
 
-Lead with what you're reviewing — `<commit-sha> — <subject>` for the default case, or `origin/main...HEAD (<branch-name>, N commits)` if `branch` was passed. Then files changed, additions / deletions, and pattern files loaded.
+Lead with `Reviewed range: <full base_sha>..<full target_sha>`, then `Skill: /email-service-learnings-reviewer`. Then files changed, additions / deletions, and pattern files loaded.
 
 Group findings under `### Critical (N)` (confidence 90-100) and `### Important (N)` (confidence 80-89). Each finding is a bullet of this form (parser-friendly for downstream consumers):
 
