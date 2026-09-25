@@ -81,8 +81,10 @@ Keep implementation details in `internal/`. Anything callers import belongs in `
 
 - `SES_EVENTING_ENABLED=true` starts the SQS poller and makes missing `SES_ENGAGEMENT_SQS_QUEUE_URL`, AWS config, or `email-recipients` KV a fatal startup error.
 - The poller long-polls up to 10 SQS messages with a 20-second wait, deletes only successfully handled messages, and aborts after three consecutive receive failures.
-- The handler processes SNS-wrapped SES `OPEN`, `DELIVERY`, `BOUNCE`, and `COMPLAINT` events. Unknown events and missing records are ignored.
+- The handler processes SNS-wrapped SES `OPEN`, `CLICK`, `DELIVERY`, `BOUNCE`, and `COMPLAINT` events. Unknown events and missing records are ignored.
 - Open events are deduplicated by SNS `MessageId`; delivery, bounce, and complaint are idempotent booleans.
+- CLICK events are deduplicated via `ClickEventIDs []string` (SNS MessageIds, bounded to 500 entries and the 50 KB KV record soft limit). URL userinfo, query string, and fragment are stripped by `redactLink` before storage and publish.
+- After a successful KV write the handler publishes a best-effort NATS push event (`api.EmailDeliveredSubject`, `api.EmailOpenedSubject`, `api.EmailLinkClickedSubject`, or `api.EmailFailedSubject`). A publish failure is logged but does not roll back the KV write or block SQS ack.
 - Update `docs/email-engagement-tracking.md` with any change to headers, event handling, KV fields, retry behavior, or required AWS resources.
 
 ## Logging

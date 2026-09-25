@@ -25,6 +25,12 @@ DISABLE_ERRORS_LINTERS:
   - REPOSITORY_TRIVY
   - REPOSITORY_CHECKOV
   - REPOSITORY_DEVSKIM
+  # The MegaLinter image (v9.1.0) ships golangci-lint v2.5.0 compiled with
+  # Go 1.25, which refuses to analyse a go 1.26 module. golangci-lint is run
+  # as a blocking step in email-service-build.yml using install-mode: goinstall
+  # (compiled by the local Go stable toolchain). Remove once the MegaLinter
+  # image is rebuilt with a Go 1.26+-compiled golangci-lint binary.
+  - GO_GOLANGCI_LINT
 YAML_YAMLLINT_CONFIG_FILE: .yamllint
 SPELL_CSPELL_ANALYZE_FILE_NAMES: false
 # Ignore YAML files with templating macros; these typically fail linting and/or

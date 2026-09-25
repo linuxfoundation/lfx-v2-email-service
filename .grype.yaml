@@ -1,0 +1,22 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+
+# Grype ignore rules — narrowly scoped suppressions for findings that cannot
+# be resolved without introducing a regression or are not exploitable here.
+# Each entry documents why the suppression is safe and when to revisit.
+
+ignore:
+  # go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.20.0.
+  # Fixed in v0.21.0, but bumping the entire OTEL exporter family introduces a
+  # "conflicting Schema URL" panic in TestSetupOTelSDKSmoke (schema 1.43.0 vs
+  # 1.41.0). Remove once a compatible upstream release aligns all exporters.
+  - vulnerability: GHSA-w34q-cm8f-9c5x
+
+  # go.opentelemetry.io/otel/exporters/otlp/otlptrace* and otel/sdk — Low.
+  # Same root cause as GHSA-w34q-cm8f-9c5x above.
+  - vulnerability: GHSA-8wmf-6v46-5gfg
+
+  # golang.org/x/crypto — openpgp package marked unmaintained (severity Unknown).
+  # This service does not import or call any openpgp API; the finding is a
+  # transitive false-positive from x/crypto being a dependency of other packages.
+  - vulnerability: GO-2026-5932

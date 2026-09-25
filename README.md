@@ -2,10 +2,11 @@
 
 Thin transactional email relay for the LFX Self-Service platform. Receives
 pre-rendered email payloads over NATS request/reply, delivers them via
-Amazon SES SMTP, and tracks engagement events (opens, deliveries, bounces,
-complaints) in NATS KV.
+Amazon SES SMTP, tracks engagement events (opens, deliveries, bounces,
+complaints, link clicks) in NATS KV, and publishes real-time push events
+to NATS subjects so subscribers can react without polling.
 
-## Usage
+## API Usage
 
 ### Send an email
 
@@ -312,6 +313,126 @@ func main() {
 		analytics.TotalSent, analytics.Delivered, analytics.Opened, analytics.Failed)
 }
 ```
+
+## Event Subscriptions
+
+When `SES_EVENTING_ENABLED=true` is set, the service publishes a push event to a
+NATS subject each time an SES engagement event arrives from the SQS poller.
+Subscribers react in real time without polling `get_email_status`.
+
+Publishing is **best-effort** — a NATS failure is logged but does not affect the KV
+store write or the SQS acknowledgement. Callers that require guaranteed delivery
+should poll `get_email_status` instead.
+
+### Subjects and payloads
+
+Full field-level schemas are in [docs/email-service-contract.md — Engagement Push Events](docs/email-service-contract.md#engagement-push-events).
+
+| Subject | Payload struct | Trigger | Schema |
+|---|---|---|---|
+| `lfx.email-service.email_delivered` | `api.EmailDeliveredEvent` | SES DELIVERY event | [→](docs/email-service-contract.md#emaildeliveredevent-apiemaildeliveredsubject) |
+| `lfx.email-service.email_opened` | `api.EmailOpenedEvent` | SES OPEN event (deduplicated by SNS MessageId) | [→](docs/email-service-contract.md#emailopenedevent-apiemailopenedsubject) |
+| `lfx.email-service.email_link_clicked` | `api.EmailLinkClickedEvent` | SES CLICK event (deduplicated within a bounded window) | [→](docs/email-service-contract.md#emaillinkclickedevent-apiemaillinkclickedsubject) |
+| `lfx.email-service.email_failed` | `api.EmailFailedEvent` | SES BOUNCE or COMPLAINT event | [→](docs/email-service-contract.md#emailfailedevent-apiemailfailedsubject) |
+
+### Subscribe with the NATS CLI
+
+```bash
+# Delivery confirmations
+nats sub lfx.email-service.email_delivered
+# Example payload:
+# {"email_id":"550e8400-e29b-41d4-a716-446655440000","group_id":"invite-batch-abc123","delivered_at":"2026-09-22T20:00:00Z"}
+
+# Bounce / complaint failures
+nats sub lfx.email-service.email_failed
+# Example payload:
+# {"email_id":"550e8400-e29b-41d4-a716-446655440000","group_id":"invite-batch-abc123","reason":"bounce","failed_at":"2026-09-22T20:01:00Z"}
+
+# Opens (each unique open produces one message)
+nats sub lfx.email-service.email_opened
+# Example payload:
+# {"email_id":"550e8400-e29b-41d4-a716-446655440000","group_id":"invite-batch-abc123","open_count":2,"opened_at":"2026-09-22T20:05:00Z"}
+
+# Link clicks (query string and fragment are stripped before publishing)
+nats sub lfx.email-service.email_link_clicked
+# Example payload:
+# {"email_id":"550e8400-e29b-41d4-a716-446655440000","group_id":"invite-batch-abc123","event_id":"sns-msg-abc","link":"https://lfx.linuxfoundation.org/projects","click_count":1,"clicked_at":"2026-09-22T20:10:00Z"}
+```
+
+### Subscribe from Go
+
+```go
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+
+	"github.com/nats-io/nats.go"
+	emailapi "github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
+)
+
+func main() {
+	nc, err := nats.Connect(nats.DefaultURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer nc.Close()
+
+	// React when an email is delivered.
+	nc.Subscribe(emailapi.EmailDeliveredSubject, func(msg *nats.Msg) {
+		var evt emailapi.EmailDeliveredEvent
+		if err := json.Unmarshal(msg.Data, &evt); err != nil {
+			log.Println("decode error:", err)
+			return
+		}
+		fmt.Printf("email %s delivered at %s\n", evt.EmailID, evt.DeliveredAt)
+	})
+
+	// React when an email is opened.
+	nc.Subscribe(emailapi.EmailOpenedSubject, func(msg *nats.Msg) {
+		var evt emailapi.EmailOpenedEvent
+		if err := json.Unmarshal(msg.Data, &evt); err != nil {
+			log.Println("decode error:", err)
+			return
+		}
+		fmt.Printf("email %s opened (total opens: %d) at %s\n", evt.EmailID, evt.OpenCount, evt.OpenedAt)
+	})
+
+	// React when a link is clicked (use event_id to deduplicate).
+	nc.Subscribe(emailapi.EmailLinkClickedSubject, func(msg *nats.Msg) {
+		var evt emailapi.EmailLinkClickedEvent
+		if err := json.Unmarshal(msg.Data, &evt); err != nil {
+			log.Println("decode error:", err)
+			return
+		}
+		// evt.EventID is the SNS MessageId — use it as the at-most-once dedup key.
+		// Do NOT deduplicate on email_id + link: a recipient may click the same
+		// link multiple times, each producing a distinct EventID.
+		fmt.Printf("link clicked: email=%s link=%s event_id=%s count=%d\n",
+			evt.EmailID, evt.Link, evt.EventID, evt.ClickCount)
+	})
+
+	// React when an email fails (bounce or complaint).
+	nc.Subscribe(emailapi.EmailFailedSubject, func(msg *nats.Msg) {
+		var evt emailapi.EmailFailedEvent
+		if err := json.Unmarshal(msg.Data, &evt); err != nil {
+			log.Println("decode error:", err)
+			return
+		}
+		fmt.Printf("email %s failed: reason=%s at=%s\n", evt.EmailID, evt.Reason, evt.FailedAt)
+	})
+
+	select {} // block forever
+}
+```
+
+> **Deduplication note for clicks:** The service deduplicates CLICK events within a bounded
+> window (up to 500 unique SNS MessageIds per email record, subject to the KV record size
+> limit). Once that window is exhausted, SQS replays of later clicks are not detected and
+> may produce duplicate publishes. Use `event_id` in your subscriber to deduplicate if
+> at-most-once semantics matter to you.
 
 ## Quick Start
 
