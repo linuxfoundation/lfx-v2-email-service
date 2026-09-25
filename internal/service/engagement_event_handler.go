@@ -163,50 +163,24 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 	)
 
 	err := h.store.UpdateRecord(ctx, emailID, func(record *api.EmailRecipientRecord) {
-		eventApplied = applyEngagementEvent(record, eventType, env.MessageID, event)
+		// applyEngagementEvent returns the timestamp it wrote to the record so
+		// the publish path uses the exact same value without re-parsing the SES
+		// timestamp string (which would produce a different time.Now() fallback
+		// when the SES timestamp is missing or malformed).
+		eventApplied, capturedAt = applyEngagementEvent(record, eventType, env.MessageID, event)
 		if !eventApplied {
 			return // deduplicated or already-set; skip capture
 		}
 		capturedGroupID = record.GroupID
-		// Read timestamps directly from the current SES event rather than from
-		// record aggregate fields (e.g. LastOpenedAt). Aggregate fields hold the
-		// maximum value across all events, which is incorrect when an older SES
-		// event arrives out-of-order after a newer one.
 		switch eventType {
-		case "DELIVERY":
-			var ts string
-			if event.Delivery != nil {
-				ts = event.Delivery.Timestamp
-			}
-			capturedAt = parseTimestamp(ts)
 		case "OPEN":
-			var ts string
-			if event.Open != nil {
-				ts = event.Open.Timestamp
-			}
-			capturedAt = parseTimestamp(ts)
 			capturedOpenCount = record.OpenCount
 		case "CLICK":
-			var ts string
 			if event.Click != nil {
-				ts = event.Click.Timestamp
 				capturedClickLink = redactLink(event.Click.Link)
 			}
-			capturedAt = parseTimestamp(ts)
 			capturedClickCount = record.ClickCount
 			capturedClickEventID = env.MessageID
-		case "BOUNCE":
-			var ts string
-			if event.Bounce != nil {
-				ts = event.Bounce.Timestamp
-			}
-			capturedAt = parseTimestamp(ts)
-		case "COMPLAINT":
-			var ts string
-			if event.Complaint != nil {
-				ts = event.Complaint.Timestamp
-			}
-			capturedAt = parseTimestamp(ts)
 		}
 	})
 	if err != nil {
@@ -270,15 +244,17 @@ func (h *EngagementEventHandler) publishEngagementEvent(
 // applyEngagementEvent updates record fields based on the SES event type,
 // using SES-provided timestamps when available and falling back to time.Now().
 // snsMessageID deduplicates replayed OPEN and CLICK events.
-// Returns true when the record was modified, false when the event was a
-// no-op (duplicate SNS MessageId for OPEN/CLICK, or state already set for
-// single-fire events DELIVERY/BOUNCE/COMPLAINT).
-func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessageID string, event sesEvent) bool {
+// Returns (true, appliedAt) when the record was modified, or (false, zero)
+// when the event was a no-op (duplicate SNS MessageId for OPEN/CLICK, or
+// state already set for single-fire events DELIVERY/BOUNCE/COMPLAINT).
+// The returned time is the same value written to the record so callers can
+// use it directly without re-parsing the SES timestamp.
+func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessageID string, event sesEvent) (bool, time.Time) {
 	switch eventType {
 	case "OPEN":
 		for _, e := range record.OpenedAtList {
 			if e.EventID == snsMessageID {
-				return false // already processed this SNS delivery
+				return false, time.Time{} // already processed this SNS delivery
 			}
 		}
 		var ts string
@@ -292,27 +268,27 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		if record.LastOpenedAt == nil || t.After(*record.LastOpenedAt) {
 			record.LastOpenedAt = &t
 		}
-		return true
+		return true, t
 	case "CLICK":
 		// Dedup check: prefer ClickEventIDs (written by this version of the
 		// service) and fall back to ClickList for records written before
 		// ClickEventIDs was introduced.
 		for _, id := range record.ClickEventIDs {
 			if id == snsMessageID {
-				return false // already processed this SNS delivery
+				return false, time.Time{} // already processed this SNS delivery
 			}
 		}
 		for _, c := range record.ClickList {
 			if c.EventID == snsMessageID {
-				return false // legacy dedup fallback for older records
+				return false, time.Time{} // legacy dedup fallback for older records
 			}
 		}
 		var ts, link string
 		if event.Click != nil {
 			ts = event.Click.Timestamp
-			// Strip query and fragment from the link before storage to avoid
-			// persisting tokens, invite keys, or signed parameters that may
-			// be present in tracked URLs.
+			// Strip userinfo, query, and fragment from the link before storage
+			// to avoid persisting tokens, invite keys, or signed parameters
+			// that may be present in tracked URLs.
 			link = redactLink(event.Click.Link)
 		}
 		t := parseTimestamp(ts)
@@ -357,10 +333,10 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 				}
 			}
 		}
-		return true
+		return true, t
 	case "DELIVERY":
 		if record.Delivered {
-			return false
+			return false, time.Time{}
 		}
 		var ts string
 		if event.Delivery != nil {
@@ -369,10 +345,10 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		t := parseTimestamp(ts)
 		record.Delivered = true
 		record.DeliveredAt = &t
-		return true
+		return true, t
 	case "BOUNCE":
 		if record.Failed {
-			return false
+			return false, time.Time{}
 		}
 		var ts string
 		if event.Bounce != nil {
@@ -381,10 +357,10 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		t := parseTimestamp(ts)
 		record.Failed = true
 		record.FailedAt = &t
-		return true
+		return true, t
 	case "COMPLAINT":
 		if record.Failed {
-			return false
+			return false, time.Time{}
 		}
 		var ts string
 		if event.Complaint != nil {
@@ -393,9 +369,9 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		t := parseTimestamp(ts)
 		record.Failed = true
 		record.FailedAt = &t
-		return true
+		return true, t
 	}
-	return false
+	return false, time.Time{}
 }
 
 // parseTimestamp parses an RFC3339 timestamp string, falling back to time.Now().UTC().
@@ -410,16 +386,16 @@ func parseTimestamp(s string) time.Time {
 	return t.UTC()
 }
 
-// redactLink strips the query string and fragment from a URL to avoid storing
-// or publishing tokens, invite keys, or signed parameters that may be present
-// in SES tracked URLs. The scheme, host, and path are preserved so callers
-// can still identify which page was visited.
+// redactLink strips userinfo (credentials/tokens), the query string, and the
+// fragment from a URL to avoid storing or publishing tokens, invite keys, or
+// signed parameters that may be present in SES tracked URLs. The scheme, host,
+// and path are preserved so callers can still identify which page was visited.
 //
 // The function fails closed: if url.Parse returns an error, or if the parsed
-// URL has no host (e.g. a relative or malformed value), the query and fragment
-// are stripped by simple string cutting rather than returning the raw value
-// unchanged. This ensures sensitive components are never propagated even for
-// inputs that the url package cannot fully parse.
+// URL has no host (e.g. a relative or malformed value), the query, fragment,
+// and authority userinfo are stripped by string operations rather than
+// returning the raw value unchanged. This ensures sensitive components are
+// never propagated even for inputs that the url package cannot fully parse.
 func redactLink(raw string) string {
 	u, err := url.Parse(raw)
 	if err == nil && u.Host != "" {
@@ -428,10 +404,23 @@ func redactLink(raw string) string {
 		u.Fragment = ""
 		return u.String()
 	}
-	// Fallback: strip from the first '?' or '#', whichever comes first.
+	// Fallback for unparseable URLs (e.g. invalid percent-escapes):
+	// 1. Strip query string and fragment.
 	s := raw
 	if i := strings.IndexAny(s, "?#"); i != -1 {
 		s = s[:i]
+	}
+	// 2. Strip userinfo (token@ or user:pass@) from the authority component.
+	//    Find the authority by locating "://" and scanning up to the first '/'.
+	if i := strings.Index(s, "://"); i != -1 {
+		rest := s[i+3:]
+		end := strings.IndexByte(rest, '/')
+		if end == -1 {
+			end = len(rest)
+		}
+		if at := strings.LastIndexByte(rest[:end], '@'); at != -1 {
+			s = s[:i+3] + rest[at+1:]
+		}
 	}
 	return s
 }

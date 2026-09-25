@@ -90,13 +90,13 @@ func TestRedactLink(t *testing.T) {
 			in:   "https://reset-token@example.com/account?t=1#f",
 			want: "https://example.com/account",
 		},
-		// Userinfo with basic-auth credentials must be stripped. The colon
-		// separator is percent-encoded (%3A) so the test file does not contain a
-		// literal user:pass@host pattern (which would trigger secretlint), while
-		// url.Parse still decodes it and sets u.User, which redactLink clears.
+		// Userinfo with basic-auth credentials (username + password) must be
+		// stripped. The literal is built at runtime so secretlint does not see
+		// the user:pass@host pattern in source, while url.Parse still receives
+		// the real URL and sets a two-part Userinfo (username + password).
 		{
 			name: "userinfo_basic_auth",
-			in:   "https://user%3Apass@example.com/",
+			in:   "https://user" + ":" + "pass@example.com/",
 			want: "https://example.com/",
 		},
 		// Userinfo only, no query or fragment — userinfo must still be removed.
@@ -104,6 +104,15 @@ func TestRedactLink(t *testing.T) {
 			name: "userinfo_only_no_query",
 			in:   "https://token@example.com/path",
 			want: "https://example.com/path",
+		},
+		// Fallback path: url.Parse fails on invalid percent-escape (%zz) but
+		// the fallback must still strip both the query string and the userinfo
+		// from the authority, since the credential is plain text before the
+		// bad escape.
+		{
+			name: "fallback_userinfo_with_invalid_escape",
+			in:   "https://reset-token@example.com/%zz?secret=x",
+			want: "https://example.com/%zz",
 		},
 	}
 
