@@ -210,6 +210,9 @@ func TestEngagementEventHandler_Handle_Publish_Click(t *testing.T) {
 	assert.Equal(t, "https://example.com/link", evt.Link)
 	assert.Equal(t, 1, evt.ClickCount)
 	assert.Equal(t, mustParseTime(t, testTimestamp), evt.ClickedAt)
+	// EventID must carry the SNS MessageId so consumers can deduplicate clicks
+	// once the server-side bounded dedup window is exhausted.
+	assert.Equal(t, "sns-msg-1", evt.EventID)
 }
 
 // Multiple clicks on different links each produce a separate publish.
@@ -465,8 +468,9 @@ func TestEngagementEventHandler_Click_HistoryRolledBackAtSizeLimit(t *testing.T)
 
 // TestEngagementEventHandler_Click_IDRolledBackWhenRecordFull verifies that when
 // the base record is already at or above the 50 KB soft ceiling, both the ClickList
-// entry and the dedup ID are rolled back. ClickCount is still incremented because
-// that is a scalar increment that occurs unconditionally before the size check.
+// entry and the dedup ID are rolled back. ClickCount and LastClickedAt are still
+// recorded (they are contract scalars, not compactable history), and the published
+// clicked_at matches LastClickedAt. Only ClickList and ClickEventIDs are rolled back.
 func TestEngagementEventHandler_Click_IDRolledBackWhenRecordFull(t *testing.T) {
 	t.Parallel()
 
