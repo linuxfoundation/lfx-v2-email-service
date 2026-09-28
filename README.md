@@ -556,8 +556,9 @@ git commit -s -m "feat: ..."
 ## SES Engagement Event Tracking
 
 The service optionally captures SES engagement events (open, delivery, bounce,
-complaint) and stores them in NATS KV so callers can query whether their emails
-were opened or delivered.
+complaint, click) and stores them in NATS KV so callers can query whether their
+emails were opened or delivered. For each event the handler also publishes a
+real-time push notification to a NATS subject (see [Event Subscriptions](#event-subscriptions)).
 
 ### How it works
 
@@ -581,7 +582,10 @@ were opened or delivered.
 5. **Event handler**: `EngagementEventHandler` parses each SNS-wrapped SES event,
    extracts the `email_id` from `X-LFX-TRACKING-ID`, looks up the KV record, updates
    the relevant fields using SES-provided RFC3339 timestamps, and writes back with
-   optimistic locking. Unrecognised event types and missing records are silently skipped.
+   optimistic locking. After the KV write succeeds, the handler publishes a best-effort
+   push event to the corresponding NATS subject — a failure there is logged but does not
+   affect the KV write or SQS acknowledgement. Unrecognised event types and missing
+   records are silently skipped.
 
 ### Enabling the poller
 
