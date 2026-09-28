@@ -21,13 +21,28 @@ The service does not render templates. Callers must send pre-rendered HTML and p
 
 ## Subjects
 
+### Request/Reply
+
 | Constant | Subject | Reply |
 | --- | --- | --- |
 | `api.SendEmailSubject` | `lfx.email-service.send_email` | `SendEmailResponse` on success, `SendEmailErrorResponse` on failure |
 | `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | `EmailRecipientRecord` for `email_id`, `[]EmailRecipientRecord` for `group_id`, or `SendEmailErrorResponse` |
 | `api.GetEmailEngagementAnalyticsSubject` | `lfx.email-service.get_email_engagement_analytics` | `GetEmailEngagementAnalyticsResponse` or `SendEmailErrorResponse` |
 
-All subscriptions use queue group `api.QueueGroup`, value `lfx.email-service.queue`.
+All request/reply subscriptions use queue group `api.QueueGroup`, value `lfx.email-service.queue`.
+
+### Push (Publish-Only)
+
+The service publishes engagement events as they arrive from SES so callers can react in real time without polling `get_email_status`.
+
+| Constant | Subject | Payload |
+| --- | --- | --- |
+| `api.EmailDeliveredSubject` | `lfx.email-service.email_delivered` | `EmailDeliveredEvent` |
+| `api.EmailOpenedSubject` | `lfx.email-service.email_opened` | `EmailOpenedEvent` |
+| `api.EmailLinkClickedSubject` | `lfx.email-service.email_link_clicked` | `EmailLinkClickedEvent` |
+| `api.EmailFailedSubject` | `lfx.email-service.email_failed` | `EmailFailedEvent` |
+
+Push subjects are **best-effort**: a NATS publish failure is logged but does not affect the KV store update or the SQS message acknowledgement. Callers that require guaranteed delivery should poll `get_email_status` instead.
 
 ## Send Email
 
@@ -147,6 +162,53 @@ aggregate counts. `total_sent` reflects the number of `email_id`s in the group i
 sum of `delivered` / `failed` / `unique_opened` may be less than `total_sent` when records are
 missing or unreadable.
 
+## Engagement Push Events
+
+Each push payload is a JSON-encoded struct from `pkg/api`.
+
+### `EmailDeliveredEvent` (`api.EmailDeliveredSubject`)
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `email_id` | string | Per-send UUID. |
+| `group_id` | string | Caller-supplied or service-generated group ID. |
+| `delivered_at` | RFC3339 UTC | Timestamp from the SES DELIVERY event. |
+
+### `EmailOpenedEvent` (`api.EmailOpenedSubject`)
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `email_id` | string | Per-send UUID. |
+| `group_id` | string | Group ID. |
+| `open_count` | int | Cumulative open count after this event. |
+| `opened_at` | RFC3339 UTC | Timestamp of **this** SES OPEN event (not the max across all opens). |
+
+Published once per unique SNS `MessageId`. A replayed SQS delivery of the same OPEN event produces no second publish.
+
+### `EmailLinkClickedEvent` (`api.EmailLinkClickedSubject`)
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `email_id` | string | Per-send UUID. |
+| `group_id` | string | Group ID. |
+| `event_id` | string | SNS `MessageId` of this SES CLICK event. Use as the deduplication key for at-most-once processing (see note below). |
+| `link` | string | URL that was clicked, with query string and fragment stripped to avoid exposing tokens or signed parameters. |
+| `click_count` | int | Cumulative click count after this event. |
+| `clicked_at` | RFC3339 UTC | Timestamp of **this** SES CLICK event. |
+
+Published once per unique SNS `MessageId` **within the bounded deduplication window** (up to 500 unique click MessageIds per record, and subject to the KV record size limit). Once that window is exhausted, SQS replays of later clicks are not detected and will re-increment `click_count` and emit an additional push. Consumers that need guaranteed at-most-once processing should deduplicate on `event_id`. Note: `email_id` + `link` is **not** a valid deduplication key because a recipient may legitimately click the same link multiple times, each producing a distinct `event_id`.
+
+### `EmailFailedEvent` (`api.EmailFailedSubject`)
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `email_id` | string | Per-send UUID. |
+| `group_id` | string | Group ID. |
+| `reason` | string | `"bounce"` or `"complaint"`. |
+| `failed_at` | RFC3339 UTC | Timestamp from the SES BOUNCE or COMPLAINT event. |
+
+Published at most once per email (BOUNCE and COMPLAINT are single-fire; subsequent events are ignored once `failed=true`).
+
 ## Tracking Record
 
 `api.EmailRecipientRecord` is stored in `email-recipients`, keyed by `email_id`.
@@ -159,7 +221,8 @@ missing or unreadable.
 | `subject` | Email subject. |
 | `sent_at` | UTC send timestamp. |
 | `delivered`, `delivered_at` | Delivery event status and timestamp. |
-| `opened`, `open_count`, `opened_at_list`, `last_opened_at` | Open event status, deduplicated event list, and aggregate count. |
+| `opened`, `open_count`, `opened_at_list`, `last_opened_at` | Open event status, deduplicated event list (keyed by SNS `MessageId`), and aggregate count. |
+| `clicked`, `click_count`, `click_event_ids`, `click_list`, `last_clicked_at` | Click event status, aggregate count, SNS `MessageId` dedup list (used for replay protection; bounded to 500 entries and by the KV record size limit; once exhausted, replays of later clicks are not detected), bounded click history (bounded by the KV record size limit; each entry includes `link` and `clicked_at`), and latest click timestamp. |
 | `failed`, `failed_at` | Bounce or complaint status and timestamp. |
 
 `email-group-index` stores a JSON `[]string` of `email_id` values, keyed by `group_id`.
