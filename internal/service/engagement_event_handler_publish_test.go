@@ -493,10 +493,18 @@ func TestEngagementEventHandler_Click_IDRolledBackWhenRecordFull(t *testing.T) {
 	assert.Equal(t, 1, record.ClickCount, "ClickCount must be incremented")
 	assert.Empty(t, record.ClickEventIDs, "dedup ID must be rolled back when even the ID alone overflows the budget")
 	assert.Empty(t, record.ClickList, "ClickList must be empty")
+	// LastClickedAt must still be set: it is a contract field (not optional
+	// history) and must stay in sync with ClickCount and the published event.
+	require.NotNil(t, record.LastClickedAt, "LastClickedAt must be set even when history/dedup are rolled back")
+	wantAt := mustParseTime(t, testTimestamp)
+	assert.Equal(t, wantAt, *record.LastClickedAt, "LastClickedAt must equal the event timestamp")
 
 	// The handler still publishes the counted click.
 	require.Len(t, pub.calls, 1)
 	assert.Equal(t, api.EmailLinkClickedSubject, pub.calls[0].subject)
+	var clickEvt api.EmailLinkClickedEvent
+	require.NoError(t, json.Unmarshal(pub.calls[0].data, &clickEvt))
+	assert.Equal(t, wantAt, clickEvt.ClickedAt, "published clicked_at must equal LastClickedAt in KV record")
 }
 
 // TestEngagementEventHandler_Click_BoundedDedupWindow verifies the documented
@@ -719,4 +727,123 @@ func TestEngagementEventHandler_Handle_Open_OutOfOrderTimestamp(t *testing.T) {
 	// Open count must have incremented to 2.
 	assert.Equal(t, 2, evt.OpenCount,
 		"open_count must reflect the incremented value after the new event")
+}
+
+// TestEngagementEventHandler_Handle_MalformedTimestamp_KVMatchesPublished verifies
+// that when the SES event sub-object has an empty or non-RFC3339 timestamp,
+// the fallback time.Now() value written to the KV record and the timestamp
+// in the published NATS event are identical. Before the applyEngagementEvent
+// return-value fix a second call to parseTimestamp on the publish path would
+// produce a different time.Now() instant.
+func TestEngagementEventHandler_Handle_MalformedTimestamp_KVMatchesPublished(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		msg         func(store *mocks.TrackingStore) types.Message
+		storedAt    func(record api.EmailRecipientRecord) *time.Time
+		publishedAt func(t *testing.T, data []byte) time.Time
+	}{
+		{
+			name: "DELIVERY_empty_timestamp",
+			msg: func(store *mocks.TrackingStore) types.Message {
+				seedRecord(store)
+				return sqsMsg(t, "DELIVERY", testEmailID, testGroupID, "")
+			},
+			storedAt: func(r api.EmailRecipientRecord) *time.Time { return r.DeliveredAt },
+			publishedAt: func(t *testing.T, data []byte) time.Time {
+				var e api.EmailDeliveredEvent
+				require.NoError(t, json.Unmarshal(data, &e))
+				return e.DeliveredAt
+			},
+		},
+		{
+			name: "OPEN_empty_timestamp",
+			msg: func(store *mocks.TrackingStore) types.Message {
+				seedRecord(store)
+				return sqsMsg(t, "Open", testEmailID, testGroupID, "")
+			},
+			storedAt: func(r api.EmailRecipientRecord) *time.Time {
+				if len(r.OpenedAtList) == 0 {
+					return nil
+				}
+				t := r.OpenedAtList[0].OpenedAt
+				return &t
+			},
+			publishedAt: func(t *testing.T, data []byte) time.Time {
+				var e api.EmailOpenedEvent
+				require.NoError(t, json.Unmarshal(data, &e))
+				return e.OpenedAt
+			},
+		},
+		{
+			name: "CLICK_empty_timestamp",
+			msg: func(store *mocks.TrackingStore) types.Message {
+				seedRecord(store)
+				return sqsMsg(t, "Click", testEmailID, testGroupID, "")
+			},
+			storedAt: func(r api.EmailRecipientRecord) *time.Time {
+				if len(r.ClickList) == 0 {
+					return nil
+				}
+				t := r.ClickList[0].ClickedAt
+				return &t
+			},
+			publishedAt: func(t *testing.T, data []byte) time.Time {
+				var e api.EmailLinkClickedEvent
+				require.NoError(t, json.Unmarshal(data, &e))
+				return e.ClickedAt
+			},
+		},
+		{
+			name: "BOUNCE_empty_timestamp",
+			msg: func(store *mocks.TrackingStore) types.Message {
+				seedRecord(store)
+				return sqsMsg(t, "BOUNCE", testEmailID, testGroupID, "")
+			},
+			storedAt: func(r api.EmailRecipientRecord) *time.Time { return r.FailedAt },
+			publishedAt: func(t *testing.T, data []byte) time.Time {
+				var e api.EmailFailedEvent
+				require.NoError(t, json.Unmarshal(data, &e))
+				return e.FailedAt
+			},
+		},
+		{
+			name: "COMPLAINT_empty_timestamp",
+			msg: func(store *mocks.TrackingStore) types.Message {
+				seedRecord(store)
+				return sqsMsg(t, "COMPLAINT", testEmailID, testGroupID, "")
+			},
+			storedAt: func(r api.EmailRecipientRecord) *time.Time { return r.FailedAt },
+			publishedAt: func(t *testing.T, data []byte) time.Time {
+				var e api.EmailFailedEvent
+				require.NoError(t, json.Unmarshal(data, &e))
+				return e.FailedAt
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := mocks.NewTrackingStore()
+			msg := tc.msg(store)
+			pub := &mockPublisher{}
+			h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+			require.NoError(t, h.Handle(context.Background(), msg))
+
+			record, ok := store.GetStoredRecord(testEmailID)
+			require.True(t, ok)
+
+			require.Len(t, pub.calls, 1, "expected exactly one publish")
+			storedAt := tc.storedAt(record)
+			require.NotNil(t, storedAt, "stored timestamp field must be set")
+			publishedAt := tc.publishedAt(t, pub.calls[0].data)
+
+			assert.Equal(t, *storedAt, publishedAt,
+				"KV stored timestamp and published event timestamp must be identical "+
+					"even when SES omits or malforms the event timestamp")
+		})
+	}
 }

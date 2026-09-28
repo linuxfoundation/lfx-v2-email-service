@@ -294,11 +294,11 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		t := parseTimestamp(ts)
 		record.Clicked = true
 		record.ClickCount++
-		// Tentatively apply all click fields (including LastClickedAt) before
-		// the size check so the budget covers the full mutation.
-		// Enforce a single KV size budget across both the dedup list and the
-		// history list. We tentatively add both, then roll back in priority
-		// order: history first (large), dedup ID last (small).
+		// Always update LastClickedAt — it is a small scalar (fixed RFC3339 string)
+		// that is part of the public contract and must stay in sync with ClickCount
+		// and any published EmailLinkClickedEvent. Only the optional history
+		// (ClickList) and dedup state (ClickEventIDs) are rolled back when the
+		// KV byte budget is exhausted.
 		//
 		// Dedup guarantee: once both collections are at capacity (the record
 		// has consumed its full KV size budget), subsequent unique click
@@ -306,11 +306,6 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		// the dedup check and re-increment ClickCount. This is an explicit
 		// bounded-dedup-window trade-off; storing dedup state outside this
 		// KV record would require a separate key and is left to a follow-up.
-		var prevLastClickedAt *time.Time
-		if record.LastClickedAt != nil {
-			cp := *record.LastClickedAt
-			prevLastClickedAt = &cp
-		}
 		if record.LastClickedAt == nil || t.After(*record.LastClickedAt) {
 			record.LastClickedAt = &t
 		}
@@ -327,9 +322,6 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 				// Check again: if just the ID still overflows, roll it back too.
 				if b2, err2 := json.Marshal(record); err2 != nil || len(b2) > maxKVRecordBytes {
 					record.ClickEventIDs = record.ClickEventIDs[:len(record.ClickEventIDs)-1]
-					// Also roll back LastClickedAt so a fully-over-budget click
-					// leaves no trace on the record beyond ClickCount.
-					record.LastClickedAt = prevLastClickedAt
 				}
 			}
 		}
