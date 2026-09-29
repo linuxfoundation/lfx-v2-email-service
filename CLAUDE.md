@@ -40,6 +40,8 @@ empty success response so callers don't log expected non-prod filtering as a del
 
 This repo owns transactional email delivery over NATS request/reply, the email-service public Go contract in `pkg/api`, NATS KV engagement tracking, SES/SQS engagement event handling, and the service-local Helm chart. It does not own template rendering, newsletter composition, newsletter persistence, FGA tuple emission, or indexer publishing.
 
+Not a review finding (2026-09-29): the absence of a Goa design, HTTP gateway route, OpenFGA type or tuple emission, indexer publishing, or template engine is by design here, unless an authoritative repo doc says the change should own it; see `docs/reviews/knowledge-base/known-false-positives.md` § Missing Goa / HTTP gateway / OpenFGA / indexer / template-engine surface flagged as a gap.
+
 ## Authoritative Repo Docs
 
 - `docs/email-service-contract.md`: public NATS subjects, payloads, response shapes, errors, and tracking record fields.
