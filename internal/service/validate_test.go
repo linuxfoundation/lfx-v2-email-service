@@ -40,3 +40,36 @@ func TestIsValidUUID(t *testing.T) {
 		})
 	}
 }
+
+func TestIsValidGroupID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"uuid format", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", true},
+		{"slug style", "invite-batch-abc123", true},
+		{"alphanumeric only", "campaign2026", true},
+		{"dots and underscores", "lf.email_campaign", true},
+		{"slashes allowed", "org/campaign/001", true},
+		{"equals sign", "v=1.2.3", true},
+		{"exactly 256 chars", strings.Repeat("a", 256), true},
+		{"empty string", "", false},
+		{"257 chars — over limit", strings.Repeat("a", 257), false},
+		{"100 KiB — far over limit", strings.Repeat("a", 100_000), false},
+		{"space — invalid char", "has space", false},
+		{"tab — invalid char", "has\ttab", false},
+		{"newline — invalid char", "has\nnewline", false},
+		{"at-sign — invalid char", "user@domain", false},
+		{"caret — invalid char", "bad^char", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, isValidGroupID(tc.input))
+		})
+	}
+}

@@ -45,7 +45,7 @@ func (h *GetEmailEngagementAnalyticsHandler) HandleData(ctx context.Context, dat
 		return
 	}
 
-	if !isValidUUID(req.GroupID) {
+	if !isValidGroupID(req.GroupID) {
 		replyError(ctx, respond, "invalid group_id")
 		return
 	}

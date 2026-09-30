@@ -59,7 +59,7 @@ Request: `api.SendEmailRequest`
 | `from` | no | Sender address override. The domain must be an exact match in `SMTP_ALLOWED_FROM_DOMAINS` (default: `lfx.linuxfoundation.org`). If omitted, the service default (`DEFAULT_SMTP_FROM`) is used. |
 | `from_display_name` | no | Display name in the From header. If omitted, the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default `"LFX Self Serve"`) is used. |
 | `reply_to` | no | Sets the SMTP `Reply-To` header. The domain must be in `SMTP_ALLOWED_REPLY_TO_DOMAINS` (default: `linuxfoundation.org`); subdomain suffix matching applies, so the default also permits `lfx.linuxfoundation.org`. |
-| `group_id` | no | Caller-supplied correlation ID for a batch or campaign. If omitted, the service generates one. |
+| `group_id` | no | Caller-supplied correlation ID for a batch or campaign. If omitted, the service generates one. Must be at most 256 bytes and contain only characters from the NATS KV key character set: `[-/_=.a-zA-Z0-9]`. |
 
 Success reply: `api.SendEmailResponse`
 
@@ -78,6 +78,7 @@ Error reply: `api.SendEmailErrorResponse`
 | `from address domain not allowed` | `from` domain is not in `SMTP_ALLOWED_FROM_DOMAINS`. |
 | `invalid reply_to address` | `reply_to` is set but is not a parseable email address. |
 | `reply_to address domain not allowed` | `reply_to` domain is not in `SMTP_ALLOWED_REPLY_TO_DOMAINS`. |
+| `invalid group_id` | `group_id` exceeds 256 bytes or contains characters outside the NATS KV key character set (`[-/_=.a-zA-Z0-9]`). |
 | `email delivery failed` | SMTP delivery failed after the service accepted the request. |
 
 When `EMAIL_ENABLED=false`, the service uses `NoOpSender`: the request still succeeds but returns an empty `SendEmailResponse` (`email_id` and `group_id` both empty). No SMTP message is sent and no tracking records are written.
@@ -122,6 +123,8 @@ Error values:
 | `invalid request payload` | Request body is not valid JSON. |
 | `email_id or group_id is required` | Neither lookup field was set. |
 | `only one of email_id or group_id may be set` | Both lookup fields were set. |
+| `invalid email_id` | `email_id` is not a valid UUID (8-4-4-4-12 hex, case-insensitive). |
+| `invalid group_id` | `group_id` exceeds 256 bytes or contains characters outside the NATS KV key character set (`[-/_=.a-zA-Z0-9]`). |
 | `not found` | No matching record or group index exists. |
 | `internal error` | KV read, decode, or response serialization failed. |
 
@@ -152,6 +155,7 @@ Error values:
 | --- | --- |
 | `invalid request payload` | Request body is not valid JSON. |
 | `group_id is required` | The request omitted `group_id`. |
+| `invalid group_id` | `group_id` exceeds 256 bytes or contains characters outside the NATS KV key character set (`[-/_=.a-zA-Z0-9]`). |
 | `not found` | No group index exists for `group_id`. |
 | `internal error` | Reading or decoding the group index failed. |
 

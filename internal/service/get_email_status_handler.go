@@ -50,7 +50,7 @@ func (h *GetEmailStatusHandler) HandleData(ctx context.Context, data []byte, res
 		}
 		h.handleByEmailID(ctx, respond, req.EmailID)
 	case req.GroupID != "":
-		if !isValidUUID(req.GroupID) {
+		if !isValidGroupID(req.GroupID) {
 			replyError(ctx, respond, "invalid group_id")
 			return
 		}

@@ -60,7 +60,7 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		return
 	}
 
-	if req.GroupID != "" && !isValidUUID(req.GroupID) {
+	if req.GroupID != "" && !isValidGroupID(req.GroupID) {
 		slog.WarnContext(ctx, "send email request has invalid group_id format")
 		replyError(ctx, respond, "invalid group_id")
 		return

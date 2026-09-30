@@ -69,7 +69,7 @@ arrive out-of-order after a newer one.
 Push publishing is best-effort: a NATS failure is logged but does not affect the KV write or the
 SQS acknowledgement. See `docs/email-service-contract.md` for payload schemas.
 
-Unknown event types, malformed SNS/SES payloads, and missing tracking headers are treated as non-retryable skips (handler returns `nil`, SQS message is deleted).
+Unknown event types, malformed SNS/SES payloads, missing tracking headers, and a non-UUID extracted `email_id` are treated as non-retryable skips (handler returns `nil`, SQS message is deleted).
 
 The engagement handler distinguishes two classes of `email-recipients` KV errors:
 

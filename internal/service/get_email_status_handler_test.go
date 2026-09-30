@@ -90,8 +90,13 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 			wantErrMsg: "invalid email_id",
 		},
 		{
-			name:       "group_id not a UUID",
-			payload:    api.GetEmailStatusRequest{GroupID: "grp-a"},
+			name:       "group_id over 256 chars",
+			payload:    api.GetEmailStatusRequest{GroupID: strings.Repeat("a", 257)},
+			wantErrMsg: "invalid group_id",
+		},
+		{
+			name:       "group_id invalid char (space)",
+			payload:    api.GetEmailStatusRequest{GroupID: "has space"},
 			wantErrMsg: "invalid group_id",
 		},
 		{

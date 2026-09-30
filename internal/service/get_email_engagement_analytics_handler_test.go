@@ -44,12 +44,17 @@ func TestGetEmailEngagementAnalyticsHandler_HandleData(t *testing.T) {
 			wantErrMsg: "group_id is required",
 		},
 		{
-			name:       "group_id not a UUID — short non-UUID",
-			payload:    api.GetEmailEngagementAnalyticsRequest{GroupID: "grp-a"},
+			name:       "group_id over 256 chars",
+			payload:    api.GetEmailEngagementAnalyticsRequest{GroupID: strings.Repeat("a", 257)},
 			wantErrMsg: "invalid group_id",
 		},
 		{
-			name:       "group_id not a UUID — 100 KiB oversized value",
+			name:       "group_id invalid char (space)",
+			payload:    api.GetEmailEngagementAnalyticsRequest{GroupID: "has space"},
+			wantErrMsg: "invalid group_id",
+		},
+		{
+			name:       "group_id 100 KiB oversized value",
 			payload:    api.GetEmailEngagementAnalyticsRequest{GroupID: strings.Repeat("a", 100_000)},
 			wantErrMsg: "invalid group_id",
 		},
