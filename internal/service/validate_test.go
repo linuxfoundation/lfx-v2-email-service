@@ -64,6 +64,8 @@ func TestIsValidGroupID(t *testing.T) {
 		{"newline — invalid char", "has\nnewline", false},
 		{"at-sign — invalid char", "user@domain", false},
 		{"caret — invalid char", "bad^char", false},
+		{"leading dot — nats keyValid rejects", ".campaign", false},
+		{"trailing dot — nats keyValid rejects", "campaign.", false},
 	}
 
 	for _, tc := range tests {

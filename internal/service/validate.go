@@ -28,9 +28,17 @@ const maxGroupIDLen = 256
 var groupIDRe = regexp.MustCompile(`^[-/_=.a-zA-Z0-9]+$`)
 
 // isValidGroupID returns true when s is non-empty, at most maxGroupIDLen bytes,
-// and contains only characters from the NATS KV key character set.
+// contains only characters from the NATS KV key character set, and does not
+// start or end with '.'. The leading/trailing '.' check mirrors nats.go v1.47.0
+// keyValid, which rejects such keys with ErrInvalidKey before any network call.
 // group_id is caller-supplied (not required to be a UUID), so the bound is
 // length + character set rather than UUID format.
 func isValidGroupID(s string) bool {
-	return len(s) <= maxGroupIDLen && groupIDRe.MatchString(s)
+	if len(s) == 0 || len(s) > maxGroupIDLen {
+		return false
+	}
+	if s[0] == '.' || s[len(s)-1] == '.' {
+		return false
+	}
+	return groupIDRe.MatchString(s)
 }
