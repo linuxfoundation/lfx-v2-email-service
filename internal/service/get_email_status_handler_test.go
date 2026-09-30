@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,20 @@ import (
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/service"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/service/mocks"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
+)
+
+const (
+	statusEmailUUID1   = "11111111-1111-1111-1111-111111111111"
+	statusEmailUUID2   = "22222222-2222-2222-2222-222222222222"
+	statusEmailUUIDErr = "77777777-7777-7777-7777-777777777777"
+	statusGroupUUIDA   = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	statusGroupUUIDB   = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	statusGroupUUIDF   = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+	statusEmailMissing = "99999999-9999-9999-9999-999999999999"
+	statusGroupMissing = "88888888-8888-8888-8888-888888888888"
+	statusEmailExists  = "33333333-3333-3333-3333-333333333333"
+	statusEmailGone    = "44444444-4444-4444-4444-444444444444"
+	statusEmailBad     = "55555555-5555-5555-5555-555555555555"
 )
 
 func seedRecipient(t *testing.T, store *mocks.TrackingStore, emailID, groupID string) api.EmailRecipientRecord {
@@ -61,65 +76,85 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 		},
 		{
 			name:       "both email_id and group_id",
-			payload:    api.GetEmailStatusRequest{EmailID: "abc", GroupID: "grp"},
+			payload:    api.GetEmailStatusRequest{EmailID: statusEmailUUID1, GroupID: statusGroupUUIDA},
 			wantErrMsg: "only one of email_id or group_id may be set",
 		},
 		{
+			name:       "email_id not a UUID",
+			payload:    api.GetEmailStatusRequest{EmailID: "email-1"},
+			wantErrMsg: "invalid email_id",
+		},
+		{
+			name:       "email_id 100 KiB oversized value",
+			payload:    api.GetEmailStatusRequest{EmailID: strings.Repeat("a", 100_000)},
+			wantErrMsg: "invalid email_id",
+		},
+		{
+			name:       "group_id not a UUID",
+			payload:    api.GetEmailStatusRequest{GroupID: "grp-a"},
+			wantErrMsg: "invalid group_id",
+		},
+		{
+			name:       "group_id 100 KiB oversized value",
+			payload:    api.GetEmailStatusRequest{GroupID: strings.Repeat("a", 100_000)},
+			wantErrMsg: "invalid group_id",
+		},
+		{
 			name:    "email_id happy path",
-			payload: api.GetEmailStatusRequest{EmailID: "email-1"},
+			payload: api.GetEmailStatusRequest{EmailID: statusEmailUUID1},
 			setup: func(store *mocks.TrackingStore) {
-				seedRecipient(t, store, "email-1", "group-1")
+				seedRecipient(t, store, statusEmailUUID1, statusGroupUUIDA)
 			},
-			wantRecord: &api.EmailRecipientRecord{EmailID: "email-1", GroupID: "group-1", To: "user@example.com", Subject: "Hello"},
+			wantRecord: &api.EmailRecipientRecord{EmailID: statusEmailUUID1, GroupID: statusGroupUUIDA, To: "user@example.com", Subject: "Hello"},
 		},
 		{
 			name:       "email_id not found",
-			payload:    api.GetEmailStatusRequest{EmailID: "missing"},
+			payload:    api.GetEmailStatusRequest{EmailID: statusEmailMissing},
 			wantErrMsg: "not found",
 		},
 		{
 			name:    "email_id KV internal error",
-			payload: api.GetEmailStatusRequest{EmailID: "bad-key"},
+			payload: api.GetEmailStatusRequest{EmailID: statusEmailUUIDErr},
 			setup: func(store *mocks.TrackingStore) {
-				store.GetErrFor = map[string]error{"bad-key": errors.New("kv unavailable")}
+				store.GetErrFor = map[string]error{statusEmailUUIDErr: errors.New("kv unavailable")}
 			},
 			wantErrMsg: "internal error",
 		},
 		{
 			name:    "group_id happy path",
-			payload: api.GetEmailStatusRequest{GroupID: "grp-a"},
+			payload: api.GetEmailStatusRequest{GroupID: statusGroupUUIDA},
 			setup: func(store *mocks.TrackingStore) {
-				seedRecipient(t, store, "e1", "grp-a")
-				seedRecipient(t, store, "e2", "grp-a")
-				seedGroupIndex(t, store, "grp-a", []string{"e1", "e2"})
+				seedRecipient(t, store, statusEmailUUID1, statusGroupUUIDA)
+				seedRecipient(t, store, statusEmailUUID2, statusGroupUUIDA)
+				seedGroupIndex(t, store, statusGroupUUIDA, []string{statusEmailUUID1, statusEmailUUID2})
 			},
 			wantRecords: &[]api.EmailRecipientRecord{
-				{EmailID: "e1", GroupID: "grp-a", To: "user@example.com", Subject: "Hello"},
-				{EmailID: "e2", GroupID: "grp-a", To: "user@example.com", Subject: "Hello"},
+				{EmailID: statusEmailUUID1, GroupID: statusGroupUUIDA, To: "user@example.com", Subject: "Hello"},
+				{EmailID: statusEmailUUID2, GroupID: statusGroupUUIDA, To: "user@example.com", Subject: "Hello"},
 			},
 		},
 		{
 			name:       "group_id not found",
-			payload:    api.GetEmailStatusRequest{GroupID: "missing-grp"},
+			payload:    api.GetEmailStatusRequest{GroupID: statusGroupMissing},
 			wantErrMsg: "not found",
 		},
 		{
 			name:    "group_id — missing recipient records skipped",
-			payload: api.GetEmailStatusRequest{GroupID: "grp-b"},
+			payload: api.GetEmailStatusRequest{GroupID: statusGroupUUIDB},
 			setup: func(store *mocks.TrackingStore) {
-				seedRecipient(t, store, "exists", "grp-b")
-				seedGroupIndex(t, store, "grp-b", []string{"exists", "gone"})
+				seedRecipient(t, store, statusEmailExists, statusGroupUUIDB)
+				seedGroupIndex(t, store, statusGroupUUIDB, []string{statusEmailExists, statusEmailGone})
 			},
 			wantRecords: &[]api.EmailRecipientRecord{
-				{EmailID: "exists", GroupID: "grp-b", To: "user@example.com", Subject: "Hello"},
+				{EmailID: statusEmailExists, GroupID: statusGroupUUIDB, To: "user@example.com", Subject: "Hello"},
 			},
 		},
 		{
 			name:    "group_id — unreadable recipient records silently skipped",
-			payload: api.GetEmailStatusRequest{GroupID: "grp-c"},
+			payload: api.GetEmailStatusRequest{GroupID: statusGroupUUIDF},
 			setup: func(store *mocks.TrackingStore) {
-				seedGroupIndex(t, store, "grp-c", []string{"e-bad"})
-				store.GetErrFor = map[string]error{"e-bad": errors.New("kv unavailable")}
+				seedGroupIndex(t, store, statusGroupUUIDF, []string{statusEmailBad})
+				store.GetErrFor = map[string]error{statusEmailBad: errors.New("kv unavailable")}
 			},
 			// Per-record errors are best-effort skipped; the handler returns an empty list, not an error.
 			wantRecords: &[]api.EmailRecipientRecord{},

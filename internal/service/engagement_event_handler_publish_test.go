@@ -82,8 +82,8 @@ func sqsMsg(t *testing.T, eventType, emailID, groupID, timestamp string, extra .
 }
 
 const (
-	testEmailID   = "email-uuid-1"
-	testGroupID   = "group-uuid-1"
+	testEmailID   = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	testGroupID   = "11111111-1111-1111-1111-111111111111"
 	testTimestamp = "2026-01-02T15:04:05Z"
 )
 
@@ -329,8 +329,11 @@ func TestEngagementEventHandler_Handle_RecordNotFound_NoPublish(t *testing.T) {
 	pub := &mockPublisher{}
 	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
 
+	// Use a valid UUID that is not seeded in the store so the handler reaches
+	// the UpdateRecord "not found" path (after UUID validation passes).
+	missingEmailID := "99999999-9999-9999-9999-999999999999"
 	for _, eventType := range []string{"BOUNCE", "DELIVERY", "Open", "Click"} {
-		msg := sqsMsg(t, eventType, "unknown-email", testGroupID, testTimestamp)
+		msg := sqsMsg(t, eventType, missingEmailID, testGroupID, testTimestamp)
 		require.NoError(t, h.Handle(context.Background(), msg))
 	}
 
@@ -848,6 +851,53 @@ func TestEngagementEventHandler_Handle_MalformedTimestamp_KVMatchesPublished(t *
 			assert.Equal(t, *storedAt, publishedAt,
 				"KV stored timestamp and published event timestamp must be identical "+
 					"even when SES omits or malforms the event timestamp")
+		})
+	}
+}
+
+// TestEngagementEventHandler_Handle_NonUUIDTrackingID verifies that SES events
+// carrying a non-UUID (including oversized) X-LFX-TRACKING-ID are silently
+// dropped before any KV or NATS operation, so an adversarially large tracking
+// header cannot trigger a NATS max_control_line violation.
+func TestEngagementEventHandler_Handle_NonUUIDTrackingID(t *testing.T) {
+	t.Parallel()
+
+	buildMsg := func(trackingID string) types.Message {
+		sesMsg := map[string]any{
+			"eventType": "BOUNCE",
+			"mail": map[string]any{
+				"headers": []map[string]any{
+					{"name": "X-LFX-TRACKING-ID", "value": trackingID},
+				},
+			},
+			"bounce": map[string]any{"timestamp": testTimestamp},
+		}
+		inner, _ := json.Marshal(sesMsg)
+		outer, _ := json.Marshal(map[string]string{"MessageId": "sns-x", "Message": string(inner)})
+		body := string(outer)
+		return types.Message{Body: &body}
+	}
+
+	cases := []struct {
+		name       string
+		trackingID string
+	}{
+		{"short non-UUID", "not-a-uuid"},
+		{"100 KiB key-legal chars", strings.Repeat("a", 100_000)},
+		{"UUID-format group slash oversized email", testGroupID + "/" + strings.Repeat("b", 100_000)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := mocks.NewTrackingStore()
+			pub := &mockPublisher{}
+			h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+			require.NoError(t, h.Handle(context.Background(), buildMsg(tc.trackingID)))
+
+			assert.Empty(t, pub.calls, "must not publish when tracking id is not a UUID")
 		})
 	}
 }

@@ -60,6 +60,12 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		return
 	}
 
+	if req.GroupID != "" && !isValidUUID(req.GroupID) {
+		slog.WarnContext(ctx, "send email request has invalid group_id format")
+		replyError(ctx, respond, "invalid group_id")
+		return
+	}
+
 	// Recipient domain allowlist. Empty = permit all (production default). Set in non-prod
 	// to prevent test mail from reaching real users' personal addresses. A blocked recipient
 	// returns an empty success response (not an error) so callers don't treat expected

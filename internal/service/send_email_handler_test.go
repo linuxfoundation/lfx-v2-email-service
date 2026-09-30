@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,6 +17,13 @@ import (
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/service"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/service/mocks"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
+)
+
+const (
+	callerGroupUUID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	kvGroupUUID1    = "11111111-1111-1111-1111-111111111111"
+	kvGroupUUID2    = "22222222-2222-2222-2222-222222222222"
+	kvGroupUUID3    = "33333333-3333-3333-3333-333333333333"
 )
 
 type mockSender struct {
@@ -60,12 +68,24 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 		},
 		{
 			name:        "happy path — caller provides group_id",
-			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "caller-group"},
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: callerGroupUUID},
 			emailID:     "email-uuid-2",
-			groupID:     "caller-group",
+			groupID:     callerGroupUUID,
 			wantSent:    true,
 			wantEmailID: "email-uuid-2",
-			wantGroupID: "caller-group",
+			wantGroupID: callerGroupUUID,
+		},
+		{
+			name:        "group_id not a UUID — rejected before send",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "not-a-uuid"},
+			wantSent:    false,
+			wantErrResp: true,
+		},
+		{
+			name:        "group_id 100 KiB oversized value — rejected before send",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: strings.Repeat("a", 100_000)},
+			wantSent:    false,
+			wantErrResp: true,
 		},
 		{
 			name:        "sender error",
@@ -240,10 +260,10 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		t.Parallel()
 
 		store := mocks.NewTrackingStore()
-		sender := &mockSender{emailID: "email-1", groupID: "group-1"}
+		sender := &mockSender{emailID: "email-1", groupID: kvGroupUUID1}
 		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
-		req := api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-1"}
+		req := api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: kvGroupUUID1}
 		data, err := json.Marshal(req)
 		require.NoError(t, err)
 
@@ -252,7 +272,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		record, ok := store.GetStoredRecord("email-1")
 		require.True(t, ok, "recipient record should be stored under emailID")
 		assert.Equal(t, "email-1", record.EmailID)
-		assert.Equal(t, "group-1", record.GroupID)
+		assert.Equal(t, kvGroupUUID1, record.GroupID)
 		assert.Equal(t, "alice@example.com", record.To)
 		assert.Equal(t, "Hello", record.Subject)
 		assert.False(t, record.SentAt.IsZero())
@@ -262,14 +282,14 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		t.Parallel()
 
 		store := mocks.NewTrackingStore()
-		sender := &mockSender{emailID: "email-2", groupID: "group-2"}
+		sender := &mockSender{emailID: "email-2", groupID: kvGroupUUID2}
 		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
-		req := api.SendEmailRequest{To: "bob@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-2"}
+		req := api.SendEmailRequest{To: "bob@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: kvGroupUUID2}
 		data, _ := json.Marshal(req)
 		handler.HandleData(context.Background(), data, func([]byte) error { return nil })
 
-		ids, ok := store.GetStoredGroup("group-2")
+		ids, ok := store.GetStoredGroup(kvGroupUUID2)
 		require.True(t, ok, "group index should be written")
 		assert.Equal(t, []string{"email-2"}, ids)
 	})
@@ -280,14 +300,14 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		store := mocks.NewTrackingStore()
 
 		for _, id := range []string{"email-a", "email-b"} {
-			sender := &mockSender{emailID: id, groupID: "group-3"}
+			sender := &mockSender{emailID: id, groupID: kvGroupUUID3}
 			handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
-			req := api.SendEmailRequest{To: "c@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "group-3"}
+			req := api.SendEmailRequest{To: "c@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: kvGroupUUID3}
 			data, _ := json.Marshal(req)
 			handler.HandleData(context.Background(), data, func([]byte) error { return nil })
 		}
 
-		ids, ok := store.GetStoredGroup("group-3")
+		ids, ok := store.GetStoredGroup(kvGroupUUID3)
 		require.True(t, ok)
 		assert.ElementsMatch(t, []string{"email-a", "email-b"}, ids)
 	})

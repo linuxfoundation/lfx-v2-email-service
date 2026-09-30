@@ -45,6 +45,11 @@ func (h *GetEmailEngagementAnalyticsHandler) HandleData(ctx context.Context, dat
 		return
 	}
 
+	if !isValidUUID(req.GroupID) {
+		replyError(ctx, respond, "invalid group_id")
+		return
+	}
+
 	ctx = logging.AppendCtx(ctx, slog.String("group_id", req.GroupID))
 
 	records, totalIDs, err := h.store.GetGroupRecords(ctx, req.GroupID)
