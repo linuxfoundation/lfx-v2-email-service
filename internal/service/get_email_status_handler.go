@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 
 	natsgo "github.com/nats-io/nats.go"
 
@@ -48,7 +49,7 @@ func (h *GetEmailStatusHandler) HandleData(ctx context.Context, data []byte, res
 			replyError(ctx, respond, "invalid email_id")
 			return
 		}
-		h.handleByEmailID(ctx, respond, req.EmailID)
+		h.handleByEmailID(ctx, respond, strings.ToLower(req.EmailID))
 	case req.GroupID != "":
 		if !isValidGroupID(req.GroupID) {
 			replyError(ctx, respond, "invalid group_id")

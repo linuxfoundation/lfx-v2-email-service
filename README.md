@@ -24,7 +24,7 @@ to NATS subjects so subscribers can react without polling.
 | `from` | string | no | Sender address (e.g. `newsletter@lfx.linuxfoundation.org`). When omitted the service default (`DEFAULT_SMTP_FROM`) is used. The domain must be in the service's allowed list — see [Configuring the sender address](#configuring-the-sender-address). |
 | `from_display_name` | string | no | Display name shown in the From header (e.g. `LFX Newsletter`). When omitted the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default: `"LFX Self Serve"`) is used. |
 | `reply_to` | string | no | Email address set on the SMTP `Reply-To` header. When set, mail client replies go to this address instead of the `From` address. The domain must be in the service's reply-to allowlist (`SMTP_ALLOWED_REPLY_TO_DOMAINS`, default: `linuxfoundation.org`). Subdomain suffix matching applies — the default permits `@linuxfoundation.org` and `@*.linuxfoundation.org`. Omitted from the message when not provided. |
-| `group_id` | string | no | Caller-supplied ID grouping related emails (e.g. an invite batch). Use it to query aggregate engagement counts via [`lfx.email-service.get_email_engagement_analytics`](#query-group-engagement-analytics). If omitted, a UUID is generated and returned but is not meaningful for analytics. |
+| `group_id` | string | no | Caller-supplied ID grouping related emails (e.g. an invite batch). Must be at most 256 bytes, use only `[-/_=.a-zA-Z0-9]`, and must not start/end with `.` or contain `..`. If omitted, a UUID is generated. Use it to query aggregate engagement counts via [`lfx.email-service.get_email_engagement_analytics`](#query-group-engagement-analytics). |
 
 ```json
 {
@@ -60,6 +60,7 @@ MIME header. Store it if you want to query delivery/open status later.
 | `from address domain not allowed` | `from` domain is not in the service's allowed list |
 | `invalid reply_to address` | `reply_to` field is not a valid email address |
 | `reply_to address domain not allowed` | `reply_to` domain is not in the service's allowed list |
+| `invalid group_id` | `group_id` exceeds 256 bytes, contains disallowed characters, or starts/ends with `.` or contains `..` |
 | `email delivery failed` | Service accepted the request but SMTP delivery failed |
 
 **Examples (NATS CLI):**
@@ -161,6 +162,8 @@ arrives.
 | `invalid request payload` | Request body is not valid JSON |
 | `email_id or group_id is required` | Neither field was set |
 | `only one of email_id or group_id may be set` | Both fields were set |
+| `invalid email_id` | `email_id` is not a valid UUID (8-4-4-4-12 hex, case-insensitive) |
+| `invalid group_id` | `group_id` exceeds 256 bytes, contains disallowed characters, or starts/ends with `.` or contains `..` |
 | `not found` | No record exists for the given `email_id` or `group_id` |
 
 **Examples (NATS CLI):**
@@ -204,6 +207,7 @@ NATS KV is configured.
 | `error` value | Cause |
 |---|---|
 | `invalid request payload` | Request body is not valid JSON or `group_id` is missing |
+| `invalid group_id` | `group_id` exceeds 256 bytes, contains disallowed characters, or starts/ends with `.` or contains `..` |
 | `not found` | No emails have been sent under the given `group_id` |
 
 **Example (NATS CLI):**

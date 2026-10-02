@@ -85,7 +85,11 @@ type SendEmailRequest struct {
 	From            string `json:"from,omitempty"`              // bare address; empty → service default
 	FromDisplayName string `json:"from_display_name,omitempty"` // display name; empty → service default
 	ReplyTo         string `json:"reply_to,omitempty"`          // Reply-To header address; omitted when empty
-	GroupID         string `json:"group_id,omitempty"`
+	// GroupID is an optional caller-supplied correlation ID (max 256 bytes,
+	// charset [-/_=.a-zA-Z0-9], no leading/trailing/consecutive dots).
+	// If omitted, a UUID is generated. Rejected with "invalid group_id" if
+	// the value violates these constraints.
+	GroupID string `json:"group_id,omitempty"`
 }
 
 // SendEmailResponse is the JSON payload returned in the NATS reply on success.

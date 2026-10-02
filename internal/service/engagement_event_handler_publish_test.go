@@ -856,9 +856,10 @@ func TestEngagementEventHandler_Handle_MalformedTimestamp_KVMatchesPublished(t *
 }
 
 // TestEngagementEventHandler_Handle_NonUUIDTrackingID verifies that SES events
-// carrying a non-UUID X-LFX-TRACKING-ID are dropped before any KV operation,
-// so an adversarially large tracking header cannot trigger a NATS max_control_line
-// violation and close the service's shared connection.
+// whose extracted email_id segment (the part after the last '/' in
+// X-LFX-TRACKING-ID) is not a UUID are dropped before any KV operation, so an
+// adversarially large value cannot trigger a NATS max_control_line violation and
+// close the service's shared connection.
 //
 // The invariant is tested by injecting an error into GetErrFor for the extracted
 // email_id: if the UUID guard is bypassed and UpdateRecord is called, Handle

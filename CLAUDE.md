@@ -99,6 +99,7 @@ pkg/redaction/                      → email address redaction for logs
   callers' `RequestWithContext` never hangs.
 - **30-second SMTP bounded wait.** `SMTPSender.Send` runs `smtp.SendMail` in a goroutine and waits up to 30 seconds (`smtpTimeout` constant in `internal/infrastructure/smtp/sender.go`). If the deadline fires, `Send` returns an error to the caller; the underlying network connection may continue briefly in the background goroutine until the OS-level TCP timeout fires.
   Do not add outer retries that ignore this timeout — they will compound rather than bound latency.
+- **KV key validation before any KV call.** `email_id` (always service-generated) is validated as a UUID (`isValidUUID` in `internal/service/validate.go`) before any KV lookup; a non-UUID value is rejected with `"invalid email_id"` or silently dropped (engagement handler) without touching the NATS connection. `group_id` (caller-supplied) is validated as a KV-safe string (`isValidGroupID`): max 256 bytes, charset `[-/_=.a-zA-Z0-9]`, no leading/trailing/consecutive dots. Consecutive dots (e.g. `a..b`) are rejected here even though nats.go's `keyValid` accepts them, because the resulting NATS subject contains an empty token that nats-server will not route. Any handler that accepts a caller-controlled `email_id` or `group_id` must reuse these validators before passing the value to the KV store.
 
 ## Development Workflow
 
@@ -287,7 +288,7 @@ All constants are in `pkg/api/nats.go`.
 | Constant | Bucket | Key | Value |
 |---|---|---|---|
 | `api.EmailRecipientsKVBucket` | `email-recipients` | `<email_id>` (UUID per send) | JSON `EmailRecipientRecord` |
-| `api.EmailGroupIndexKVBucket` | `email-group-index` | `<group_id>` (UUID per campaign) | JSON `[]string` of `email_id`s |
+| `api.EmailGroupIndexKVBucket` | `email-group-index` | `<group_id>` (caller-supplied KV-safe ID or service-generated UUID) | JSON `[]string` of `email_id`s |
 
 The `email_id` and `group_id` are returned to callers in `SendEmailResponse`.
 The `group_id` is optional in `SendEmailRequest` — if not provided the email service generates one.
@@ -299,7 +300,7 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
 **Event flow:**
 1. SQS message body is a JSON SNS envelope: `{"MessageId": "<sns-id>", "Message": "<ses-event-json>"}`.
 2. The inner SES event JSON contains `eventType` and `mail.headers`.
-3. The handler reads the `X-LFX-TRACKING-ID` header (format: `<group_id>/<email_id>`), splits on the last `/` to extract `email_id`, then looks up the `EmailRecipientRecord` in the `email-recipients` KV bucket.
+3. The handler reads the `X-LFX-TRACKING-ID` header (format: `<group_id>/<email_id>`), splits on the last `/` to extract `email_id`. If the extracted `email_id` is not a valid UUID (`isValidUUID`), the message is dropped without any KV access (non-retryable skip). Otherwise it is normalized to lowercase and used to look up the `EmailRecipientRecord` in the `email-recipients` KV bucket.
 
 **Handled event types** (all others are silently dropped):
 

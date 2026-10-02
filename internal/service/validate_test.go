@@ -66,6 +66,7 @@ func TestIsValidGroupID(t *testing.T) {
 		{"caret — invalid char", "bad^char", false},
 		{"leading dot — nats keyValid rejects", ".campaign", false},
 		{"trailing dot — nats keyValid rejects", "campaign.", false},
+		{"consecutive dots — empty NATS subject token", "a..b", false},
 	}
 
 	for _, tc := range tests {

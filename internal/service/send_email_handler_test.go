@@ -51,6 +51,7 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 		groupID             string
 		wantSent            bool
 		wantErrResp         bool
+		wantErrMsg          string
 		wantEmailID         string
 		wantGroupID         string
 		wantFrom            string // assert sender received this From value
@@ -89,18 +90,21 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: strings.Repeat("a", 257)},
 			wantSent:    false,
 			wantErrResp: true,
+			wantErrMsg:  "invalid group_id",
 		},
 		{
 			name:        "group_id invalid char — rejected before send",
 			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "has space"},
 			wantSent:    false,
 			wantErrResp: true,
+			wantErrMsg:  "invalid group_id",
 		},
 		{
 			name:        "group_id 100 KiB oversized value — rejected before send",
 			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: strings.Repeat("a", 100_000)},
 			wantSent:    false,
 			wantErrResp: true,
+			wantErrMsg:  "invalid group_id",
 		},
 		{
 			name:        "sender error",
@@ -256,6 +260,9 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 				var errResp api.SendEmailErrorResponse
 				require.NoError(t, json.Unmarshal(responded, &errResp))
 				assert.NotEmpty(t, errResp.Error)
+				if tc.wantErrMsg != "" {
+					assert.Equal(t, tc.wantErrMsg, errResp.Error)
+				}
 			}
 			if tc.wantFrom != "" || tc.wantSent {
 				assert.Equal(t, tc.wantFrom, sender.req.From, "sender received wrong From")

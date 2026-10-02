@@ -135,9 +135,10 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 		return nil
 	}
 	if !isValidUUID(emailID) {
-		slog.WarnContext(ctx, "ses event has non-UUID tracking id, skipping", "tracking_id_len", len(emailID))
+		slog.WarnContext(ctx, "ses event has non-UUID email_id, skipping", "email_id_len", len(emailID))
 		return nil
 	}
+	emailID = strings.ToLower(emailID)
 
 	ctx = logging.AppendCtx(ctx, slog.String("email_id", emailID))
 
