@@ -82,8 +82,8 @@ func sqsMsg(t *testing.T, eventType, emailID, groupID, timestamp string, extra .
 }
 
 const (
-	testEmailID   = "email-uuid-1"
-	testGroupID   = "group-uuid-1"
+	testEmailID   = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	testGroupID   = "11111111-1111-1111-1111-111111111111"
 	testTimestamp = "2026-01-02T15:04:05Z"
 )
 
@@ -329,8 +329,11 @@ func TestEngagementEventHandler_Handle_RecordNotFound_NoPublish(t *testing.T) {
 	pub := &mockPublisher{}
 	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
 
+	// Use a valid UUID that is not seeded in the store so the handler reaches
+	// the UpdateRecord "not found" path (after UUID validation passes).
+	missingEmailID := "99999999-9999-9999-9999-999999999999"
 	for _, eventType := range []string{"BOUNCE", "DELIVERY", "Open", "Click"} {
-		msg := sqsMsg(t, eventType, "unknown-email", testGroupID, testTimestamp)
+		msg := sqsMsg(t, eventType, missingEmailID, testGroupID, testTimestamp)
 		require.NoError(t, h.Handle(context.Background(), msg))
 	}
 
@@ -848,6 +851,73 @@ func TestEngagementEventHandler_Handle_MalformedTimestamp_KVMatchesPublished(t *
 			assert.Equal(t, *storedAt, publishedAt,
 				"KV stored timestamp and published event timestamp must be identical "+
 					"even when SES omits or malforms the event timestamp")
+		})
+	}
+}
+
+// TestEngagementEventHandler_Handle_NonUUIDTrackingID verifies that SES events
+// whose extracted email_id segment (the part after the last '/' in
+// X-LFX-TRACKING-ID) is not a UUID are dropped before any KV operation, so an
+// adversarially large value cannot trigger a NATS max_control_line violation and
+// close the service's shared connection.
+//
+// The invariant is tested by injecting an error into GetErrFor for the extracted
+// email_id: if the UUID guard is bypassed and UpdateRecord is called, Handle
+// returns a non-nil error, causing require.NoError to fail.
+func TestEngagementEventHandler_Handle_NonUUIDTrackingID(t *testing.T) {
+	t.Parallel()
+
+	buildMsg := func(trackingID string) types.Message {
+		sesMsg := map[string]any{
+			"eventType": "BOUNCE",
+			"mail": map[string]any{
+				"headers": []map[string]any{
+					{"name": "X-LFX-TRACKING-ID", "value": trackingID},
+				},
+			},
+			"bounce": map[string]any{"timestamp": testTimestamp},
+		}
+		inner, _ := json.Marshal(sesMsg)
+		outer, _ := json.Marshal(map[string]string{"MessageId": "sns-x", "Message": string(inner)})
+		body := string(outer)
+		return types.Message{Body: &body}
+	}
+
+	// extractedFrom returns the email_id that extractEmailID would pull from a
+	// tracking header value (everything after the last '/').
+	extractedFrom := func(trackingID string) string {
+		if idx := strings.LastIndex(trackingID, "/"); idx != -1 {
+			return trackingID[idx+1:]
+		}
+		return trackingID
+	}
+
+	cases := []struct {
+		name       string
+		trackingID string
+	}{
+		{"short non-UUID", "not-a-uuid"},
+		// 300 chars: far over the UUID length but small enough for a map key.
+		{"oversized (300 chars)", strings.Repeat("a", 300)},
+		{"UUID-format group slash oversized email", testGroupID + "/" + strings.Repeat("b", 300)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := mocks.NewTrackingStore()
+			// Inject an error for the extracted email_id so that any KV access
+			// (UpdateRecord → GetErrFor lookup) makes Handle return non-nil.
+			// If the UUID guard is removed, require.NoError catches the bypass.
+			store.GetErrFor = map[string]error{
+				extractedFrom(tc.trackingID): errors.New("KV must not be reached for non-UUID tracking id"),
+			}
+			pub := &mockPublisher{}
+			h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+			require.NoError(t, h.Handle(context.Background(), buildMsg(tc.trackingID)))
+			assert.Empty(t, pub.calls, "must not publish when tracking id is not a UUID")
 		})
 	}
 }

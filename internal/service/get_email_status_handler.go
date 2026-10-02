@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 
 	natsgo "github.com/nats-io/nats.go"
 
@@ -44,8 +45,16 @@ func (h *GetEmailStatusHandler) HandleData(ctx context.Context, data []byte, res
 	case req.EmailID != "" && req.GroupID != "":
 		replyError(ctx, respond, "only one of email_id or group_id may be set")
 	case req.EmailID != "":
-		h.handleByEmailID(ctx, respond, req.EmailID)
+		if !isValidUUID(req.EmailID) {
+			replyError(ctx, respond, "invalid email_id")
+			return
+		}
+		h.handleByEmailID(ctx, respond, strings.ToLower(req.EmailID))
 	case req.GroupID != "":
+		if !isValidGroupID(req.GroupID) {
+			replyError(ctx, respond, "invalid group_id")
+			return
+		}
 		h.handleByGroupID(ctx, respond, req.GroupID)
 	default:
 		replyError(ctx, respond, "email_id or group_id is required")
