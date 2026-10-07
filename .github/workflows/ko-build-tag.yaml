@@ -132,6 +132,7 @@ jobs:
           cosign sign --yes "${IMAGE_NAME}@${IMAGE_DIGEST}"
 
   create-ghcr-image-provenance:
+    name: Create email-service image provenance
     needs:
       - publish
     permissions:
