@@ -25,7 +25,7 @@ Update it in the same PR as any change to SMTP tracking headers, SES/SQS handlin
 | `X-LFX-TRACKING-ID` | Always set by `SMTPSender` when sending through SMTP. | Correlates SES events back to the KV record. Format is `<email_id>`. Mail sent by earlier versions used `<group_id>/<email_id>`; the handler splits on the last `/` so events for that mail still resolve. |
 | `X-SES-CONFIGURATION-SET` | Set only when `SES_CONFIGURATION_SET` is non-empty. | Routes SES engagement events to the configured SES event destination. |
 
-The engagement handler extracts the email ID from the part after the last `/`, so group IDs may contain `/`.
+The engagement handler extracts the email ID from the part after the last `/`, so legacy `<group_id>/<email_id>` headers whose group ID contains `/` still resolve.
 
 ## KV Buckets
 

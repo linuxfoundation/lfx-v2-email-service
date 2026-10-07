@@ -18,6 +18,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
+	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
 // kvBucket is the subset of natsgo.KeyValue operations that Store needs.
@@ -116,7 +117,7 @@ func (s *Store) AppendToGroup(ctx context.Context, groupID, emailID string) erro
 		case err == nil:
 			revision = entry.Revision()
 			if jsonErr := json.Unmarshal(entry.Value(), &ids); jsonErr != nil {
-				slog.WarnContext(ctx, "corrupted group index, resetting", logging.ErrKey, jsonErr, "group_id", groupID)
+				slog.WarnContext(ctx, "corrupted group index, resetting", logging.ErrKey, jsonErr, "group_id", redaction.RedactGroupHandle(groupID))
 				ids = nil
 			}
 		case errors.Is(err, natsgo.ErrKeyNotFound):
@@ -141,7 +142,7 @@ func (s *Store) AppendToGroup(ctx context.Context, groupID, emailID string) erro
 			return nil
 		}
 		if attempt == 0 {
-			slog.DebugContext(ctx, "group index write conflict, retrying", "group_id", groupID)
+			slog.DebugContext(ctx, "group index write conflict, retrying", "group_id", redaction.RedactGroupHandle(groupID))
 		}
 	}
 	return fmt.Errorf("kv update group index after retry: %w", writeErr)
@@ -218,7 +219,7 @@ func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.Emai
 		r, err := s.GetRecord(ctx, emailID)
 		if err != nil {
 			slog.WarnContext(ctx, "skipping unreadable recipient record during group lookup",
-				"email_id", emailID, "group_id", groupID, logging.ErrKey, err)
+				"email_id", emailID, "group_id", redaction.RedactGroupHandle(groupID), logging.ErrKey, err)
 			continue
 		}
 		records = append(records, r)
@@ -226,7 +227,7 @@ func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.Emai
 	if invalidIDs > 0 {
 		// Log counts and lengths only; the raw values are untrusted.
 		slog.WarnContext(ctx, "skipping non-UUID email_ids in group index",
-			"group_id", groupID, "invalid_count", invalidIDs, "max_invalid_len", maxInvalidLen)
+			"group_id", redaction.RedactGroupHandle(groupID), "invalid_count", invalidIDs, "max_invalid_len", maxInvalidLen)
 	}
 	return records, totalIDs, nil
 }

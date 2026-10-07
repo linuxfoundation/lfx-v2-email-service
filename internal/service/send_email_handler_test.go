@@ -417,6 +417,50 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		assert.False(t, sender.called, "sender must not be called")
 	})
 
+	t.Run("new group not recorded — empty group_id returned instead of unusable handle", func(t *testing.T) {
+		t.Parallel()
+
+		for name, setErr := range map[string]func(*mocks.TrackingStore){
+			"append fails": func(m *mocks.TrackingStore) { m.AppendErr = errors.New("kv unavailable") },
+			"record fails": func(m *mocks.TrackingStore) { m.WriteErr = errors.New("kv unavailable") },
+		} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				store := mocks.NewTrackingStore()
+				setErr(store)
+				sender := &mockSender{emailID: "email-n", groupID: kvGroupUUID1}
+				handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
+
+				data, _ := json.Marshal(api.SendEmailRequest{To: "n@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"})
+				var resp []byte
+				handler.HandleData(context.Background(), data, func(d []byte) error { resp = d; return nil })
+
+				var r api.SendEmailResponse
+				require.NoError(t, json.Unmarshal(resp, &r))
+				assert.Equal(t, "email-n", r.EmailID)
+				assert.Empty(t, r.GroupID)
+			})
+		}
+	})
+
+	t.Run("existing group append fails — issued handle still returned", func(t *testing.T) {
+		t.Parallel()
+
+		store := mocks.NewTrackingStore()
+		store.PutGroup(kvGroupUUID2, []string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"})
+		store.AppendErr = errors.New("kv conflict")
+		sender := &mockSender{emailID: "email-m", groupID: kvGroupUUID2}
+		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
+
+		data, _ := json.Marshal(api.SendEmailRequest{To: "m@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: kvGroupUUID2})
+		var resp []byte
+		handler.HandleData(context.Background(), data, func(d []byte) error { resp = d; return nil })
+
+		var r api.SendEmailResponse
+		require.NoError(t, json.Unmarshal(resp, &r))
+		assert.Equal(t, kvGroupUUID2, r.GroupID)
+	})
+
 	t.Run("no KV write when sender returns empty emailID", func(t *testing.T) {
 		t.Parallel()
 

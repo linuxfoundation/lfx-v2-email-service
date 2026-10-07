@@ -14,6 +14,7 @@ import (
 
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
+	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
 const smtpTimeout = 30 * time.Second
@@ -84,6 +85,6 @@ func (s *SMTPSender) Send(ctx context.Context, req api.SendEmailRequest) (emailI
 		return "", "", fmt.Errorf("smtp send: %w", err)
 	}
 
-	slog.DebugContext(ctx, "email sent", "email_id", emailID, "group_id", groupID)
+	slog.DebugContext(ctx, "email sent", "email_id", emailID, "group_id", redaction.RedactGroupHandle(groupID))
 	return emailID, groupID, nil
 }

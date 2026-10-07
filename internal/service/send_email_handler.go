@@ -143,8 +143,10 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		return
 	}
 
-	if emailID != "" {
-		h.writeTrackingRecords(ctx, emailID, groupID, req)
+	if emailID != "" && !h.writeTrackingRecords(ctx, emailID, groupID, req) && req.GroupID == "" {
+		// The newly issued group was never recorded, so its handle would be
+		// rejected by later sends and lookups. Do not hand out an unusable handle.
+		groupID = ""
 	}
 
 	resp, _ := json.Marshal(api.SendEmailResponse{EmailID: emailID, GroupID: groupID})
@@ -153,7 +155,10 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	}
 }
 
-func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, groupID string, req api.SendEmailRequest) {
+// writeTrackingRecords stores the recipient record and appends it to the group
+// index. Both writes are best-effort; it reports whether the group index now
+// holds the email (true when there is no group to update).
+func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, groupID string, req api.SendEmailRequest) bool {
 	record := api.EmailRecipientRecord{
 		GroupID: groupID,
 		EmailID: emailID,
@@ -163,13 +168,15 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 	}
 	if err := h.store.WriteRecord(ctx, emailID, record); err != nil {
 		slog.WarnContext(ctx, "failed to write recipient record to store", logging.ErrKey, err, "email_id", emailID)
-		return
+		return groupID == ""
 	}
 	if groupID != "" {
 		if err := h.store.AppendToGroup(ctx, groupID, emailID); err != nil {
-			slog.WarnContext(ctx, "failed to append email to group index", logging.ErrKey, err, "email_id", emailID, "group_id", groupID)
+			slog.WarnContext(ctx, "failed to append email to group index", logging.ErrKey, err, "email_id", emailID, "group_id", redaction.RedactGroupHandle(groupID))
+			return false
 		}
 	}
+	return true
 }
 
 // domainFromAddress extracts the host part of an RFC 5322 address for logging.

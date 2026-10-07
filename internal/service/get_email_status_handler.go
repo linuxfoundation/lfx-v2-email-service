@@ -16,6 +16,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
+	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
 // GetEmailStatusHandler handles NATS requests on the get_email_status subject.
@@ -95,7 +96,7 @@ func (h *GetEmailStatusHandler) handleByEmailID(ctx context.Context, respond fun
 }
 
 func (h *GetEmailStatusHandler) handleByGroupID(ctx context.Context, respond func([]byte) error, groupID string) {
-	ctx = logging.AppendCtx(ctx, slog.String("group_id", groupID))
+	ctx = logging.AppendCtx(ctx, slog.String("group_id", redaction.RedactGroupHandle(groupID)))
 	records, _, err := h.store.GetGroupRecords(ctx, groupID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
