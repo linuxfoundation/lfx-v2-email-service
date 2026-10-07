@@ -4,6 +4,8 @@
 package smtp
 
 import (
+	"context"
+	"errors"
 	"net/mail"
 	"strings"
 	"testing"
@@ -223,6 +225,46 @@ func TestGenerateMessageID_FallbackDomain(t *testing.T) {
 
 	id := generateMessageID("not-an-email")
 	assert.Contains(t, id, "localhost")
+}
+
+func TestSendMessage_MalformedAddressDoesNotEchoInput(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{Host: "127.0.0.1", Port: 1}
+	tests := []struct {
+		name    string
+		to      string
+		from    string
+		wantErr error
+		secret  string
+	}{
+		{"comma-separated recipients", "a@x.com, b@y.com", "noreply@example.org", errInvalidRecipientAddress, "b@y.com"},
+		{"space-separated recipients", "a@x.com b@y.com", "noreply@example.org", errInvalidRecipientAddress, "b@y.com"},
+		{"trailing text", "a@x.com trailing-secret", "noreply@example.org", errInvalidRecipientAddress, "trailing-secret"},
+		{"invalid utf-8", "\"a\xffsecret\"@x.com", "noreply@example.org", errInvalidRecipientAddress, "secret"},
+		{"malformed from", "a@x.com", "noreply@example.org, c@z.com", errInvalidFromAddress, "c@z.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := sendMessage(context.Background(), tt.to, tt.from, "msg", cfg)
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.NotContains(t, err.Error(), tt.secret)
+		})
+	}
+}
+
+func TestRedactAddressInError(t *testing.T) {
+	t.Parallel()
+
+	assert.NoError(t, redactAddressInError(nil, "jane@example.com"))
+
+	orig := errors.New("421 service not available")
+	assert.Same(t, orig, redactAddressInError(orig, "jane@example.com"), "error without the address is returned unchanged")
+
+	err := redactAddressInError(errors.New("554 Message rejected: Email address is not verified: <JANE@Example.com>"), "jane@example.com")
+	assert.NotContains(t, strings.ToLower(err.Error()), "jane@example.com")
+	assert.Contains(t, err.Error(), "<j****@example.com>")
 }
 
 func TestGenerateBoundary_Unique(t *testing.T) {

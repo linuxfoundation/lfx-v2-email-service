@@ -6,12 +6,23 @@ package smtp
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"mime"
 	"net/mail"
 	"net/smtp"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
+)
+
+// Sentinel errors returned by sendMessage when an address cannot be parsed.
+// They deliberately carry no input text so callers can log them safely.
+var (
+	errInvalidFromAddress      = errors.New("invalid From address")
+	errInvalidRecipientAddress = errors.New("invalid recipient address")
 )
 
 func generateBoundary() string {
@@ -117,13 +128,15 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 		auth = smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
 	}
 
+	// mail.ParseAddress errors can quote the unparsed input (e.g. a second
+	// recipient after a comma), so return sentinels instead of wrapping them.
 	fromAddr, err := mail.ParseAddress(from)
 	if err != nil {
-		return fmt.Errorf("invalid From address: %w", err)
+		return errInvalidFromAddress
 	}
 	toAddr, err := mail.ParseAddress(to)
 	if err != nil {
-		return fmt.Errorf("invalid recipient address: %w", err)
+		return errInvalidRecipientAddress
 	}
 
 	type result struct{ err error }
@@ -136,6 +149,22 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 	case <-ctx.Done():
 		return ctx.Err()
 	case r := <-ch:
-		return r.err
+		return redactAddressInError(r.err, toAddr.Address)
 	}
+}
+
+// redactAddressInError replaces case-insensitive occurrences of addr in err's
+// text with its redacted form, so SMTP server replies that echo the recipient
+// (e.g. "554 Message rejected: ... <addr>") do not leak it into logs.
+// err is returned unchanged when it does not contain addr.
+func redactAddressInError(err error, addr string) error {
+	if err == nil || addr == "" {
+		return err
+	}
+	re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(addr))
+	msg := err.Error()
+	if !re.MatchString(msg) {
+		return err
+	}
+	return errors.New(re.ReplaceAllLiteralString(msg, redaction.RedactEmail(addr)))
 }
