@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/mail"
 	"strings"
+	"unicode/utf8"
 )
 
 // Sentinel errors returned by AddressPolicy validation methods.
@@ -84,7 +85,7 @@ func (p AddressPolicy) IsRecipientAllowed(to string) (bool, error) {
 // Returns nil when from is empty (no override) or when its domain is in
 // AllowedFromDomains.
 // Returns ErrAddressMalformed when from cannot be parsed or its local part
-// would require quoting (see strictAddressDomain).
+// would require quoting or contains non-ASCII characters (see strictAddressDomain).
 // Returns ErrFromDomainNotAllowed when the domain is absent from the allowlist.
 func (p AddressPolicy) ValidateFrom(from string) error {
 	if from == "" {
@@ -106,7 +107,7 @@ func (p AddressPolicy) ValidateFrom(from string) error {
 // Returns nil when replyTo is empty or when its domain matches an entry in
 // AllowedReplyToDomains (subdomain suffix matching applies).
 // Returns ErrAddressMalformed when replyTo cannot be parsed or its local part
-// would require quoting (see strictAddressDomain).
+// would require quoting or contains non-ASCII characters (see strictAddressDomain).
 // Returns ErrReplyToDomainNotAllowed when the domain is absent from the allowlist.
 func (p AddressPolicy) ValidateReplyTo(replyTo string) error {
 	if replyTo == "" {
@@ -130,11 +131,18 @@ func (p AddressPolicy) ValidateReplyTo(replyTo string) error {
 // need RFC 5322 quoting. mail.ParseAddress unescapes quoted local parts, so a
 // quoted local part may contain "@", "," or "<"; rejecting them keeps the domain
 // that is checked here identical to the mailbox written into headers and the
-// SMTP envelope.
+// SMTP envelope. Non-ASCII addresses are rejected too: strings.ToLower folds
+// some non-ASCII runes to ASCII (e.g. U+0130 to "i"), which would let the
+// checked domain differ from the domain written into the message.
 func strictAddressDomain(raw string) (string, error) {
 	addr, err := mail.ParseAddress(raw)
 	if err != nil {
 		return "", ErrAddressMalformed
+	}
+	for i := 0; i < len(addr.Address); i++ {
+		if addr.Address[i] >= utf8.RuneSelf {
+			return "", ErrAddressMalformed
+		}
 	}
 	at := strings.LastIndex(addr.Address, "@")
 	if at <= 0 || at == len(addr.Address)-1 {

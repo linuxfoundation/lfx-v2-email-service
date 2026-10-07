@@ -142,6 +142,18 @@ func TestAddressPolicy_ValidateFrom(t *testing.T) {
 			wantErr:     domain.ErrAddressMalformed,
 		},
 		{
+			name:        "non-ASCII domain that case-folds onto an allowed domain is rejected",
+			fromDomains: []string{"lfx.linuxfoundation.org"},
+			from:        "events@lfx.l\u0130nuxfoundation.org",
+			wantErr:     domain.ErrAddressMalformed,
+		},
+		{
+			name:        "address list in quoted local part is rejected",
+			fromDomains: []string{"lfx.linuxfoundation.org"},
+			from:        `"x@evil.com, y"@lfx.linuxfoundation.org`,
+			wantErr:     domain.ErrAddressMalformed,
+		},
+		{
 			name:        "quoted local part hiding an allowed domain is rejected",
 			fromDomains: []string{"lfx.linuxfoundation.org"},
 			from:        `"a@lfx.linuxfoundation.org"@evil.com`,
@@ -220,6 +232,18 @@ func TestAddressPolicy_ValidateReplyTo(t *testing.T) {
 			name:           "quoted local part hiding an allowed domain is rejected",
 			replyToDomains: []string{"linuxfoundation.org"},
 			replyTo:        `"a@lfx.linuxfoundation.org"@evil.com`,
+			wantErr:        domain.ErrAddressMalformed,
+		},
+		{
+			name:           "non-ASCII domain that case-folds onto an allowed domain is rejected",
+			replyToDomains: []string{"linuxfoundation.org"},
+			replyTo:        "attacker@l\u0130nuxfoundation.org",
+			wantErr:        domain.ErrAddressMalformed,
+		},
+		{
+			name:           "non-ASCII lookalike @ in local part is rejected",
+			replyToDomains: []string{"linuxfoundation.org"},
+			replyTo:        "attacker\uff20evil.com@lfx.linuxfoundation.org",
 			wantErr:        domain.ErrAddressMalformed,
 		},
 		{
