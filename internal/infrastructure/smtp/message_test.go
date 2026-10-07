@@ -282,7 +282,7 @@ func TestSendMessage_ServerReplyRedactsEnvelopeAddresses(t *testing.T) {
 				if err != nil {
 					return
 				}
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				tp := textproto.NewConn(conn)
 				_ = tp.PrintfLine("220 test ready")
 				for {
@@ -290,10 +290,10 @@ func TestSendMessage_ServerReplyRedactsEnvelopeAddresses(t *testing.T) {
 					if err != nil {
 						return
 					}
-					switch cmd := strings.ToUpper(strings.SplitN(line, " ", 2)[0]); {
-					case cmd == tt.rejectAt:
+					switch cmd := strings.ToUpper(strings.SplitN(line, " ", 2)[0]); cmd {
+					case tt.rejectAt:
 						_ = tp.PrintfLine("%s", tt.reply)
-					case cmd == "EHLO", cmd == "HELO", cmd == "MAIL", cmd == "RCPT":
+					case "EHLO", "HELO", "MAIL", "RCPT":
 						_ = tp.PrintfLine("250 ok")
 					default:
 						_ = tp.PrintfLine("221 bye")
@@ -327,6 +327,12 @@ func TestRedactAddressesInError(t *testing.T) {
 
 	err = redactAddressesInError(errors.New("550 <noreply@example.org> rejected for <jane@example.com>"), "jane@example.com", "noreply@example.org")
 	assert.Equal(t, "550 <nor****@example.org> rejected for <j****@example.com>", err.Error())
+
+	// The recipient is a suffix of the sender: the sender must still be fully redacted.
+	err = redactAddressesInError(errors.New("554 <sensitivea@example.com> not verified"), "a@example.com", "sensitivea@example.com")
+	assert.Equal(t, "554 <sen****@example.com> not verified", err.Error())
+	err = redactAddressesInError(errors.New("554 <SensitiveA@example.com> and <a@example.com>"), "sensitivea@example.com", "a@example.com")
+	assert.Equal(t, "554 <sen****@example.com> and <**@example.com>", err.Error())
 }
 
 func TestGenerateBoundary_Unique(t *testing.T) {

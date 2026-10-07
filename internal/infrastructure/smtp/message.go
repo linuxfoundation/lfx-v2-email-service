@@ -12,6 +12,7 @@ import (
 	"net/mail"
 	"net/smtp"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -159,27 +160,43 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 // into logs. err is returned unchanged when it contains none of addrs. The
 // redacted error deliberately does not wrap err, so the unredacted text stays
 // unreachable.
+//
+// All addresses are matched in a single pass, longest first, so an address
+// that is a substring of another (e.g. a@x.com inside ba@x.com) cannot break
+// up the longer one before it is redacted.
 func redactAddressesInError(err error, addrs ...string) error {
 	if err == nil {
 		return err
 	}
-	msg := err.Error()
-	redacted := false
+	byLower := make(map[string]string, len(addrs))
+	var patterns []string
 	for _, addr := range addrs {
 		if addr == "" {
 			continue
 		}
-		re, reErr := regexp.Compile("(?i)" + regexp.QuoteMeta(addr))
-		if reErr != nil {
-			return errors.New("smtp server rejected message")
+		if _, dup := byLower[strings.ToLower(addr)]; dup {
+			continue
 		}
-		if re.MatchString(msg) {
-			msg = re.ReplaceAllLiteralString(msg, redaction.RedactEmail(addr))
-			redacted = true
-		}
+		byLower[strings.ToLower(addr)] = addr
+		patterns = append(patterns, regexp.QuoteMeta(addr))
 	}
-	if !redacted {
+	if len(patterns) == 0 {
 		return err
 	}
-	return errors.New(msg)
+	// Go regexp alternation is leftmost-first, so list longer addresses first.
+	sort.Slice(patterns, func(i, j int) bool { return len(patterns[i]) > len(patterns[j]) })
+	re, reErr := regexp.Compile("(?i)(?:" + strings.Join(patterns, "|") + ")")
+	if reErr != nil {
+		return errors.New("smtp server rejected message")
+	}
+	msg := err.Error()
+	if !re.MatchString(msg) {
+		return err
+	}
+	return errors.New(re.ReplaceAllStringFunc(msg, func(m string) string {
+		if addr, ok := byLower[strings.ToLower(m)]; ok {
+			return redaction.RedactEmail(addr)
+		}
+		return redaction.Redact(m)
+	}))
 }
