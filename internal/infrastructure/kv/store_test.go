@@ -6,6 +6,7 @@ package kv_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -42,7 +43,15 @@ func (e *fakeEntry) Operation() natsgo.KeyValueOp { return natsgo.KeyValuePut }
 type fakeBucket struct {
 	mu            sync.Mutex
 	entries       map[string]*fakeEntry
-	UpdateErrOnce bool // if true, the next Update call fails and resets to false
+	UpdateErrOnce bool     // if true, the next Update call fails and resets to false
+	calls         []string // keys passed to any bucket method, in call order
+}
+
+// calledKeys returns a copy of the keys passed to the bucket so far.
+func (b *fakeBucket) calledKeys() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.calls...)
 }
 
 func newFakeBucket() *fakeBucket {
@@ -52,6 +61,7 @@ func newFakeBucket() *fakeBucket {
 func (b *fakeBucket) Get(key string) (natsgo.KeyValueEntry, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.calls = append(b.calls, key)
 	e, ok := b.entries[key]
 	if !ok {
 		return nil, natsgo.ErrKeyNotFound
@@ -62,6 +72,7 @@ func (b *fakeBucket) Get(key string) (natsgo.KeyValueEntry, error) {
 func (b *fakeBucket) Put(key string, value []byte) (uint64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.calls = append(b.calls, key)
 	rev := uint64(1)
 	if e, ok := b.entries[key]; ok {
 		rev = e.revision + 1
@@ -73,6 +84,7 @@ func (b *fakeBucket) Put(key string, value []byte) (uint64, error) {
 func (b *fakeBucket) Update(key string, value []byte, last uint64) (uint64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.calls = append(b.calls, key)
 	if b.UpdateErrOnce {
 		b.UpdateErrOnce = false
 		return 0, errWrongRevision
@@ -89,6 +101,7 @@ func (b *fakeBucket) Update(key string, value []byte, last uint64) (uint64, erro
 func (b *fakeBucket) Create(key string, value []byte) (uint64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.calls = append(b.calls, key)
 	if _, ok := b.entries[key]; ok {
 		return 0, natsgo.ErrKeyExists
 	}
@@ -97,6 +110,13 @@ func (b *fakeBucket) Create(key string, value []byte) (uint64, error) {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+// Group-index entries must be UUIDs; GetGroupRecords skips anything else.
+const (
+	uuid1 = "11111111-1111-4111-8111-111111111111"
+	uuid2 = "22222222-2222-4222-8222-222222222222"
+	uuid3 = "33333333-3333-4333-8333-333333333333"
+)
 
 func newStore(t *testing.T) (*kvinfra.Store, *fakeBucket, *fakeBucket) {
 	t.Helper()
@@ -137,25 +157,25 @@ func TestStore_AppendToGroup(t *testing.T) {
 	t.Run("creates new group entry", func(t *testing.T) {
 		t.Parallel()
 		store, _, groupIndexKV := newStore(t)
-		require.NoError(t, store.AppendToGroup(context.Background(), "g1", "e1"))
+		require.NoError(t, store.AppendToGroup(context.Background(), "g1", uuid1))
 		entry, err := groupIndexKV.Get("g1")
 		require.NoError(t, err)
-		assert.Contains(t, string(entry.Value()), "e1")
+		assert.Contains(t, string(entry.Value()), uuid1)
 	})
 
 	t.Run("appends to existing entry", func(t *testing.T) {
 		t.Parallel()
 		store, _, groupIndexKV := newStore(t)
-		require.NoError(t, store.AppendToGroup(context.Background(), "g2", "e1"))
-		require.NoError(t, store.AppendToGroup(context.Background(), "g2", "e2"))
+		require.NoError(t, store.AppendToGroup(context.Background(), "g2", uuid1))
+		require.NoError(t, store.AppendToGroup(context.Background(), "g2", uuid2))
 
 		// Assert the raw group-index value contains both IDs so we verify e2 was
 		// actually appended and not silently lost by GetGroupRecords skipping absent records.
 		entry, err := groupIndexKV.Get("g2")
 		require.NoError(t, err)
 		raw := string(entry.Value())
-		assert.Contains(t, raw, "e1")
-		assert.Contains(t, raw, "e2")
+		assert.Contains(t, raw, uuid1)
+		assert.Contains(t, raw, uuid2)
 	})
 
 	t.Run("concurrent first-send: Create loses race, retries via Update", func(t *testing.T) {
@@ -163,18 +183,18 @@ func TestStore_AppendToGroup(t *testing.T) {
 		store, _, groupIndexKV := newStore(t)
 
 		// Pre-create the key as if another goroutine won the race.
-		_, err := groupIndexKV.Create("g-race", []byte(`["winner"]`))
+		_, err := groupIndexKV.Create("g-race", []byte(`["`+uuid1+`"]`))
 		require.NoError(t, err)
 
 		// AppendToGroup should detect ErrKeyExists on Create and fall through to
 		// a second attempt using Update.
-		require.NoError(t, store.AppendToGroup(context.Background(), "g-race", "e-late"))
+		require.NoError(t, store.AppendToGroup(context.Background(), "g-race", uuid2))
 
 		entry, err := groupIndexKV.Get("g-race")
 		require.NoError(t, err)
 		raw := string(entry.Value())
-		assert.Contains(t, raw, "winner")
-		assert.Contains(t, raw, "e-late")
+		assert.Contains(t, raw, uuid1)
+		assert.Contains(t, raw, uuid2)
 	})
 }
 
@@ -185,19 +205,19 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		t.Parallel()
 		store, _, _ := newStore(t)
 
-		r1 := api.EmailRecipientRecord{EmailID: "e1", GroupID: "g1", To: "a@b.com", Subject: "S1", SentAt: time.Now().UTC()}
-		r2 := api.EmailRecipientRecord{EmailID: "e2", GroupID: "g1", To: "b@b.com", Subject: "S2", SentAt: time.Now().UTC()}
-		require.NoError(t, store.WriteRecord(context.Background(), "e1", r1))
-		require.NoError(t, store.WriteRecord(context.Background(), "e2", r2))
-		require.NoError(t, store.AppendToGroup(context.Background(), "g1", "e1"))
-		require.NoError(t, store.AppendToGroup(context.Background(), "g1", "e2"))
+		r1 := api.EmailRecipientRecord{EmailID: uuid1, GroupID: "g1", To: "a@b.com", Subject: "S1", SentAt: time.Now().UTC()}
+		r2 := api.EmailRecipientRecord{EmailID: uuid2, GroupID: "g1", To: "b@b.com", Subject: "S2", SentAt: time.Now().UTC()}
+		require.NoError(t, store.WriteRecord(context.Background(), uuid1, r1))
+		require.NoError(t, store.WriteRecord(context.Background(), uuid2, r2))
+		require.NoError(t, store.AppendToGroup(context.Background(), "g1", uuid1))
+		require.NoError(t, store.AppendToGroup(context.Background(), "g1", uuid2))
 
 		got, totalIDs, err := store.GetGroupRecords(context.Background(), "g1")
 		require.NoError(t, err)
 		assert.Equal(t, 2, totalIDs)
 		require.Len(t, got, 2)
-		assert.Equal(t, "e1", got[0].EmailID)
-		assert.Equal(t, "e2", got[1].EmailID)
+		assert.Equal(t, uuid1, got[0].EmailID)
+		assert.Equal(t, uuid2, got[1].EmailID)
 	})
 
 	t.Run("returns ErrNotFound for unknown group", func(t *testing.T) {
@@ -211,11 +231,11 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		t.Parallel()
 		store, _, groupIndexKV := newStore(t)
 
-		r1 := api.EmailRecipientRecord{EmailID: "e-exists", GroupID: "g2", To: "a@b.com", Subject: "S", SentAt: time.Now().UTC()}
-		require.NoError(t, store.WriteRecord(context.Background(), "e-exists", r1))
+		r1 := api.EmailRecipientRecord{EmailID: uuid1, GroupID: "g2", To: "a@b.com", Subject: "S", SentAt: time.Now().UTC()}
+		require.NoError(t, store.WriteRecord(context.Background(), uuid1, r1))
 
 		// Seed group index manually to include a missing record ID.
-		b := []byte(`["e-exists","e-gone"]`)
+		b := []byte(`["` + uuid1 + `","` + uuid2 + `"]`)
 		_, err := groupIndexKV.Put("g2", b)
 		require.NoError(t, err)
 
@@ -223,7 +243,93 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 2, totalIDs, "totalIDs must reflect raw index count, not fetched record count")
 		require.Len(t, got, 1)
-		assert.Equal(t, "e-exists", got[0].EmailID)
+		assert.Equal(t, uuid1, got[0].EmailID)
+	})
+
+	t.Run("skips non-UUID index entries without touching the bucket", func(t *testing.T) {
+		t.Parallel()
+		store, recipientsKV, groupIndexKV := newStore(t)
+
+		r1 := api.EmailRecipientRecord{EmailID: uuid1, GroupID: "g3", To: "a@b.com", Subject: "S1", SentAt: time.Now().UTC()}
+		r3 := api.EmailRecipientRecord{EmailID: uuid3, GroupID: "g3", To: "c@b.com", Subject: "S3", SentAt: time.Now().UTC()}
+		require.NoError(t, store.WriteRecord(context.Background(), uuid1, r1))
+		require.NoError(t, store.WriteRecord(context.Background(), uuid3, r3))
+
+		// A poisoned index: an oversized KV-legal id and a short non-UUID id
+		// sit between two valid entries.
+		oversized := strings.Repeat("a", 5000)
+		b := []byte(`["` + uuid1 + `","` + oversized + `","not-a-uuid","` + uuid3 + `"]`)
+		_, err := groupIndexKV.Put("g3", b)
+		require.NoError(t, err)
+
+		got, totalIDs, err := store.GetGroupRecords(context.Background(), "g3")
+		require.NoError(t, err)
+		assert.Equal(t, 4, totalIDs, "totalIDs must reflect raw index count")
+		require.Len(t, got, 2)
+		assert.Equal(t, uuid1, got[0].EmailID)
+		assert.Equal(t, uuid3, got[1].EmailID)
+
+		for _, k := range recipientsKV.calledKeys() {
+			assert.NotEqual(t, oversized, k, "oversized id must never reach the bucket")
+			assert.NotEqual(t, "not-a-uuid", k, "non-UUID id must never reach the bucket")
+		}
+	})
+}
+
+func TestStore_RejectsInvalidKeysWithoutBucketCall(t *testing.T) {
+	t.Parallel()
+
+	invalid := map[string]string{
+		"empty":     "",
+		"oversized": strings.Repeat("a", 257),
+		"huge":      strings.Repeat("a", 100000),
+		"bad chars": "a b",
+	}
+	for name, key := range invalid {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store, recipientsKV, groupIndexKV := newStore(t)
+			ctx := context.Background()
+
+			err := store.WriteRecord(ctx, key, api.EmailRecipientRecord{})
+			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "WriteRecord")
+
+			_, err = store.GetRecord(ctx, key)
+			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "GetRecord")
+
+			called := false
+			err = store.UpdateRecord(ctx, key, func(_ *api.EmailRecipientRecord) { called = true })
+			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "UpdateRecord")
+			assert.False(t, called)
+
+			_, _, err = store.GetGroupRecords(ctx, key)
+			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "GetGroupRecords")
+
+			err = store.AppendToGroup(ctx, key, uuid1)
+			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "AppendToGroup groupID")
+
+			err = store.AppendToGroup(ctx, "g1", key)
+			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "AppendToGroup emailID")
+
+			assert.Empty(t, recipientsKV.calledKeys(), "recipients bucket must not be called")
+			assert.Empty(t, groupIndexKV.calledKeys(), "group index bucket must not be called")
+		})
+	}
+
+	t.Run("error does not echo the raw key", func(t *testing.T) {
+		t.Parallel()
+		store, _, _ := newStore(t)
+		key := strings.Repeat("z", 300)
+		_, err := store.GetRecord(context.Background(), key)
+		require.ErrorIs(t, err, kvinfra.ErrInvalidKey)
+		assert.NotContains(t, err.Error(), key)
+	})
+
+	t.Run("accepts a key at the length bound", func(t *testing.T) {
+		t.Parallel()
+		store, _, _ := newStore(t)
+		_, err := store.GetRecord(context.Background(), strings.Repeat("a", 256))
+		assert.ErrorIs(t, err, domain.ErrNotFound)
 	})
 }
 

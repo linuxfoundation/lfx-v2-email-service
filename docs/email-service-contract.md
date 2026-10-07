@@ -112,7 +112,8 @@ Reply:
   The array may contain **fewer** entries than the group index lists: any per-recipient
   error (missing record, unmarshal failure, or transient KV read error) is silently
   omitted from the array rather than erroring, so the returned count can be less than
-  the number of `email_id`s originally sent for the group. The response also includes
+  the number of `email_id`s originally sent for the group. Index entries that are not
+  valid UUIDs are also omitted, without any recipient KV read. The response also includes
   `total_sent` (the raw index count) so callers can detect partial results.
 - Error responses use `api.SendEmailErrorResponse`.
 
@@ -162,7 +163,8 @@ Error values:
 Only failures reading or decoding the **group index** return `internal error`. Per-recipient
 `email-recipients` reads in the analytics loop are best-effort: a missing or corrupt recipient
 record (any `KV.Get` error or unmarshal failure) is silently skipped and excluded from the
-aggregate counts. `total_sent` reflects the number of `email_id`s in the group index, so the
+aggregate counts. Group-index entries that are not valid UUIDs are skipped the same way, without
+any recipient KV read. `total_sent` reflects the number of `email_id`s in the group index, so the
 sum of `delivered` / `failed` / `unique_opened` may be less than `total_sent` when records are
 missing or unreadable.
 
