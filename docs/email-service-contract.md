@@ -74,9 +74,9 @@ Error reply: `api.SendEmailErrorResponse`
 | --- | --- |
 | `invalid request payload` | Request body is not valid JSON. |
 | `to, subject, html, and text are required` | One or more required fields are empty. |
-| `invalid from address` | `from` is set but is not a parseable email address. |
+| `invalid from address` | `from` is set but is not a parseable email address, contains non-ASCII characters, or its local part would require RFC 5322 quoting (only ASCII dot-atom local parts are accepted). |
 | `from address domain not allowed` | `from` domain is not in `SMTP_ALLOWED_FROM_DOMAINS`. |
-| `invalid reply_to address` | `reply_to` is set but is not a parseable email address. |
+| `invalid reply_to address` | `reply_to` is set but is not a parseable email address, contains non-ASCII characters, or its local part would require RFC 5322 quoting (only ASCII dot-atom local parts are accepted). |
 | `reply_to address domain not allowed` | `reply_to` domain is not in `SMTP_ALLOWED_REPLY_TO_DOMAINS`. |
 | `invalid group_id` | `group_id` exceeds 256 bytes, contains characters outside the NATS KV key character set (`[-/_=.a-zA-Z0-9]`), or starts/ends with `.` or contains consecutive dots (`..`). |
 | `email delivery failed` | SMTP delivery failed after the service accepted the request. |

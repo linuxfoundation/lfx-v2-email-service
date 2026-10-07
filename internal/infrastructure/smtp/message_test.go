@@ -4,6 +4,7 @@
 package smtp
 
 import (
+	"net/mail"
 	"strings"
 	"testing"
 
@@ -159,7 +160,46 @@ func TestBuildEmailMessage_ReplyToHeader(t *testing.T) {
 	t.Parallel()
 
 	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "support@lfx.linuxfoundation.org", "", "")
-	assert.Contains(t, msg, "Reply-To: support@lfx.linuxfoundation.org")
+	assert.Contains(t, msg, "Reply-To: <support@lfx.linuxfoundation.org>")
+}
+
+func TestBuildEmailMessage_ReplyToQuotedLocalPartStaysSingleMailbox(t *testing.T) {
+	t.Parallel()
+
+	for _, replyTo := range []string{
+		`"attacker@evil.com, LF"@lfx.linuxfoundation.org`,
+		`"Support <attacker@evil.com>, x"@lfx.linuxfoundation.org`,
+		`"a@evil.com"@sub.linuxfoundation.org`,
+		`"alice"@lfx.linuxfoundation.org`,
+	} {
+		msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", replyTo, "", "")
+
+		var header string
+		for _, line := range strings.Split(msg, "\r\n") {
+			if v, ok := strings.CutPrefix(line, "Reply-To: "); ok {
+				header = v
+				break
+			}
+		}
+		require.NotEmpty(t, header, "Reply-To header missing for %q", replyTo)
+
+		list, err := mail.ParseAddressList(header)
+		require.NoError(t, err, "Reply-To header %q must parse", header)
+		require.Len(t, list, 1, "Reply-To header %q must be a single mailbox", header)
+		at := strings.LastIndex(list[0].Address, "@")
+		require.Positive(t, at)
+		want, err := mail.ParseAddress(replyTo)
+		require.NoError(t, err)
+		assert.Equal(t, want.Address, list[0].Address, "Reply-To mailbox must round-trip unchanged")
+		assert.Equal(t, want.Address[strings.LastIndex(want.Address, "@")+1:], list[0].Address[at+1:])
+	}
+}
+
+func TestBuildEmailMessage_ReplyToRedundantQuotesNormalised(t *testing.T) {
+	t.Parallel()
+
+	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", `"alice"@lfx.linuxfoundation.org`, "", "")
+	assert.Contains(t, msg, "Reply-To: <alice@lfx.linuxfoundation.org>\r\n")
 }
 
 func TestBuildEmailMessage_ReplyToOmittedWhenEmpty(t *testing.T) {

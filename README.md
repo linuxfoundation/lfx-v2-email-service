@@ -56,9 +56,9 @@ MIME header. Store it if you want to query delivery/open status later.
 |---|---|
 | `invalid request payload` | Request body is not valid JSON |
 | `to, subject, html, and text are required` | One or more required fields are missing |
-| `invalid from address` | `from` field is not a valid email address |
+| `invalid from address` | `from` field is not a valid email address, has a local part that requires RFC 5322 quoting, or contains non-ASCII characters |
 | `from address domain not allowed` | `from` domain is not in the service's allowed list |
-| `invalid reply_to address` | `reply_to` field is not a valid email address |
+| `invalid reply_to address` | `reply_to` field is not a valid email address, has a local part that requires RFC 5322 quoting, or contains non-ASCII characters |
 | `reply_to address domain not allowed` | `reply_to` domain is not in the service's allowed list |
 | `invalid group_id` | `group_id` exceeds 256 bytes, contains disallowed characters, or starts/ends with `.` or contains `..` |
 | `email delivery failed` | Service accepted the request but SMTP delivery failed |

@@ -70,7 +70,9 @@ func buildEmailMessage(to, subject, htmlContent, textContent, from, fromDisplayN
 		if parsed, err := mail.ParseAddress(replyTo); err == nil {
 			replyToAddr = parsed.Address
 		}
-		fmt.Fprintf(&b, "Reply-To: %s\r\n", sanitizeHeaderValue(replyToAddr))
+		// Serialise through mail.Address.String() (as for From) so a local part that
+		// needs quoting is re-quoted and the header is always a single mailbox.
+		fmt.Fprintf(&b, "Reply-To: %s\r\n", (&mail.Address{Address: sanitizeHeaderValue(replyToAddr)}).String())
 	}
 	fmt.Fprintf(&b, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(subject)))
 	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
