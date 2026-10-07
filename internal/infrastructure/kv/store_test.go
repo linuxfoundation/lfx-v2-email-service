@@ -280,10 +280,13 @@ func TestStore_RejectsInvalidKeysWithoutBucketCall(t *testing.T) {
 	t.Parallel()
 
 	invalid := map[string]string{
-		"empty":     "",
-		"oversized": strings.Repeat("a", 257),
-		"huge":      strings.Repeat("a", 100000),
-		"bad chars": "a b",
+		"empty":        "",
+		"oversized":    strings.Repeat("a", 257),
+		"huge":         strings.Repeat("a", 100000),
+		"bad chars":    "a b",
+		"leading dot":  ".group",
+		"trailing dot": "group.",
+		"double dot":   "a..b",
 	}
 	for name, key := range invalid {
 		t.Run(name, func(t *testing.T) {

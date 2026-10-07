@@ -113,8 +113,9 @@ Reply:
   error (missing record, unmarshal failure, or transient KV read error) is silently
   omitted from the array rather than erroring, so the returned count can be less than
   the number of `email_id`s originally sent for the group. Index entries that are not
-  valid UUIDs are also omitted, without any recipient KV read. The response also includes
-  `total_sent` (the raw index count) so callers can detect partial results.
+  valid UUIDs are also omitted, without any recipient KV read. The group-status reply
+  carries no total count; callers that need the raw index count to detect partial
+  results should use `get_email_engagement_analytics` (`total_sent`).
 - Error responses use `api.SendEmailErrorResponse`.
 
 Error values:

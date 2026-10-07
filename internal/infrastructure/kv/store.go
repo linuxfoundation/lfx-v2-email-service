@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
 
 	natsgo "github.com/nats-io/nats.go"
 
@@ -50,11 +51,16 @@ var keyRe = regexp.MustCompile(`^[-/_=.a-zA-Z0-9]+$`)
 // is a service-generated UUID.
 var emailIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// checkKey returns ErrInvalidKey when key is empty, longer than maxKeyLen, or
-// contains characters outside the NATS KV key character set. The raw key is
-// deliberately not included in the error so callers can log it safely.
+// checkKey returns ErrInvalidKey when key is empty, longer than maxKeyLen,
+// contains characters outside the NATS KV key character set, starts or ends
+// with '.', or contains consecutive dots. The dot rules mirror isValidGroupID
+// in internal/service: nats.go keyValid rejects leading/trailing dots, and a
+// ".." key yields an empty subject token that nats-server will not route. The
+// raw key is deliberately not included in the error so callers can log it
+// safely.
 func checkKey(key string) error {
-	if len(key) == 0 || len(key) > maxKeyLen || !keyRe.MatchString(key) {
+	if len(key) == 0 || len(key) > maxKeyLen || !keyRe.MatchString(key) ||
+		key[0] == '.' || key[len(key)-1] == '.' || strings.Contains(key, "..") {
 		return fmt.Errorf("%w (length %d)", ErrInvalidKey, len(key))
 	}
 	return nil
