@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/service"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/service/mocks"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
@@ -918,6 +920,147 @@ func TestEngagementEventHandler_Handle_NonUUIDTrackingID(t *testing.T) {
 
 			require.NoError(t, h.Handle(context.Background(), buildMsg(tc.trackingID)))
 			assert.Empty(t, pub.calls, "must not publish when tracking id is not a UUID")
+		})
+	}
+}
+
+// makeOpenSNSMsg builds an SQS message wrapping an Open SES event with a
+// caller-supplied SNS MessageId.
+func makeOpenSNSMsg(t *testing.T, snsID, emailID, groupID, timestamp string) types.Message {
+	t.Helper()
+	sesMsg := map[string]any{
+		"eventType": "Open",
+		"mail": map[string]any{
+			"headers": []map[string]any{
+				{"name": "X-LFX-TRACKING-ID", "value": groupID + "/" + emailID},
+			},
+		},
+		"open": map[string]any{"timestamp": timestamp},
+	}
+	inner, err := json.Marshal(sesMsg)
+	require.NoError(t, err)
+	outer, err := json.Marshal(map[string]string{"MessageId": snsID, "Message": string(inner)})
+	require.NoError(t, err)
+	body := string(outer)
+	return types.Message{Body: &body}
+}
+
+// TestEngagementEventHandler_Open_RecordStaysWithinKVLimit verifies that an
+// unbounded stream of unique OPEN events (e.g. repeated tracking-pixel loads)
+// cannot grow the record past the email-recipients bucket's 65 536-byte
+// maxValueSize, and that later OPEN, DELIVERY, and BOUNCE events still apply.
+func TestEngagementEventHandler_Open_RecordStaysWithinKVLimit(t *testing.T) {
+	t.Parallel()
+
+	const opens = 1_200
+
+	store := mocks.NewTrackingStore()
+	store.PutRecord(testEmailID, api.EmailRecipientRecord{
+		EmailID: testEmailID,
+		GroupID: testGroupID,
+		To:      "recipient@example.com",
+		Subject: strings.Repeat("s", 500),
+	})
+
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+	for i := range opens {
+		snsID := fmt.Sprintf("%08x-0000-4000-8000-%012x", i, i)
+		require.NoError(t, h.Handle(context.Background(), makeOpenSNSMsg(t, snsID, testEmailID, testGroupID, testTimestamp)))
+	}
+
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+	assert.Equal(t, opens, record.OpenCount, "every unique open must be counted")
+	assert.LessOrEqual(t, len(record.OpenedAtList), 500, "OpenedAtList must be capped")
+	b, err := json.Marshal(record)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(b), 50_000, "serialised record must stay within the soft ceiling")
+	assert.Less(t, len(b), 65_536, "serialised record must stay within the KV bucket hard limit")
+
+	// Later events still apply after the open window is exhausted.
+	require.NoError(t, h.Handle(context.Background(), makeOpenSNSMsg(t, "ffffffff-ffff-4fff-8fff-ffffffffffff", testEmailID, testGroupID, testTimestamp)))
+	require.NoError(t, h.Handle(context.Background(), sqsMsg(t, "DELIVERY", testEmailID, testGroupID, testTimestamp)))
+	require.NoError(t, h.Handle(context.Background(), sqsMsg(t, "BOUNCE", testEmailID, testGroupID, testTimestamp)))
+
+	record, ok = store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+	assert.Equal(t, opens+1, record.OpenCount)
+	assert.True(t, record.Delivered, "DELIVERY must apply after the open window is exhausted")
+	assert.True(t, record.Failed, "BOUNCE must apply after the open window is exhausted")
+	b, err = json.Marshal(record)
+	require.NoError(t, err)
+	assert.Less(t, len(b), 65_536, "serialised record must stay within the KV bucket hard limit")
+
+	require.Len(t, pub.calls, opens+3)
+	assert.Equal(t, api.EmailFailedSubject, pub.calls[len(pub.calls)-1].subject)
+}
+
+// TestEngagementEventHandler_Open_EntryRolledBackAtSizeLimit verifies that an
+// OPEN entry that would push the record past the 50 KB soft ceiling is not
+// stored, while the open is still counted and published.
+func TestEngagementEventHandler_Open_EntryRolledBackAtSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	store := mocks.NewTrackingStore()
+	store.PutRecord(testEmailID, api.EmailRecipientRecord{
+		EmailID: testEmailID,
+		GroupID: testGroupID,
+		Subject: strings.Repeat("x", 49_800),
+	})
+
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+	require.NoError(t, h.Handle(context.Background(), makeOpenSNSMsg(t, "sns-open-overflow", testEmailID, testGroupID, testTimestamp)))
+
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+	assert.True(t, record.Opened)
+	assert.Equal(t, 1, record.OpenCount, "open must be counted")
+	assert.Empty(t, record.OpenedAtList, "OpenedAtList entry must be rolled back to keep the record within the KV limit")
+	require.NotNil(t, record.LastOpenedAt)
+	assert.Equal(t, mustParseTime(t, testTimestamp), *record.LastOpenedAt)
+
+	require.Len(t, pub.calls, 1)
+	var evt api.EmailOpenedEvent
+	require.NoError(t, json.Unmarshal(pub.calls[0].data, &evt))
+	assert.Equal(t, 1, evt.OpenCount)
+}
+
+// TestEngagementEventHandler_Handle_RecordTooLarge_NotRetried verifies that a
+// deterministic size rejection from the store is acknowledged (Handle returns
+// nil, no publish) while any other store error remains retryable.
+func TestEngagementEventHandler_Handle_RecordTooLarge_NotRetried(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		storeErr  error
+		wantError bool
+	}{
+		{"record too large", fmt.Errorf("kv update: %w", domain.ErrRecordTooLarge), false},
+		{"transient error", errors.New("kv unavailable"), true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := mocks.NewTrackingStore()
+			seedRecord(store)
+			store.GetErrFor = map[string]error{testEmailID: tc.storeErr}
+			pub := &mockPublisher{}
+			h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+			err := h.Handle(context.Background(), sqsMsg(t, "BOUNCE", testEmailID, testGroupID, testTimestamp))
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Empty(t, pub.calls, "must not publish when the KV write failed")
 		})
 	}
 }

@@ -45,19 +45,22 @@ Supported SES event types:
 | SES event | Record update | NATS push subject |
 | --- | --- | --- |
 | `DELIVERY` | Sets `delivered=true` and `delivered_at`. Single-fire; subsequent events are ignored. | `api.EmailDeliveredSubject` |
-| `OPEN` | Appends to `opened_at_list`, sets `opened=true`, updates `open_count` and `last_opened_at`. Deduplicated by SNS `MessageId`. | `api.EmailOpenedSubject` |
+| `OPEN` | Appends to `opened_at_list` (bounded; see below), sets `opened=true`, updates `open_count` and `last_opened_at`. Deduplicated by SNS `MessageId`. | `api.EmailOpenedSubject` |
 | `CLICK` | Appends to `click_list` (includes link and timestamp), sets `clicked=true`, updates `click_count` and `last_clicked_at`. Deduplicated by SNS `MessageId`. | `api.EmailLinkClickedSubject` |
 | `BOUNCE` | Sets `failed=true` and `failed_at`. Single-fire; subsequent events are ignored. | `api.EmailFailedSubject` (reason: `"bounce"`) |
 | `COMPLAINT` | Sets `failed=true` and `failed_at`. Single-fire; subsequent events are ignored. | `api.EmailFailedSubject` (reason: `"complaint"`) |
 
 OPEN and CLICK events are deduplicated by SNS `MessageId` within a bounded
-deduplication window. A replayed SQS delivery of the same OPEN event is always
-silently dropped: the KV record is not modified and no NATS push is emitted. For
-CLICK events, replays are dropped as long as the SNS MessageId fits within the
-`click_event_ids` dedup list (capped at 500 entries and by the KV record size
-limit). Once that window is exhausted, replays of later clicks are not detected
-and will re-increment `click_count` and emit an additional NATS push. See
-`docs/email-service-contract.md` for the full deduplication contract.
+deduplication window. For OPEN events, replays are dropped as long as the SNS
+MessageId fits within `opened_at_list` (capped at 500 entries and by the KV
+record size limit). For CLICK events, replays are dropped as long as the SNS
+MessageId fits within the `click_event_ids` dedup list (capped at 500 entries
+and by the KV record size limit). Once a window is exhausted, the event is still
+counted and published, but replays of later opens or clicks are not detected and
+will re-increment `open_count` / `click_count` and emit an additional NATS push.
+Both bounds keep the serialised record under the `email-recipients` bucket's
+`maxValueSize`, so later DELIVERY, BOUNCE, and COMPLAINT events can still be
+written. See `docs/email-service-contract.md` for the full deduplication contract.
 
 DELIVERY, BOUNCE, and COMPLAINT are single-fire: once the corresponding boolean (`delivered`,
 `failed`) is set, subsequent events of the same type are ignored and not re-published.
@@ -71,9 +74,10 @@ SQS acknowledgement. See `docs/email-service-contract.md` for payload schemas.
 
 Unknown event types, malformed SNS/SES payloads, missing tracking headers, and a non-UUID extracted `email_id` are treated as non-retryable skips (handler returns `nil`, SQS message is deleted).
 
-The engagement handler distinguishes two classes of `email-recipients` KV errors:
+The engagement handler distinguishes three classes of `email-recipients` KV errors:
 
 - **`ErrKeyNotFound`** — genuine miss (late-arriving SES event for an unknown email ID, or record already expired). Non-retryable: handler returns `nil`, SQS message is deleted.
+- **`domain.ErrRecordTooLarge`** — the server (or client) rejected the updated record for exceeding the bucket's maximum value size. Deterministic for that record, so `kv.Store.UpdateRecord` does not retry it and the handler returns `nil` (SQS message is deleted) instead of leaving a poison message on the queue.
 - **Any other KV error** — transient read or network failure. Retryable: handler returns the error, SQS message is left on the queue and redelivered. This ensures engagement events are not silently dropped during a KV outage.
 
 ## SQS Poller

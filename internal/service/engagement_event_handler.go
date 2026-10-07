@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -23,8 +24,15 @@ import (
 // to JSON. The email-recipients bucket has maxValueSize 65 536 bytes; we leave
 // ~15 KB headroom so that other fields can grow without bumping against the
 // hard limit. ClickList is not appended to once the tentative serialised size
-// would exceed this threshold.
+// would exceed this threshold, and neither is OpenedAtList.
 const maxKVRecordBytes = 50_000
+
+// maxOpenEvents caps OpenedAtList, which doubles as the OPEN dedup list. Each
+// entry is ~85 bytes serialised; 500 entries ≈ 43 KB. SES emits one OPEN per
+// load of the tracking pixel, so without a cap a recipient could grow the
+// record past the bucket's maxValueSize. The list is also enforced against
+// maxKVRecordBytes together with the click collections.
+const maxOpenEvents = 500
 
 // maxClickEventIDs caps the ClickEventIDs dedup list. Each entry is a 36-byte
 // UUID; 500 entries ≈ 18 KB, well within the KV size budget. Dedup tracking
@@ -188,6 +196,13 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 			capturedClickEventID = env.MessageID
 		}
 	})
+	if errors.Is(err, domain.ErrRecordTooLarge) {
+		// Deterministic for this record: redelivery would fail the same way,
+		// so acknowledge the message instead of leaving it as a poison message.
+		slog.WarnContext(ctx, "recipient record too large to update, dropping event",
+			logging.ErrKey, err, "event_type", strings.ToLower(eventType))
+		return nil
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to update recipient record", logging.ErrKey, err)
 		return fmt.Errorf("store update for email_id %s: %w", emailID, err)
@@ -268,10 +283,20 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		}
 		t := parseTimestamp(ts)
 		record.Opened = true
-		record.OpenedAtList = append(record.OpenedAtList, api.OpenEvent{EventID: snsMessageID, OpenedAt: t})
-		record.OpenCount = len(record.OpenedAtList)
+		record.OpenCount++
 		if record.LastOpenedAt == nil || t.After(*record.LastOpenedAt) {
 			record.LastOpenedAt = &t
+		}
+		// Bounded dedup window, mirroring CLICK: the entry is stored only while
+		// OpenedAtList is under maxOpenEvents and the record stays within
+		// maxKVRecordBytes. Once the window is full, OpenCount and LastOpenedAt
+		// still advance, but SQS replays of later opens are not detected and
+		// re-increment OpenCount.
+		if len(record.OpenedAtList) < maxOpenEvents {
+			record.OpenedAtList = append(record.OpenedAtList, api.OpenEvent{EventID: snsMessageID, OpenedAt: t})
+			if b, err := json.Marshal(record); err != nil || len(b) > maxKVRecordBytes {
+				record.OpenedAtList = record.OpenedAtList[:len(record.OpenedAtList)-1]
+			}
 		}
 		return true, t
 	case "CLICK":

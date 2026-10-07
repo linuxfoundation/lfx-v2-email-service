@@ -306,19 +306,19 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
 
 | SES `eventType` | Effect on `EmailRecipientRecord` | Push subject emitted |
 |---|---|---|
-| `OPEN` | Sets `Opened=true`, appends to `OpenedAtList` (deduplicated by SNS `MessageId`), increments `OpenCount`, updates `LastOpenedAt` | `api.EmailOpenedSubject` |
+| `OPEN` | Sets `Opened=true`, appends to `OpenedAtList` (deduplicated by SNS `MessageId`; bounded window, max 500 entries and the 50 KB KV record soft limit), increments `OpenCount`, updates `LastOpenedAt` | `api.EmailOpenedSubject` |
 | `CLICK` | Sets `Clicked=true`, appends link+timestamp to `ClickList`, increments `ClickCount`, updates `LastClickedAt`. Deduplicated by SNS `MessageId` via `ClickEventIDs` (bounded window, max 500 entries). URL userinfo, query string, and fragment are stripped before storage and publish (`redactLink`). | `api.EmailLinkClickedSubject` |
 | `DELIVERY` | Sets `Delivered=true`, records `DeliveredAt` (first delivery only) | `api.EmailDeliveredSubject` |
 | `BOUNCE` | Sets `Failed=true`, records `FailedAt` (first failure only) | `api.EmailFailedSubject` |
 | `COMPLAINT` | Sets `Failed=true`, records `FailedAt` (first failure only) | `api.EmailFailedSubject` |
 
-**Open-event deduplication:** SNS may redeliver the same event. Each `OPEN` entry stores the SNS `MessageId` as `EventID`; the handler skips any open event whose `MessageId` is already in `OpenedAtList`.
+**Open-event deduplication:** SNS may redeliver the same event. Each `OPEN` entry stores the SNS `MessageId` as `EventID`; the handler skips any open event whose `MessageId` is already in `OpenedAtList`. Like CLICK, the list is a bounded window (`maxOpenEvents` = 500, rolled back against `maxKVRecordBytes`) so repeated pixel loads cannot grow the record past the bucket's `maxValueSize`; once full, opens are still counted but replays of later opens re-increment `OpenCount`.
 
 **Click-event deduplication:** CLICK events are deduplicated via `ClickEventIDs []string` (SNS MessageIds, max 500 entries, also bounded by the 50 KB KV record soft limit). Once the window is full, SQS replays of later clicks are not detected and re-increment `ClickCount` — this is a documented trade-off. Consumers should use `EventID` in `EmailLinkClickedEvent` for at-most-once semantics.
 
 **Publish-after-KV:** after a successful KV write, the handler publishes the corresponding push event (best-effort — a NATS failure is logged but does not roll back the KV write or block SQS acknowledgement). DELIVERY, BOUNCE, and COMPLAINT are single-fire: the boolean guard (`Delivered`/`Failed`) prevents duplicate publishes on replays.
 
-**KV write conflict retry:** the handler retries the `KeyValue.Update` once on any update error before giving up and returning an error (which keeps the SQS message in-flight for redelivery).
+**KV write conflict retry:** the handler retries the `KeyValue.Update` once on any update error before giving up and returning an error (which keeps the SQS message in-flight for redelivery). The exception is a value rejected for exceeding the bucket's size limit: `kv.Store.UpdateRecord` returns `domain.ErrRecordTooLarge` without retrying, and the handler acknowledges the message (returns `nil`) because redelivery cannot succeed.
 
 ## Environment Variables
 

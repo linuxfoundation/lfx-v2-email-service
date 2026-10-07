@@ -190,7 +190,7 @@ Each push payload is a JSON-encoded struct from `pkg/api`.
 | `open_count` | int | Cumulative open count after this event. |
 | `opened_at` | RFC3339 UTC | Timestamp of **this** SES OPEN event (not the max across all opens). |
 
-Published once per unique SNS `MessageId`. A replayed SQS delivery of the same OPEN event produces no second publish.
+Published once per unique SNS `MessageId` **within the bounded deduplication window** (up to 500 unique open MessageIds per record, and subject to the KV record size limit). Once that window is exhausted, SQS replays of later opens are not detected and will re-increment `open_count` and emit an additional push.
 
 ### `EmailLinkClickedEvent` (`api.EmailLinkClickedSubject`)
 
@@ -228,7 +228,7 @@ Published at most once per email (BOUNCE and COMPLAINT are single-fire; subseque
 | `subject` | Email subject. |
 | `sent_at` | UTC send timestamp. |
 | `delivered`, `delivered_at` | Delivery event status and timestamp. |
-| `opened`, `open_count`, `opened_at_list`, `last_opened_at` | Open event status, deduplicated event list (keyed by SNS `MessageId`), and aggregate count. |
+| `opened`, `open_count`, `opened_at_list`, `last_opened_at` | Open event status, aggregate count, open history doubling as the SNS `MessageId` dedup list (bounded to 500 entries and by the KV record size limit; once exhausted, opens are still counted but replays of later opens are not detected), and latest open timestamp. |
 | `clicked`, `click_count`, `click_event_ids`, `click_list`, `last_clicked_at` | Click event status, aggregate count, SNS `MessageId` dedup list (used for replay protection; bounded to 500 entries and by the KV record size limit; once exhausted, replays of later clicks are not detected), bounded click history (bounded by the KV record size limit; each entry includes `link` and `clicked_at`), and latest click timestamp. |
 | `failed`, `failed_at` | Bounce or complaint status and timestamp. |
 
