@@ -198,6 +198,21 @@ func TestStore_AppendToGroup(t *testing.T) {
 	})
 }
 
+func TestStore_GroupExists(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newStore(t)
+	ctx := context.Background()
+
+	ok, err := store.GroupExists(ctx, "g1")
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	require.NoError(t, store.AppendToGroup(ctx, "g1", uuid1))
+	ok, err = store.GroupExists(ctx, "g1")
+	require.NoError(t, err)
+	assert.True(t, ok)
+}
+
 func TestStore_GetGroupRecords(t *testing.T) {
 	t.Parallel()
 
@@ -307,6 +322,9 @@ func TestStore_RejectsInvalidKeysWithoutBucketCall(t *testing.T) {
 
 			_, _, err = store.GetGroupRecords(ctx, key)
 			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "GetGroupRecords")
+
+			_, err = store.GroupExists(ctx, key)
+			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "GroupExists")
 
 			err = store.AppendToGroup(ctx, key, uuid1)
 			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "AppendToGroup groupID")

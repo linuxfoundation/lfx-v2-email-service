@@ -44,7 +44,7 @@ func sanitizeHeaderValue(v string) string {
 // buildEmailMessage constructs a multipart/alternative MIME message (HTML + plain text).
 // configurationSet, when non-empty, adds an X-SES-CONFIGURATION-SET header so SES routes
 // engagement events to the named configuration set.
-// trackingID, when non-empty, adds an X-LFX-TRACKING-ID header in the form group_id/email_id
+// trackingID, when non-empty, adds an X-LFX-TRACKING-ID header carrying the email_id
 // so the SQS poller can correlate SES events back to the KV record.
 // fromDisplayName is the display name shown in the From header (e.g. "LFX Self Serve").
 // replyTo, when non-empty, sets the Reply-To header to direct mail-client replies to

@@ -5,13 +5,39 @@ package domain
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"regexp"
 
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
 )
 
 // ErrNotFound is returned by TrackingStore when the requested key does not exist.
 var ErrNotFound = errors.New("not found")
+
+// groupHandleRe matches a service-issued group handle: the "grp_" prefix
+// followed by 32 lowercase hex characters (128 bits from crypto/rand).
+var groupHandleRe = regexp.MustCompile(`^grp_[0-9a-f]{32}$`)
+
+// NewGroupHandle returns a new service-issued group handle.
+//
+// The group handle is the only credential that grants access to a group's
+// tracking data (status, analytics, and appending further sends), so it must
+// be unguessable, must only ever be issued by this service, and must not be
+// disclosed outside the send_email reply (not in outbound mail headers, not in
+// push events). The distinct "grp_" format also keeps caller-chosen group_id
+// values written before handles were introduced from being accepted as handles.
+func NewGroupHandle() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never returns an error (Go 1.24+).
+	return "grp_" + hex.EncodeToString(b[:])
+}
+
+// IsGroupHandle reports whether s has the format of a service-issued group handle.
+func IsGroupHandle(s string) bool {
+	return groupHandleRe.MatchString(s)
+}
 
 // TrackingStore is the interface for reading and writing email tracking records.
 // All implementations must be safe for concurrent use.
@@ -20,6 +46,10 @@ var ErrNotFound = errors.New("not found")
 //
 // AppendToGroup appends emailID to the group's list (creating the list if absent)
 // using optimistic concurrency — retries once on write conflict.
+//
+// GroupExists reports whether a group index entry exists for groupID. The send
+// handler uses it to accept a caller-supplied group_id only when it names a
+// group this service issued and recorded.
 //
 // GetRecord retrieves a recipient record by emailID; returns ErrNotFound when absent.
 //
@@ -34,6 +64,7 @@ var ErrNotFound = errors.New("not found")
 type TrackingStore interface {
 	WriteRecord(ctx context.Context, emailID string, r api.EmailRecipientRecord) error
 	AppendToGroup(ctx context.Context, groupID, emailID string) error
+	GroupExists(ctx context.Context, groupID string) (bool, error)
 	GetRecord(ctx context.Context, emailID string) (api.EmailRecipientRecord, error)
 	GetGroupRecords(ctx context.Context, groupID string) (records []api.EmailRecipientRecord, totalIDs int, err error)
 	UpdateRecord(ctx context.Context, emailID string, fn func(*api.EmailRecipientRecord)) error
@@ -49,6 +80,13 @@ func (NullTrackingStore) WriteRecord(_ context.Context, _ string, _ api.EmailRec
 
 func (NullTrackingStore) AppendToGroup(_ context.Context, _, _ string) error {
 	return nil
+}
+
+// GroupExists reports true: with no KV there is no group index to check, and
+// nothing is stored or readable, so accepting a well-formed handle exposes no
+// data while keeping multi-send groups working when tracking is unavailable.
+func (NullTrackingStore) GroupExists(_ context.Context, _ string) (bool, error) {
+	return true, nil
 }
 
 func (NullTrackingStore) GetRecord(_ context.Context, _ string) (api.EmailRecipientRecord, error) {

@@ -24,7 +24,7 @@ type TrackingStore struct {
 	WriteErr    error            // if non-nil, WriteRecord returns this error
 	AppendErr   error            // if non-nil, AppendToGroup returns this error
 	GetErrFor   map[string]error // per-emailID error override for GetRecord / UpdateRecord / GetGroupRecords fan-out
-	GroupErrFor map[string]error // per-groupID error override for GetGroupRecords (before fan-out)
+	GroupErrFor map[string]error // per-groupID error override for GroupExists and GetGroupRecords (before fan-out)
 }
 
 // NewTrackingStore returns an empty TrackingStore mock.
@@ -90,6 +90,16 @@ func (m *TrackingStore) AppendToGroup(_ context.Context, groupID, emailID string
 	defer m.mu.Unlock()
 	m.groups[groupID] = append(m.groups[groupID], emailID)
 	return nil
+}
+
+func (m *TrackingStore) GroupExists(_ context.Context, groupID string) (bool, error) {
+	if err, ok := m.GroupErrFor[groupID]; ok {
+		return false, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.groups[groupID]
+	return ok, nil
 }
 
 func (m *TrackingStore) GetRecord(_ context.Context, emailID string) (api.EmailRecipientRecord, error) {

@@ -147,6 +147,20 @@ func (s *Store) AppendToGroup(ctx context.Context, groupID, emailID string) erro
 	return fmt.Errorf("kv update group index after retry: %w", writeErr)
 }
 
+// GroupExists reports whether the group index holds an entry for groupID.
+func (s *Store) GroupExists(_ context.Context, groupID string) (bool, error) {
+	if err := checkKey(groupID); err != nil {
+		return false, err
+	}
+	if _, err := s.groupIndexKV.Get(groupID); err != nil {
+		if errors.Is(err, natsgo.ErrKeyNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("kv get group index: %w", err)
+	}
+	return true, nil
+}
+
 // GetRecord retrieves the EmailRecipientRecord for emailID.
 // Returns domain.ErrNotFound when the key does not exist.
 func (s *Store) GetRecord(_ context.Context, emailID string) (api.EmailRecipientRecord, error) {

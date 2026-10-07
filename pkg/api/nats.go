@@ -85,14 +85,19 @@ type SendEmailRequest struct {
 	From            string `json:"from,omitempty"`              // bare address; empty → service default
 	FromDisplayName string `json:"from_display_name,omitempty"` // display name; empty → service default
 	ReplyTo         string `json:"reply_to,omitempty"`          // Reply-To header address; omitted when empty
-	// GroupID is an optional caller-supplied correlation ID (max 256 bytes,
-	// charset [-/_=.a-zA-Z0-9], no leading/trailing/consecutive dots).
-	// If omitted, a UUID is generated. Rejected with "invalid group_id" if
-	// the value violates these constraints.
+	// GroupID is optional. Omit it to start a new group: the service issues a
+	// new group handle and returns it in SendEmailResponse.GroupID. To add
+	// further emails to that group, pass the returned handle back here. Any
+	// value that is not a group handle previously issued by this service is
+	// rejected with "invalid group_id". The handle is the credential for
+	// reading the group's tracking data, so callers must keep it private.
 	GroupID string `json:"group_id,omitempty"`
 }
 
 // SendEmailResponse is the JSON payload returned in the NATS reply on success.
+// GroupID is the service-issued group handle (format "grp_" + 32 hex chars).
+// It is the credential required by GetEmailStatusSubject and
+// GetEmailEngagementAnalyticsSubject and is returned only in this reply.
 type SendEmailResponse struct {
 	EmailID string `json:"email_id"`
 	GroupID string `json:"group_id"`
@@ -149,15 +154,17 @@ type EmailRecipientRecord struct {
 }
 
 // GetEmailStatusRequest is the payload for GetEmailStatusSubject.
-// Exactly one of EmailID or GroupID must be set.
-// When EmailID is set the reply is a single EmailRecipientRecord.
-// When GroupID is set the reply is a JSON array of EmailRecipientRecord values.
+// GroupID is required and must be the group handle returned by send_email.
+// When EmailID is also set the reply is the single EmailRecipientRecord for
+// that email, provided it was sent under GroupID ("not found" otherwise).
+// When only GroupID is set the reply is a JSON array of EmailRecipientRecord values.
 type GetEmailStatusRequest struct {
 	EmailID string `json:"email_id,omitempty"`
 	GroupID string `json:"group_id,omitempty"`
 }
 
 // GetEmailEngagementAnalyticsRequest is the payload for GetEmailEngagementAnalyticsSubject.
+// GroupID must be the group handle returned by send_email.
 type GetEmailEngagementAnalyticsRequest struct {
 	GroupID string `json:"group_id"`
 }
@@ -177,7 +184,10 @@ type GetEmailEngagementAnalyticsResponse struct {
 // returned by send_email can correlate this event back to the original send
 // without polling get_email_status.
 type EmailFailedEvent struct {
-	EmailID  string    `json:"email_id"`
+	EmailID string `json:"email_id"`
+	// Deprecated: always empty. The group handle is the credential for reading
+	// tracking records and is not broadcast on push subjects; correlate by
+	// EmailID using the mapping returned from send_email.
 	GroupID  string    `json:"group_id,omitempty"`
 	Reason   string    `json:"reason"` // "bounce" or "complaint"
 	FailedAt time.Time `json:"failed_at"`
@@ -187,7 +197,10 @@ type EmailFailedEvent struct {
 // SES confirms that a sent email was successfully delivered to the recipient's
 // mail server.
 type EmailDeliveredEvent struct {
-	EmailID     string    `json:"email_id"`
+	EmailID string `json:"email_id"`
+	// Deprecated: always empty. The group handle is the credential for reading
+	// tracking records and is not broadcast on push subjects; correlate by
+	// EmailID using the mapping returned from send_email.
 	GroupID     string    `json:"group_id,omitempty"`
 	DeliveredAt time.Time `json:"delivered_at"`
 }
@@ -197,7 +210,10 @@ type EmailDeliveredEvent struct {
 // OpenCount reflects the total number of opens recorded for this email_id,
 // including the current one.
 type EmailOpenedEvent struct {
-	EmailID   string    `json:"email_id"`
+	EmailID string `json:"email_id"`
+	// Deprecated: always empty. The group handle is the credential for reading
+	// tracking records and is not broadcast on push subjects; correlate by
+	// EmailID using the mapping returned from send_email.
 	GroupID   string    `json:"group_id,omitempty"`
 	OpenCount int       `json:"open_count"`
 	OpenedAt  time.Time `json:"opened_at"`
@@ -211,7 +227,10 @@ type EmailOpenedEvent struct {
 // SES Click event; consumers should use it as the stable deduplication key
 // for at-most-once semantics.
 type EmailLinkClickedEvent struct {
-	EmailID    string    `json:"email_id"`
+	EmailID string `json:"email_id"`
+	// Deprecated: always empty. The group handle is the credential for reading
+	// tracking records and is not broadcast on push subjects; correlate by
+	// EmailID using the mapping returned from send_email.
 	GroupID    string    `json:"group_id,omitempty"`
 	EventID    string    `json:"event_id"`
 	Link       string    `json:"link"`

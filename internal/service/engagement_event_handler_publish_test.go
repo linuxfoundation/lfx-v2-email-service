@@ -36,15 +36,21 @@ func (m *mockPublisher) Publish(subject string, data []byte) error {
 	return m.err
 }
 
-// sqsMsg builds an SQS message containing an SNS-wrapped SES event.
+// sqsMsg builds an SQS message containing an SNS-wrapped SES event. An empty
+// groupID yields the current bare email_id tracking header; a non-empty one
+// yields the legacy group_id/email_id format still found on older mail.
 func sqsMsg(t *testing.T, eventType, emailID, groupID, timestamp string, extra ...func(map[string]any)) types.Message {
 	t.Helper()
 
+	trackingID := emailID
+	if groupID != "" {
+		trackingID = groupID + "/" + emailID
+	}
 	sesMsg := map[string]any{
 		"eventType": eventType,
 		"mail": map[string]any{
 			"headers": []map[string]any{
-				{"name": "X-LFX-TRACKING-ID", "value": groupID + "/" + emailID},
+				{"name": "X-LFX-TRACKING-ID", "value": trackingID},
 			},
 		},
 	}
@@ -122,7 +128,7 @@ func TestEngagementEventHandler_Handle_Publish_Bounce(t *testing.T) {
 	var evt api.EmailFailedEvent
 	require.NoError(t, json.Unmarshal(pub.calls[0].data, &evt))
 	assert.Equal(t, testEmailID, evt.EmailID)
-	assert.Equal(t, testGroupID, evt.GroupID)
+	assert.NotContains(t, string(pub.calls[0].data), "group_id", "group handle must not be broadcast on push subjects")
 	assert.Equal(t, "bounce", evt.Reason)
 	assert.Equal(t, mustParseTime(t, testTimestamp), evt.FailedAt)
 }
@@ -163,8 +169,30 @@ func TestEngagementEventHandler_Handle_Publish_Delivery(t *testing.T) {
 	var evt api.EmailDeliveredEvent
 	require.NoError(t, json.Unmarshal(pub.calls[0].data, &evt))
 	assert.Equal(t, testEmailID, evt.EmailID)
-	assert.Equal(t, testGroupID, evt.GroupID)
+	assert.NotContains(t, string(pub.calls[0].data), "group_id", "group handle must not be broadcast on push subjects")
 	assert.Equal(t, mustParseTime(t, testTimestamp), evt.DeliveredAt)
+}
+
+func TestEngagementEventHandler_Handle_BareEmailIDTrackingHeader(t *testing.T) {
+	t.Parallel()
+
+	store := mocks.NewTrackingStore()
+	seedRecord(store)
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+	// Current mail carries only the email_id in X-LFX-TRACKING-ID.
+	msg := sqsMsg(t, "DELIVERY", testEmailID, "", testTimestamp)
+	require.NoError(t, h.Handle(context.Background(), msg))
+
+	rec, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+	assert.True(t, rec.Delivered)
+	require.Len(t, pub.calls, 1)
+	var evt api.EmailDeliveredEvent
+	require.NoError(t, json.Unmarshal(pub.calls[0].data, &evt))
+	assert.Equal(t, testEmailID, evt.EmailID)
+	assert.NotContains(t, string(pub.calls[0].data), "group_id", "group handle must not be broadcast on push subjects")
 }
 
 func TestEngagementEventHandler_Handle_Publish_Open(t *testing.T) {
@@ -184,7 +212,7 @@ func TestEngagementEventHandler_Handle_Publish_Open(t *testing.T) {
 	var evt api.EmailOpenedEvent
 	require.NoError(t, json.Unmarshal(pub.calls[0].data, &evt))
 	assert.Equal(t, testEmailID, evt.EmailID)
-	assert.Equal(t, testGroupID, evt.GroupID)
+	assert.NotContains(t, string(pub.calls[0].data), "group_id", "group handle must not be broadcast on push subjects")
 	assert.Equal(t, 1, evt.OpenCount)
 	assert.Equal(t, mustParseTime(t, testTimestamp), evt.OpenedAt)
 }
@@ -206,7 +234,7 @@ func TestEngagementEventHandler_Handle_Publish_Click(t *testing.T) {
 	var evt api.EmailLinkClickedEvent
 	require.NoError(t, json.Unmarshal(pub.calls[0].data, &evt))
 	assert.Equal(t, testEmailID, evt.EmailID)
-	assert.Equal(t, testGroupID, evt.GroupID)
+	assert.NotContains(t, string(pub.calls[0].data), "group_id", "group handle must not be broadcast on push subjects")
 	assert.Equal(t, "https://example.com/link", evt.Link)
 	assert.Equal(t, 1, evt.ClickCount)
 	assert.Equal(t, mustParseTime(t, testTimestamp), evt.ClickedAt)

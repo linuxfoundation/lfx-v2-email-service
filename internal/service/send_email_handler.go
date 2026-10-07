@@ -115,6 +115,24 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		}
 	}
 
+	// A caller-supplied group_id must name a group this service issued (returned
+	// in an earlier SendEmailResponse) and recorded. Checking the format alone
+	// would let a caller pick its own handle value; checking existence means only
+	// a holder of an issued handle can append further sends to that group.
+	if req.GroupID != "" {
+		exists, err := h.store.GroupExists(ctx, req.GroupID)
+		if err != nil {
+			slog.ErrorContext(ctx, "failed to check group index", logging.ErrKey, err)
+			replyError(ctx, respond, "internal error")
+			return
+		}
+		if !exists {
+			slog.WarnContext(ctx, "send email request group_id was not issued by this service")
+			replyError(ctx, respond, "invalid group_id")
+			return
+		}
+	}
+
 	ctx = logging.AppendCtx(ctx, slog.String("recipient", redaction.RedactEmail(req.To)))
 	ctx = logging.AppendCtx(ctx, slog.String("subject", req.Subject))
 

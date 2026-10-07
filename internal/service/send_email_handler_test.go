@@ -20,10 +20,10 @@ import (
 )
 
 const (
-	callerGroupUUID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
-	kvGroupUUID1    = "11111111-1111-1111-1111-111111111111"
-	kvGroupUUID2    = "22222222-2222-2222-2222-222222222222"
-	kvGroupUUID3    = "33333333-3333-3333-3333-333333333333"
+	callerGroupUUID = "grp_cccccccccccccccccccccccccccccccc"
+	kvGroupUUID1    = "grp_11111111111111111111111111111111"
+	kvGroupUUID2    = "grp_22222222222222222222222222222222"
+	kvGroupUUID3    = "grp_33333333333333333333333333333333"
 )
 
 type mockSender struct {
@@ -77,13 +77,18 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			wantGroupID: callerGroupUUID,
 		},
 		{
-			name:        "group_id slug style accepted",
+			name:        "group_id caller-chosen label — rejected before send",
 			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "invite-batch-abc123"},
-			emailID:     "email-uuid-8",
-			groupID:     "invite-batch-abc123",
-			wantSent:    true,
-			wantEmailID: "email-uuid-8",
-			wantGroupID: "invite-batch-abc123",
+			wantSent:    false,
+			wantErrResp: true,
+			wantErrMsg:  "invalid group_id",
+		},
+		{
+			name:        "group_id legacy UUID — rejected before send",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "cccccccc-cccc-cccc-cccc-cccccccccccc"},
+			wantSent:    false,
+			wantErrResp: true,
+			wantErrMsg:  "invalid group_id",
 		},
 		{
 			name:        "group_id over 256 chars — rejected before send",
@@ -291,7 +296,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		sender := &mockSender{emailID: "email-1", groupID: kvGroupUUID1}
 		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
-		req := api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", GroupID: kvGroupUUID1}
+		req := api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, err := json.Marshal(req)
 		require.NoError(t, err)
 
@@ -313,7 +318,7 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		sender := &mockSender{emailID: "email-2", groupID: kvGroupUUID2}
 		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
-		req := api.SendEmailRequest{To: "bob@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: kvGroupUUID2}
+		req := api.SendEmailRequest{To: "bob@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
 		data, _ := json.Marshal(req)
 		handler.HandleData(context.Background(), data, func([]byte) error { return nil })
 
@@ -327,17 +332,89 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 
 		store := mocks.NewTrackingStore()
 
-		for _, id := range []string{"email-a", "email-b"} {
+		// The first send omits group_id and is issued kvGroupUUID3; the second
+		// passes that issued handle back to join the same group.
+		for i, id := range []string{"email-a", "email-b"} {
 			sender := &mockSender{emailID: id, groupID: kvGroupUUID3}
 			handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
-			req := api.SendEmailRequest{To: "c@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: kvGroupUUID3}
+			req := api.SendEmailRequest{To: "c@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"}
+			if i > 0 {
+				req.GroupID = kvGroupUUID3
+			}
 			data, _ := json.Marshal(req)
-			handler.HandleData(context.Background(), data, func([]byte) error { return nil })
+			var resp []byte
+			handler.HandleData(context.Background(), data, func(d []byte) error { resp = d; return nil })
+			var r api.SendEmailResponse
+			require.NoError(t, json.Unmarshal(resp, &r))
+			require.Equal(t, id, r.EmailID)
+			require.True(t, sender.called)
 		}
 
 		ids, ok := store.GetStoredGroup(kvGroupUUID3)
 		require.True(t, ok)
 		assert.ElementsMatch(t, []string{"email-a", "email-b"}, ids)
+	})
+
+	t.Run("unissued group handle rejected — cannot create or append", func(t *testing.T) {
+		t.Parallel()
+
+		store := mocks.NewTrackingStore()
+		sender := &mockSender{emailID: "email-u", groupID: callerGroupUUID}
+		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
+
+		// Well-formed handle the service never issued.
+		req := api.SendEmailRequest{To: "u@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: callerGroupUUID}
+		data, _ := json.Marshal(req)
+		var resp []byte
+		handler.HandleData(context.Background(), data, func(d []byte) error { resp = d; return nil })
+
+		var errResp api.SendEmailErrorResponse
+		require.NoError(t, json.Unmarshal(resp, &errResp))
+		assert.Equal(t, "invalid group_id", errResp.Error)
+		assert.False(t, sender.called, "sender must not be called")
+		_, ok := store.GetStoredGroup(callerGroupUUID)
+		assert.False(t, ok, "group index must not be created for an unissued handle")
+	})
+
+	t.Run("another caller cannot append to a legacy caller-labelled group", func(t *testing.T) {
+		t.Parallel()
+
+		store := mocks.NewTrackingStore()
+		// Group keyed by a caller-chosen label, written before group handles existed.
+		store.PutGroup("invite-batch-abc123", []string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"})
+		sender := &mockSender{emailID: "email-p", groupID: "invite-batch-abc123"}
+		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
+
+		req := api.SendEmailRequest{To: "p@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: "invite-batch-abc123"}
+		data, _ := json.Marshal(req)
+		var resp []byte
+		handler.HandleData(context.Background(), data, func(d []byte) error { resp = d; return nil })
+
+		var errResp api.SendEmailErrorResponse
+		require.NoError(t, json.Unmarshal(resp, &errResp))
+		assert.Equal(t, "invalid group_id", errResp.Error)
+		assert.False(t, sender.called, "sender must not be called")
+		ids, _ := store.GetStoredGroup("invite-batch-abc123")
+		assert.Equal(t, []string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, ids, "legacy group must be unchanged")
+	})
+
+	t.Run("group existence check error — internal error, not sent", func(t *testing.T) {
+		t.Parallel()
+
+		store := mocks.NewTrackingStore()
+		store.GroupErrFor = map[string]error{kvGroupUUID1: errors.New("kv unavailable")}
+		sender := &mockSender{emailID: "email-e", groupID: kvGroupUUID1}
+		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
+
+		req := api.SendEmailRequest{To: "e@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: kvGroupUUID1}
+		data, _ := json.Marshal(req)
+		var resp []byte
+		handler.HandleData(context.Background(), data, func(d []byte) error { resp = d; return nil })
+
+		var errResp api.SendEmailErrorResponse
+		require.NoError(t, json.Unmarshal(resp, &errResp))
+		assert.Equal(t, "internal error", errResp.Error)
+		assert.False(t, sender.called, "sender must not be called")
 	})
 
 	t.Run("no KV write when sender returns empty emailID", func(t *testing.T) {
