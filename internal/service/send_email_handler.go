@@ -160,9 +160,8 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 // Falls back to returning the raw string if parsing fails.
 func domainFromAddress(addr string) string {
 	if parsed, err := mail.ParseAddress(addr); err == nil {
-		parts := strings.SplitN(parsed.Address, "@", 2)
-		if len(parts) == 2 {
-			return strings.ToLower(parts[1])
+		if at := strings.LastIndex(parsed.Address, "@"); at >= 0 {
+			return strings.ToLower(parsed.Address[at+1:])
 		}
 	}
 	return addr

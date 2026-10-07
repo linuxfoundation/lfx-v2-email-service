@@ -135,6 +135,18 @@ func TestAddressPolicy_ValidateFrom(t *testing.T) {
 			fromDomains: []string{"lfx.linuxfoundation.org"},
 			from:        "LFX Events <events@lfx.linuxfoundation.org>",
 		},
+		{
+			name:        "quoted local part containing @ is rejected",
+			fromDomains: []string{"lfx.linuxfoundation.org"},
+			from:        `"x@evil.com"@lfx.linuxfoundation.org`,
+			wantErr:     domain.ErrAddressMalformed,
+		},
+		{
+			name:        "quoted local part hiding an allowed domain is rejected",
+			fromDomains: []string{"lfx.linuxfoundation.org"},
+			from:        `"a@lfx.linuxfoundation.org"@evil.com`,
+			wantErr:     domain.ErrAddressMalformed,
+		},
 	}
 
 	for _, tc := range tests {
@@ -191,6 +203,29 @@ func TestAddressPolicy_ValidateReplyTo(t *testing.T) {
 			name:           "case-insensitive matching",
 			replyToDomains: []string{"LinuxFoundation.ORG"},
 			replyTo:        "noreply@linuxfoundation.org",
+		},
+		{
+			name:           "quoted local part with address list is rejected",
+			replyToDomains: []string{"linuxfoundation.org"},
+			replyTo:        `"x@evil.com, y"@lfx.linuxfoundation.org`,
+			wantErr:        domain.ErrAddressMalformed,
+		},
+		{
+			name:           "quoted local part containing @ is rejected",
+			replyToDomains: []string{"linuxfoundation.org"},
+			replyTo:        `"a@evil.com"@sub.linuxfoundation.org`,
+			wantErr:        domain.ErrAddressMalformed,
+		},
+		{
+			name:           "quoted local part hiding an allowed domain is rejected",
+			replyToDomains: []string{"linuxfoundation.org"},
+			replyTo:        `"a@lfx.linuxfoundation.org"@evil.com`,
+			wantErr:        domain.ErrAddressMalformed,
+		},
+		{
+			name:           "display name with dot-atom address is accepted",
+			replyToDomains: []string{"linuxfoundation.org"},
+			replyTo:        "LFX Support <first.last+tag@lfx.linuxfoundation.org>",
 		},
 	}
 

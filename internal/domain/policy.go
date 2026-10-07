@@ -83,21 +83,17 @@ func (p AddressPolicy) IsRecipientAllowed(to string) (bool, error) {
 // ValidateFrom checks the per-message From override.
 // Returns nil when from is empty (no override) or when its domain is in
 // AllowedFromDomains.
-// Returns ErrAddressMalformed when from cannot be parsed.
+// Returns ErrAddressMalformed when from cannot be parsed or its local part
+// would require quoting (see strictAddressDomain).
 // Returns ErrFromDomainNotAllowed when the domain is absent from the allowlist.
 func (p AddressPolicy) ValidateFrom(from string) error {
 	if from == "" {
 		return nil
 	}
-	addr, err := mail.ParseAddress(from)
+	domain, err := strictAddressDomain(from)
 	if err != nil {
-		return ErrAddressMalformed
+		return err
 	}
-	parts := strings.SplitN(addr.Address, "@", 2)
-	if len(parts) != 2 {
-		return ErrAddressMalformed
-	}
-	domain := strings.ToLower(parts[1])
 	for _, d := range p.AllowedFromDomains {
 		if d == domain {
 			return nil
@@ -109,27 +105,47 @@ func (p AddressPolicy) ValidateFrom(from string) error {
 // ValidateReplyTo checks the Reply-To address.
 // Returns nil when replyTo is empty or when its domain matches an entry in
 // AllowedReplyToDomains (subdomain suffix matching applies).
-// Returns ErrAddressMalformed when replyTo cannot be parsed.
+// Returns ErrAddressMalformed when replyTo cannot be parsed or its local part
+// would require quoting (see strictAddressDomain).
 // Returns ErrReplyToDomainNotAllowed when the domain is absent from the allowlist.
 func (p AddressPolicy) ValidateReplyTo(replyTo string) error {
 	if replyTo == "" {
 		return nil
 	}
-	addr, err := mail.ParseAddress(replyTo)
+	domain, err := strictAddressDomain(replyTo)
 	if err != nil {
-		return ErrAddressMalformed
+		return err
 	}
-	parts := strings.SplitN(addr.Address, "@", 2)
-	if len(parts) != 2 {
-		return ErrAddressMalformed
-	}
-	domain := strings.ToLower(parts[1])
 	for _, d := range p.AllowedReplyToDomains {
 		if domain == d || strings.HasSuffix(domain, "."+d) {
 			return nil
 		}
 	}
 	return ErrReplyToDomainNotAllowed
+}
+
+// strictAddressDomain parses raw as a single address and returns its lower-cased
+// domain (the text after the final "@"). It returns ErrAddressMalformed when raw
+// cannot be parsed or when the local part is not a plain dot-atom, i.e. it would
+// need RFC 5322 quoting. mail.ParseAddress unescapes quoted local parts, so a
+// quoted local part may contain "@", "," or "<"; rejecting them keeps the domain
+// that is checked here identical to the mailbox written into headers and the
+// SMTP envelope.
+func strictAddressDomain(raw string) (string, error) {
+	addr, err := mail.ParseAddress(raw)
+	if err != nil {
+		return "", ErrAddressMalformed
+	}
+	at := strings.LastIndex(addr.Address, "@")
+	if at <= 0 || at == len(addr.Address)-1 {
+		return "", ErrAddressMalformed
+	}
+	// mail.Address.String re-quotes any local part that is not a dot-atom, so a
+	// mismatch with the bare "<addr>" form means quoting would be required.
+	if (&mail.Address{Address: addr.Address}).String() != "<"+addr.Address+">" {
+		return "", ErrAddressMalformed
+	}
+	return strings.ToLower(addr.Address[at+1:]), nil
 }
 
 // normalizeDomains returns a new slice of lower-cased, trimmed, non-empty domain strings.

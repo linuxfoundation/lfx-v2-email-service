@@ -206,6 +206,12 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			wantErrResp: true,
 		},
 		{
+			name:        "reply_to with quoted local part is rejected",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", ReplyTo: `"attacker@evil.com, LF"@lfx.linuxfoundation.org`},
+			wantSent:    false,
+			wantErrResp: true,
+		},
+		{
 			// The handler passes From/FromDisplayName through unchanged; defaults
 			// are resolved later in the SMTP sender, not here.
 			name:        "from omitted — sender called with empty from field",
