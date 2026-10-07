@@ -28,7 +28,7 @@ import (
 const maxKVRecordBytes = 50_000
 
 // maxOpenEvents caps OpenedAtList, which doubles as the OPEN dedup list. Each
-// entry is ~85 bytes serialised; 500 entries ≈ 43 KB. SES emits one OPEN per
+// entry is ~90 bytes serialised; 500 entries ≈ 45 KB. SES emits one OPEN per
 // load of the tracking pixel, so without a cap a recipient could grow the
 // record past the bucket's maxValueSize. The list is also enforced against
 // maxKVRecordBytes together with the click collections.
@@ -270,6 +270,7 @@ func (h *EngagementEventHandler) publishEngagementEvent(
 // The returned time is the same value written to the record so callers can
 // use it directly without re-parsing the SES timestamp.
 func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessageID string, event sesEvent) (bool, time.Time) {
+	compactOpenedAtList(record)
 	switch eventType {
 	case "OPEN":
 		for _, e := range record.OpenedAtList {
@@ -394,6 +395,28 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		return true, t
 	}
 	return false, time.Time{}
+}
+
+// compactOpenedAtList repairs records written before OpenedAtList was bounded.
+// A list longer than maxOpenEvents is trimmed to its newest entries, then
+// further while the record exceeds maxKVRecordBytes, so that any event can
+// still be written to a record that was inflated earlier. OpenCount is first
+// raised to at least the stored list length so trimming never loses count.
+// It is a no-op for records within the bound.
+func compactOpenedAtList(record *api.EmailRecipientRecord) {
+	if record.OpenCount < len(record.OpenedAtList) {
+		record.OpenCount = len(record.OpenedAtList)
+	}
+	if len(record.OpenedAtList) <= maxOpenEvents {
+		return
+	}
+	record.OpenedAtList = record.OpenedAtList[len(record.OpenedAtList)-maxOpenEvents:]
+	for len(record.OpenedAtList) > 0 {
+		if b, err := json.Marshal(record); err == nil && len(b) <= maxKVRecordBytes {
+			return
+		}
+		record.OpenedAtList = record.OpenedAtList[min(len(record.OpenedAtList), maxOpenEvents/10):]
+	}
 }
 
 // parseTimestamp parses an RFC3339 timestamp string, falling back to time.Now().UTC().

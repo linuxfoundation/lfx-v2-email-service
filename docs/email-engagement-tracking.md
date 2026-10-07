@@ -60,7 +60,9 @@ counted and published, but replays of later opens or clicks are not detected and
 will re-increment `open_count` / `click_count` and emit an additional NATS push.
 Both bounds keep the serialised record under the `email-recipients` bucket's
 `maxValueSize`, so later DELIVERY, BOUNCE, and COMPLAINT events can still be
-written. See `docs/email-service-contract.md` for the full deduplication contract.
+written. A record whose `opened_at_list` already exceeds 500 entries (written
+before the bound existed) is trimmed to its newest entries on the next event,
+without changing `open_count`. See `docs/email-service-contract.md` for the full deduplication contract.
 
 DELIVERY, BOUNCE, and COMPLAINT are single-fire: once the corresponding boolean (`delivered`,
 `failed`) is set, subsequent events of the same type are ignored and not re-published.

@@ -1064,3 +1064,79 @@ func TestEngagementEventHandler_Handle_RecordTooLarge_NotRetried(t *testing.T) {
 		})
 	}
 }
+
+// TestEngagementEventHandler_Open_LegacyOversizedRecordCompacted verifies that a
+// record whose OpenedAtList grew past the bound before it was enforced is
+// trimmed to its newest entries on the next event, so the event is written and
+// the record returns within the KV size budget without losing OpenCount.
+func TestEngagementEventHandler_Open_LegacyOversizedRecordCompacted(t *testing.T) {
+	t.Parallel()
+
+	const legacyOpens = 720
+	base := mustParseTime(t, testTimestamp)
+	list := make([]api.OpenEvent, legacyOpens)
+	for i := range list {
+		list[i] = api.OpenEvent{EventID: fmt.Sprintf("%08x-0000-4000-8000-%012x", i, i), OpenedAt: base.Add(time.Duration(i) * time.Second)}
+	}
+	last := list[legacyOpens-1].OpenedAt
+
+	store := mocks.NewTrackingStore()
+	store.PutRecord(testEmailID, api.EmailRecipientRecord{
+		EmailID:      testEmailID,
+		GroupID:      testGroupID,
+		To:           "recipient@example.com",
+		Subject:      strings.Repeat("s", 500),
+		Opened:       true,
+		OpenCount:    legacyOpens,
+		OpenedAtList: list,
+		LastOpenedAt: &last,
+	})
+	seeded, _ := store.GetStoredRecord(testEmailID)
+	b, err := json.Marshal(seeded)
+	require.NoError(t, err)
+	require.Greater(t, len(b), 60_000, "seeded legacy record must be near the KV bucket hard limit")
+
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+	require.NoError(t, h.Handle(context.Background(), sqsMsg(t, "BOUNCE", testEmailID, testGroupID, testTimestamp)))
+
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+	assert.True(t, record.Failed, "BOUNCE must apply to a compacted legacy record")
+	assert.Equal(t, legacyOpens, record.OpenCount, "compaction must not change OpenCount")
+	require.NotEmpty(t, record.OpenedAtList)
+	assert.LessOrEqual(t, len(record.OpenedAtList), 500)
+	assert.Equal(t, list[legacyOpens-1].EventID, record.OpenedAtList[len(record.OpenedAtList)-1].EventID,
+		"newest open entries must be retained")
+	b, err = json.Marshal(record)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(b), 50_000, "compacted record must be within the soft ceiling")
+	require.Len(t, pub.calls, 1)
+	assert.Equal(t, api.EmailFailedSubject, pub.calls[0].subject)
+}
+
+// TestEngagementEventHandler_Open_CountNotBelowListLength verifies that a
+// record whose open_count lags its stored OpenedAtList (written before
+// open_count existed) continues counting from the list length.
+func TestEngagementEventHandler_Open_CountNotBelowListLength(t *testing.T) {
+	t.Parallel()
+
+	store := mocks.NewTrackingStore()
+	store.PutRecord(testEmailID, api.EmailRecipientRecord{
+		EmailID: testEmailID,
+		GroupID: testGroupID,
+		Opened:  true,
+		OpenedAtList: []api.OpenEvent{
+			{EventID: "sns-old-1", OpenedAt: mustParseTime(t, testTimestamp)},
+			{EventID: "sns-old-2", OpenedAt: mustParseTime(t, testTimestamp)},
+		},
+	})
+
+	h := service.NewEngagementEventHandler(store)
+	require.NoError(t, h.Handle(context.Background(), makeOpenSNSMsg(t, "sns-new", testEmailID, testGroupID, testTimestamp)))
+
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+	assert.Equal(t, 3, record.OpenCount)
+	assert.Len(t, record.OpenedAtList, 3)
+}

@@ -128,7 +128,7 @@ Exactly one of `email_id` or `group_id` must be provided.
 }
 ```
 
-`opened_at_list` contains one entry per unique open event (keyed by SNS `MessageId` to survive replays). Use `len(opened_at_list)` for the open count.
+`opened_at_list` holds recent open events keyed by SNS `MessageId` to survive replays. It is bounded (500 entries and the KV record size limit), so use `open_count` for the open count.
 
 **Success response — by `group_id`** — an array of `EmailRecipientRecord`:
 ```json
