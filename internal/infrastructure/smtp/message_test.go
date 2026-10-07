@@ -256,57 +256,77 @@ func TestSendMessage_MalformedAddressDoesNotEchoInput(t *testing.T) {
 	}
 }
 
-func TestSendMessage_ServerReplyRedactsRecipient(t *testing.T) {
+func TestSendMessage_ServerReplyRedactsEnvelopeAddresses(t *testing.T) {
 	t.Parallel()
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
+	tests := []struct {
+		name     string
+		rejectAt string
+		reply    string
+		leaked   string
+	}{
+		{"recipient rejected", "RCPT", "554 Message rejected: Email address is not verified: <Jane.Doe@Example.com>", "jane.doe@example.com"},
+		{"sender rejected", "MAIL", "554 Message rejected: Email address is not verified: <Events@Example.org>", "events@example.org"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Minimal SMTP server that rejects RCPT with a reply echoing the recipient.
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		tp := textproto.NewConn(conn)
-		_ = tp.PrintfLine("220 test ready")
-		for {
-			line, err := tp.ReadLine()
-			if err != nil {
-				return
-			}
-			switch cmd := strings.ToUpper(strings.SplitN(line, " ", 2)[0]); cmd {
-			case "EHLO", "HELO", "MAIL":
-				_ = tp.PrintfLine("250 ok")
-			case "RCPT":
-				_ = tp.PrintfLine("554 Message rejected: Email address is not verified: <Jane.Doe@Example.com>")
-			default:
-				_ = tp.PrintfLine("221 bye")
-				return
-			}
-		}
-	}()
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = ln.Close() })
 
-	port := ln.Addr().(*net.TCPAddr).Port
-	err = sendMessage(context.Background(), "Jane Doe <jane.doe@example.com>", "noreply@example.org", "msg", Config{Host: "127.0.0.1", Port: port})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "554 Message rejected")
-	assert.NotContains(t, strings.ToLower(err.Error()), "jane.doe@example.com")
+			// Minimal SMTP server that rejects one command with a reply echoing an envelope address.
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				tp := textproto.NewConn(conn)
+				_ = tp.PrintfLine("220 test ready")
+				for {
+					line, err := tp.ReadLine()
+					if err != nil {
+						return
+					}
+					switch cmd := strings.ToUpper(strings.SplitN(line, " ", 2)[0]); {
+					case cmd == tt.rejectAt:
+						_ = tp.PrintfLine("%s", tt.reply)
+					case cmd == "EHLO", cmd == "HELO", cmd == "MAIL", cmd == "RCPT":
+						_ = tp.PrintfLine("250 ok")
+					default:
+						_ = tp.PrintfLine("221 bye")
+						return
+					}
+				}
+			}()
+
+			port := ln.Addr().(*net.TCPAddr).Port
+			err = sendMessage(context.Background(), "Jane Doe <jane.doe@example.com>", "events@example.org", "msg", Config{Host: "127.0.0.1", Port: port})
+			require.Error(t, err)
+			// textproto.Error formatting differs across Go versions (newer releases quote the text).
+			assert.Contains(t, err.Error(), "554")
+			assert.Contains(t, err.Error(), "Message rejected")
+			assert.NotContains(t, strings.ToLower(err.Error()), tt.leaked)
+		})
+	}
 }
 
-func TestRedactAddressInError(t *testing.T) {
+func TestRedactAddressesInError(t *testing.T) {
 	t.Parallel()
 
-	assert.NoError(t, redactAddressInError(nil, "jane@example.com"))
+	assert.NoError(t, redactAddressesInError(nil, "jane@example.com"))
 
 	orig := errors.New("421 service not available")
-	assert.Same(t, orig, redactAddressInError(orig, "jane@example.com"), "error without the address is returned unchanged")
+	assert.Same(t, orig, redactAddressesInError(orig, "jane@example.com", "noreply@example.org"), "error without the addresses is returned unchanged")
 
-	err := redactAddressInError(errors.New("554 Message rejected: Email address is not verified: <JANE@Example.com>"), "jane@example.com")
+	err := redactAddressesInError(errors.New("554 Message rejected: Email address is not verified: <JANE@Example.com>"), "jane@example.com", "noreply@example.org")
 	assert.NotContains(t, strings.ToLower(err.Error()), "jane@example.com")
 	assert.Contains(t, err.Error(), "<j****@example.com>")
+
+	err = redactAddressesInError(errors.New("550 <noreply@example.org> rejected for <jane@example.com>"), "jane@example.com", "noreply@example.org")
+	assert.Equal(t, "550 <nor****@example.org> rejected for <j****@example.com>", err.Error())
 }
 
 func TestGenerateBoundary_Unique(t *testing.T) {

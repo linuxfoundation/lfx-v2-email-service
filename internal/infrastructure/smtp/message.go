@@ -149,26 +149,37 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 	case <-ctx.Done():
 		return ctx.Err()
 	case r := <-ch:
-		return redactAddressInError(r.err, toAddr.Address)
+		return redactAddressesInError(r.err, toAddr.Address, fromAddr.Address)
 	}
 }
 
-// redactAddressInError replaces case-insensitive occurrences of addr in err's
-// text with its redacted form, so SMTP server replies that echo the recipient
-// (e.g. "554 Message rejected: ... <addr>") do not leak it into logs.
-// err is returned unchanged when it does not contain addr. The redacted error
-// deliberately does not wrap err, so the unredacted text stays unreachable.
-func redactAddressInError(err error, addr string) error {
-	if err == nil || addr == "" {
+// redactAddressesInError replaces case-insensitive occurrences of each addr in
+// err's text with its redacted form, so SMTP server replies that echo an
+// envelope address (e.g. "554 Message rejected: ... <addr>") do not leak it
+// into logs. err is returned unchanged when it contains none of addrs. The
+// redacted error deliberately does not wrap err, so the unredacted text stays
+// unreachable.
+func redactAddressesInError(err error, addrs ...string) error {
+	if err == nil {
 		return err
-	}
-	re, reErr := regexp.Compile("(?i)" + regexp.QuoteMeta(addr))
-	if reErr != nil {
-		return errors.New("smtp server rejected message")
 	}
 	msg := err.Error()
-	if !re.MatchString(msg) {
+	redacted := false
+	for _, addr := range addrs {
+		if addr == "" {
+			continue
+		}
+		re, reErr := regexp.Compile("(?i)" + regexp.QuoteMeta(addr))
+		if reErr != nil {
+			return errors.New("smtp server rejected message")
+		}
+		if re.MatchString(msg) {
+			msg = re.ReplaceAllLiteralString(msg, redaction.RedactEmail(addr))
+			redacted = true
+		}
+	}
+	if !redacted {
 		return err
 	}
-	return errors.New(re.ReplaceAllLiteralString(msg, redaction.RedactEmail(addr)))
+	return errors.New(msg)
 }
