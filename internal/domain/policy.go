@@ -131,7 +131,9 @@ func (p AddressPolicy) ValidateReplyTo(replyTo string) error {
 // need RFC 5322 quoting. mail.ParseAddress unescapes quoted local parts, so a
 // quoted local part may contain "@", "," or "<"; rejecting them keeps the domain
 // that is checked here identical to the mailbox written into headers and the
-// SMTP envelope. Non-ASCII addresses are rejected too: strings.ToLower folds
+// SMTP envelope. Redundant quotes (e.g. `"alice"@example.org`) are removed by
+// mail.ParseAddress and the normalised address is accepted; that normalised
+// mailbox is what gets written, so the quotes carry no meaning. Non-ASCII addresses are rejected too: strings.ToLower folds
 // some non-ASCII runes to ASCII (e.g. U+0130 to "i"), which would let the
 // checked domain differ from the domain written into the message.
 func strictAddressDomain(raw string) (string, error) {

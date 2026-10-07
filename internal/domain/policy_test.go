@@ -142,6 +142,11 @@ func TestAddressPolicy_ValidateFrom(t *testing.T) {
 			wantErr:     domain.ErrAddressMalformed,
 		},
 		{
+			name:        "redundantly quoted dot-atom local part is normalised and accepted",
+			fromDomains: []string{"lfx.linuxfoundation.org"},
+			from:        `"alice"@lfx.linuxfoundation.org`,
+		},
+		{
 			name:        "non-ASCII domain that case-folds onto an allowed domain is rejected",
 			fromDomains: []string{"lfx.linuxfoundation.org"},
 			from:        "events@lfx.l\u0130nuxfoundation.org",
@@ -245,6 +250,11 @@ func TestAddressPolicy_ValidateReplyTo(t *testing.T) {
 			replyToDomains: []string{"linuxfoundation.org"},
 			replyTo:        "attacker\uff20evil.com@lfx.linuxfoundation.org",
 			wantErr:        domain.ErrAddressMalformed,
+		},
+		{
+			name:           "redundantly quoted dot-atom local part is normalised and accepted",
+			replyToDomains: []string{"linuxfoundation.org"},
+			replyTo:        `"alice"@lfx.linuxfoundation.org`,
 		},
 		{
 			name:           "display name with dot-atom address is accepted",

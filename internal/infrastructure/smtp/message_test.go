@@ -170,6 +170,7 @@ func TestBuildEmailMessage_ReplyToQuotedLocalPartStaysSingleMailbox(t *testing.T
 		`"attacker@evil.com, LF"@lfx.linuxfoundation.org`,
 		`"Support <attacker@evil.com>, x"@lfx.linuxfoundation.org`,
 		`"a@evil.com"@sub.linuxfoundation.org`,
+		`"alice"@lfx.linuxfoundation.org`,
 	} {
 		msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", replyTo, "", "")
 
@@ -192,6 +193,13 @@ func TestBuildEmailMessage_ReplyToQuotedLocalPartStaysSingleMailbox(t *testing.T
 		assert.Equal(t, want.Address, list[0].Address, "Reply-To mailbox must round-trip unchanged")
 		assert.Equal(t, want.Address[strings.LastIndex(want.Address, "@")+1:], list[0].Address[at+1:])
 	}
+}
+
+func TestBuildEmailMessage_ReplyToRedundantQuotesNormalised(t *testing.T) {
+	t.Parallel()
+
+	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", `"alice"@lfx.linuxfoundation.org`, "", "")
+	assert.Contains(t, msg, "Reply-To: <alice@lfx.linuxfoundation.org>\r\n")
 }
 
 func TestBuildEmailMessage_ReplyToOmittedWhenEmpty(t *testing.T) {
