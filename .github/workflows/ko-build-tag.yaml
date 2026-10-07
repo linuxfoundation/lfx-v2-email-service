@@ -26,18 +26,30 @@ jobs:
       app_version: ${{ steps.prepare.outputs.app_version }}
       chart_name: ${{ steps.prepare.outputs.chart_name }}
       chart_version: ${{ steps.prepare.outputs.chart_version }}
+      image_name: ${{ steps.ko-build.outputs.image_name }}
+      image_digest: ${{ steps.ko-build.outputs.image_digest }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
 
       - name: Prepare versions and chart name
         id: prepare
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          APP_VERSION=$(echo ${{ github.ref_name }} | sed 's/v//g')
+          # Only well-formed semver tags may reach image tags, the chart
+          # publisher and the argocd dispatch.
+          semver_re='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          if [[ ! "$RELEASE_TAG" =~ $semver_re ]]; then
+            echo "::error::Release tag is not a valid vX.Y.Z[-prerelease] version"
+            exit 1
+          fi
+          APP_VERSION="${RELEASE_TAG#v}"
           CHART_NAME="$(yq '.name' charts/*/Chart.yaml)"
-          CHART_VERSION=$(echo ${{ github.ref_name }} | sed 's/v//g')
+          CHART_VERSION="${RELEASE_TAG#v}"
           {
+            echo "release_tag=$RELEASE_TAG"
             echo "app_version=$APP_VERSION"
             echo "chart_name=$CHART_NAME"
             echo "chart_version=$CHART_VERSION"
@@ -54,21 +66,82 @@ jobs:
           version: v0.19.1
 
       - name: Build and publish email-service image
+        id: ko-build
         env:
+          RELEASE_TAG: ${{ steps.prepare.outputs.release_tag }}
           VERSION: ${{ steps.prepare.outputs.app_version }}
           GIT_COMMIT: ${{ github.sha }}
         run: |
+          set -euo pipefail
           BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
           export BUILD_TIME
           GIT_COMMIT=${GIT_COMMIT:0:7}
           export GIT_COMMIT
-          ko build github.com/linuxfoundation/lfx-v2-email-service/cmd/email-service \
+          IMAGE_REF=$(ko build github.com/linuxfoundation/lfx-v2-email-service/cmd/email-service \
             -B \
             --platform linux/amd64,linux/arm64 \
-            -t ${{ github.ref_name }} \
-            -t ${{ steps.prepare.outputs.app_version }} \
+            -t "$RELEASE_TAG" \
+            -t "$VERSION" \
             -t latest \
-            --sbom spdx
+            --sbom spdx)
+          # ko prints the pushed reference as <repo>[:tag]@sha256:<digest>.
+          IMAGE_NAME="${IMAGE_REF%@*}"
+          IMAGE_DIGEST="${IMAGE_REF##*@}"
+          if [[ "${IMAGE_NAME##*/}" == *:* ]]; then
+            IMAGE_NAME="${IMAGE_NAME%:*}"
+          fi
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Unexpected ko output, could not determine image digest"
+            exit 1
+          fi
+          {
+            echo "image_name=$IMAGE_NAME"
+            echo "image_digest=$IMAGE_DIGEST"
+          } >> "$GITHUB_OUTPUT"
+
+  sign-image:
+    name: Sign email-service image
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        with:
+          cosign-release: "${{ env.COSIGN_VERSION }}"
+
+      - name: Login to GitHub
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign the email-service image in GHCR
+        env:
+          IMAGE_NAME: ${{ needs.publish.outputs.image_name }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE_NAME}@${IMAGE_DIGEST}"
+
+  create-ghcr-image-provenance:
+    needs:
+      - publish
+    permissions:
+      actions: read
+      id-token: write
+      packages: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+    with:
+      image: ${{ needs.publish.outputs.image_name }}
+      digest: ${{ needs.publish.outputs.image_digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
 
   release-helm-chart:
     needs: publish
@@ -112,9 +185,11 @@ jobs:
       - name: Sign the Helm chart in GHCR
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHART_IMAGE: ${{ steps.publish-ghcr.outputs.image_name }}
+          CHART_DIGEST: ${{ steps.publish-ghcr.outputs.digest }}
         run: |
           set -euo pipefail
-          cosign sign --yes '${{ steps.publish-ghcr.outputs.image_name }}@${{ steps.publish-ghcr.outputs.digest }}'
+          cosign sign --yes "${CHART_IMAGE}@${CHART_DIGEST}"
 
   create-ghcr-helm-provenance:
     needs:
@@ -135,6 +210,8 @@ jobs:
     name: Notify ArgoCD version-bump job
     needs:
       - publish
+      - sign-image
+      - create-ghcr-image-provenance
       - release-helm-chart
       - create-ghcr-helm-provenance
     runs-on: ubuntu-latest
