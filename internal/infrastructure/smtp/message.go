@@ -156,12 +156,16 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 // redactAddressInError replaces case-insensitive occurrences of addr in err's
 // text with its redacted form, so SMTP server replies that echo the recipient
 // (e.g. "554 Message rejected: ... <addr>") do not leak it into logs.
-// err is returned unchanged when it does not contain addr.
+// err is returned unchanged when it does not contain addr. The redacted error
+// deliberately does not wrap err, so the unredacted text stays unreachable.
 func redactAddressInError(err error, addr string) error {
 	if err == nil || addr == "" {
 		return err
 	}
-	re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(addr))
+	re, reErr := regexp.Compile("(?i)" + regexp.QuoteMeta(addr))
+	if reErr != nil {
+		return errors.New("smtp server rejected message")
+	}
 	msg := err.Error()
 	if !re.MatchString(msg) {
 		return err

@@ -6,7 +6,9 @@ package smtp
 import (
 	"context"
 	"errors"
+	"net"
 	"net/mail"
+	"net/textproto"
 	"strings"
 	"testing"
 
@@ -252,6 +254,46 @@ func TestSendMessage_MalformedAddressDoesNotEchoInput(t *testing.T) {
 			assert.NotContains(t, err.Error(), tt.secret)
 		})
 	}
+}
+
+func TestSendMessage_ServerReplyRedactsRecipient(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	// Minimal SMTP server that rejects RCPT with a reply echoing the recipient.
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		tp := textproto.NewConn(conn)
+		_ = tp.PrintfLine("220 test ready")
+		for {
+			line, err := tp.ReadLine()
+			if err != nil {
+				return
+			}
+			switch cmd := strings.ToUpper(strings.SplitN(line, " ", 2)[0]); cmd {
+			case "EHLO", "HELO", "MAIL":
+				_ = tp.PrintfLine("250 ok")
+			case "RCPT":
+				_ = tp.PrintfLine("554 Message rejected: Email address is not verified: <Jane.Doe@Example.com>")
+			default:
+				_ = tp.PrintfLine("221 bye")
+				return
+			}
+		}
+	}()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	err = sendMessage(context.Background(), "Jane Doe <jane.doe@example.com>", "noreply@example.org", "msg", Config{Host: "127.0.0.1", Port: port})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "554 Message rejected")
+	assert.NotContains(t, strings.ToLower(err.Error()), "jane.doe@example.com")
 }
 
 func TestRedactAddressInError(t *testing.T) {
