@@ -40,9 +40,12 @@ jobs:
           set -euo pipefail
           # Only well-formed semver tags may reach image tags, the chart
           # publisher and the argocd dispatch.
-          semver_re='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          # Strict SemVer 2.0.0 (no build metadata; '+' is invalid in OCI tags).
+          num='(0|[1-9][0-9]*)'
+          pre_id='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          semver_re="^v${num}\.${num}\.${num}(-${pre_id}(\.${pre_id})*)?\$"
           if [[ ! "$RELEASE_TAG" =~ $semver_re ]]; then
-            echo "::error::Release tag is not a valid vX.Y.Z[-prerelease] version"
+            echo "::error::Release tag is not a valid SemVer vX.Y.Z[-prerelease] version"
             exit 1
           fi
           APP_VERSION="${RELEASE_TAG#v}"
