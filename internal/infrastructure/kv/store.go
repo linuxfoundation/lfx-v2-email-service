@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strings"
 
 	natsgo "github.com/nats-io/nats.go"
 
@@ -26,6 +28,42 @@ type kvBucket interface {
 	Put(key string, value []byte) (revision uint64, err error)
 	Update(key string, value []byte, last uint64) (revision uint64, err error)
 	Create(key string, value []byte) (revision uint64, err error)
+}
+
+// ErrInvalidKey is returned when a key fails the store's boundary check. The
+// check runs before any bucket call so an oversized or malformed key is never
+// placed on the shared NATS connection.
+var ErrInvalidKey = errors.New("invalid kv key")
+
+// maxKeyLen bounds every key the store passes to a bucket. nats.go's keyValid
+// bounds the character set but not the length, and a KV key ends up in the
+// subject of the request nats.go sends (e.g. the direct-get subject). A key
+// long enough to exceed the server's max_control_line (default 4096 bytes)
+// makes the server close the service's single shared NATS connection. 256
+// matches the group_id bound enforced by the service layer.
+const maxKeyLen = 256
+
+// keyRe matches the NATS KV key character set accepted by nats.go keyValid.
+var keyRe = regexp.MustCompile(`^[-/_=.a-zA-Z0-9]+$`)
+
+// emailIDRe matches the canonical 8-4-4-4-12 UUID format (case-insensitive),
+// mirroring isValidUUID in internal/service. Every legitimate group-index entry
+// is a service-generated UUID.
+var emailIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// checkKey returns ErrInvalidKey when key is empty, longer than maxKeyLen,
+// contains characters outside the NATS KV key character set, starts or ends
+// with '.', or contains consecutive dots. The dot rules mirror isValidGroupID
+// in internal/service: nats.go keyValid rejects leading/trailing dots, and a
+// ".." key yields an empty subject token that nats-server will not route. The
+// raw key is deliberately not included in the error so callers can log it
+// safely.
+func checkKey(key string) error {
+	if len(key) == 0 || len(key) > maxKeyLen || !keyRe.MatchString(key) ||
+		key[0] == '.' || key[len(key)-1] == '.' || strings.Contains(key, "..") {
+		return fmt.Errorf("%w (length %d)", ErrInvalidKey, len(key))
+	}
+	return nil
 }
 
 // Store implements domain.TrackingStore using two NATS JetStream KV buckets:
@@ -47,6 +85,9 @@ func (s *Store) WriteRecord(_ context.Context, emailID string, r api.EmailRecipi
 	if err != nil {
 		return fmt.Errorf("marshal recipient record: %w", err)
 	}
+	if err := checkKey(emailID); err != nil {
+		return err
+	}
 	if _, err := s.recipientsKV.Put(emailID, b); err != nil {
 		return fmt.Errorf("kv put recipient record: %w", err)
 	}
@@ -58,6 +99,12 @@ func (s *Store) WriteRecord(_ context.Context, emailID string, r api.EmailRecipi
 // yet exist it is created. A failed read on an existing key aborts without
 // writing so a transient Get error does not clobber the existing index.
 func (s *Store) AppendToGroup(ctx context.Context, groupID, emailID string) error {
+	if err := checkKey(groupID); err != nil {
+		return err
+	}
+	if !emailIDRe.MatchString(emailID) {
+		return fmt.Errorf("%w (length %d)", ErrInvalidKey, len(emailID))
+	}
 	var writeErr error
 	for attempt := range 2 {
 		var ids []string
@@ -103,6 +150,9 @@ func (s *Store) AppendToGroup(ctx context.Context, groupID, emailID string) erro
 // GetRecord retrieves the EmailRecipientRecord for emailID.
 // Returns domain.ErrNotFound when the key does not exist.
 func (s *Store) GetRecord(_ context.Context, emailID string) (api.EmailRecipientRecord, error) {
+	if err := checkKey(emailID); err != nil {
+		return api.EmailRecipientRecord{}, err
+	}
 	entry, err := s.recipientsKV.Get(emailID)
 	if err != nil {
 		if errors.Is(err, natsgo.ErrKeyNotFound) {
@@ -122,7 +172,13 @@ func (s *Store) GetRecord(_ context.Context, emailID string) (api.EmailRecipient
 // Returns domain.ErrNotFound when the group index key does not exist.
 // Individual recipient records that are absent or unreadable are silently
 // skipped; the returned totalIDs reflects the raw index count regardless.
+// Index entries that are not UUIDs are skipped without any bucket call: the
+// index value is stored data writable by any principal with publish rights on
+// the bucket subject, so its entries are re-validated before use as KV keys.
 func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.EmailRecipientRecord, int, error) {
+	if err := checkKey(groupID); err != nil {
+		return nil, 0, err
+	}
 	entry, err := s.groupIndexKV.Get(groupID)
 	if err != nil {
 		if errors.Is(err, natsgo.ErrKeyNotFound) {
@@ -138,7 +194,13 @@ func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.Emai
 
 	totalIDs := len(emailIDs)
 	records := make([]api.EmailRecipientRecord, 0, totalIDs)
+	invalidIDs, maxInvalidLen := 0, 0
 	for _, emailID := range emailIDs {
+		if !emailIDRe.MatchString(emailID) {
+			invalidIDs++
+			maxInvalidLen = max(maxInvalidLen, len(emailID))
+			continue
+		}
 		r, err := s.GetRecord(ctx, emailID)
 		if err != nil {
 			slog.WarnContext(ctx, "skipping unreadable recipient record during group lookup",
@@ -146,6 +208,11 @@ func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.Emai
 			continue
 		}
 		records = append(records, r)
+	}
+	if invalidIDs > 0 {
+		// Log counts and lengths only; the raw values are untrusted.
+		slog.WarnContext(ctx, "skipping non-UUID email_ids in group index",
+			"group_id", groupID, "invalid_count", invalidIDs, "max_invalid_len", maxInvalidLen)
 	}
 	return records, totalIDs, nil
 }
@@ -155,6 +222,9 @@ func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.Emai
 // does not exist, fn is not called and nil is returned (late-arriving SES events
 // for unknown email IDs are expected and non-retryable).
 func (s *Store) UpdateRecord(ctx context.Context, emailID string, fn func(*api.EmailRecipientRecord)) error {
+	if err := checkKey(emailID); err != nil {
+		return err
+	}
 	var lastUpdateErr error
 	for attempt := range 2 {
 		entry, err := s.recipientsKV.Get(emailID)
