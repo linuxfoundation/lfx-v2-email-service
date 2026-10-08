@@ -269,7 +269,7 @@ proportional to an arbitrarily large group:
   goroutine, so a slow lookup does not delay other requests. Requests beyond that are answered
   immediately with `service busy`; callers should retry with backoff. On shutdown the replica
   stops taking status and analytics requests and finishes the in-flight ones before it drains
-  its NATS connection.
+  its NATS connection, all within one 25-second shutdown budget.
 
 ## Group Handles
 

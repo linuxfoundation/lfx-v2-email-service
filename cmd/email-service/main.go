@@ -42,11 +42,12 @@ const gracefulShutdownSeconds = 25
 const maxInFlightReads = 8
 
 // readDrainTimeout bounds how long shutdown waits for in-flight status and
-// analytics requests. It just exceeds the handlers' own deadlines (at most 10s
-// plus one KV read) so a draining pod stays within the default 30s
-// termination grace period in the common case. The send subscription keeps
-// working meanwhile, so the NATS drain that follows rarely has much left to do.
-const readDrainTimeout = 11 * time.Second
+// analytics requests. It covers the longest handler deadline (10s for
+// analytics) plus one KV read already in flight when that deadline passes:
+// nats.go's KeyValue.Get takes no context and uses the JetStream default
+// request timeout of 5s. The wait is taken from the shared shutdown budget
+// (gracefulShutdownSeconds), and the NATS drain gets whatever remains.
+const readDrainTimeout = 16 * time.Second
 
 func main() {
 	logging.InitStructuredLogConfig()
@@ -167,6 +168,10 @@ func main() {
 
 	<-done
 	slog.Info("shutdown signal received")
+	// One deadline for the whole NATS shutdown: the read wait and the
+	// connection drain together must fit the shutdown budget, which (with the
+	// OTel flush) stays within the pod's default 30s termination grace period.
+	shutdownDeadline := time.Now().Add(gracefulShutdownSeconds * time.Second)
 
 	cancel()
 
@@ -181,9 +186,19 @@ func main() {
 	if !nc.IsClosed() && !nc.IsDraining() {
 		// Status and analytics requests run on their own goroutines, which
 		// nc.Drain does not wait for; finish them while replies can still be sent.
-		drainReads(readDrainTimeout)
+		drainReads(min(readDrainTimeout, time.Until(shutdownDeadline)))
 		slog.Info("draining NATS connection")
 		_ = nc.Drain()
+		// nc.Drain's own DrainTimeout counts from now, after the read wait, so
+		// close the connection at the shared deadline if the drain is still
+		// running. Closing runs the closed handler, which releases wg.
+		closeAtDeadline := time.AfterFunc(time.Until(shutdownDeadline), func() {
+			if !nc.IsClosed() {
+				slog.Warn("NATS drain did not finish by the shutdown deadline, closing connection")
+				nc.Close()
+			}
+		})
+		defer closeAtDeadline.Stop()
 	}
 
 	wg.Wait()
