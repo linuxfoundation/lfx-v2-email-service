@@ -244,6 +244,7 @@ Group tracking data is scoped by a service-issued group handle, not by a caller-
 - `get_email_status` (including single-email lookups) and `get_email_engagement_analytics` require it. `send_email` accepts it only if the group index already has an entry for it, so only a holder of an issued handle can add sends to a group.
 - Degraded mode: when NATS KV is unavailable at startup the service uses `NullTrackingStore`. It has no group index, so `send_email` cannot record new groups and replies with an empty `group_id` when none was supplied. It also cannot check supplied handles, so it accepts any well-formed one. Nothing is stored in this mode and status and analytics always reply `not found`, so no tracking data can be read or altered.
 - Groups stored before handles were introduced are keyed by caller-chosen strings or UUIDs. Those values almost never match the handle format and are then rejected by all three subjects and their tracking data can no longer be read through the API. Before rolling this change out, confirm no existing `email-group-index` key already has the handle format (`nats kv ls email-group-index | grep -E '^grp_[0-9a-f]{32}$'` must print nothing): the earlier validation allowed callers to choose exactly that format, and such a key would be treated as an issued handle.
+- Rollout: old and new pods must not overlap when this change ships. Old pods disclose the handle in mail headers and push events. Follow the required all-at-once procedure in `docs/service-helm-chart.md` § Group Handle Rollout.
 
 ## Change Checklist
 
