@@ -13,7 +13,7 @@ Update it in the same PR as any change to SMTP tracking headers, SES/SQS handlin
 2. `SMTPSender` generates an `email_id` and uses the verified caller-supplied group handle, or issues a new one (`domain.NewGroupHandle`).
 3. The MIME message includes `X-LFX-TRACKING-ID: <email_id>`. The group handle is not included because it is the credential for the group's tracking data.
 4. If configured, the MIME message also includes `X-SES-CONFIGURATION-SET`.
-5. After successful SMTP delivery, `SendEmailHandler` writes an `EmailRecipientRecord` to `email-recipients` and appends the `email_id` to `email-group-index`.
+5. After successful SMTP delivery, `SendEmailHandler` first appends the `email_id` to `email-group-index` (optimistic locking, one retry), then writes an `EmailRecipientRecord` to `email-recipients` (plain put). If a newly issued group cannot be recorded in the index, no recipient record is written and the reply carries an empty `group_id`.
 6. SES emits engagement events to SNS, SNS sends them to SQS, and the service's SQS poller consumes the queue.
 7. `EngagementEventHandler` extracts `email_id`, loads the KV record, applies the event, and writes the updated record back with optimistic locking.
 8. If the event was new (not a deduplicated replay), the handler publishes a typed push event to the appropriate NATS subject so subscribers can react in real time without polling.
