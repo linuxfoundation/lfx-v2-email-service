@@ -117,8 +117,9 @@ type SendEmailRequest struct {
 // It is the credential required by GetEmailStatusSubject and
 // GetEmailEngagementAnalyticsSubject and is returned only in this reply.
 // GroupID is empty on a successful send when a newly issued group could not be
-// recorded (tracking storage error or unavailable): the email was sent, but it
-// cannot be queried through the tracking subjects.
+// recorded (tracking storage error or unavailable), or when a caller-supplied
+// group reached MaxGroupEmails between the pre-send check and the append: the
+// email was sent, but it cannot be queried through the tracking subjects.
 type SendEmailResponse struct {
 	EmailID string `json:"email_id"`
 	GroupID string `json:"group_id"`
