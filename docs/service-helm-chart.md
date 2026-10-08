@@ -76,6 +76,18 @@ Common local pattern:
 - Set `EMAIL_ENABLED=true` only when a real or local SMTP endpoint is reachable.
 - Keep `SES_EVENTING_ENABLED=false` unless AWS credentials, queue URL, and NATS KV are configured.
 
+## Group Handle Rollout (required, one-time)
+
+The release that introduces service-issued group handles must not overlap old and new pods. The chart runs `replicaCount: 2` with the default `RollingUpdate` strategy, so a normal rollout would leave old pods serving traffic. Old pods put `group_id` in the `X-LFX-TRACKING-ID` header and in push events, which would disclose newly issued handles. They also accept caller-chosen group IDs that new pods reject.
+
+Deploy this release all at once:
+
+1. Confirm no existing `email-group-index` key has the handle format: `nats kv ls email-group-index | grep -E '^grp_[0-9a-f]{32}$'` must print nothing.
+2. Scale the old deployment to zero (`kubectl -n lfx scale deploy/lfx-v2-email-service --replicas=0`) and wait for all pods to terminate.
+3. Roll out the new image, then scale back to `replicaCount`.
+
+Expect a short window with no NATS responder for `lfx.email-service.*` while no pods are running. Callers that already use their own `group_id` labels must be updated before this release (see `docs/email-service-contract.md` § Group Handles).
+
 ## Change Checklist
 
 - Update `CLAUDE.md` and this document when adding or renaming chart values.

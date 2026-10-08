@@ -24,7 +24,7 @@ type TrackingStore struct {
 	WriteErr    error            // if non-nil, WriteRecord returns this error
 	AppendErr   error            // if non-nil, AppendToGroup returns this error
 	GetErrFor   map[string]error // per-emailID error override for GetRecord / UpdateRecord / GetGroupRecords fan-out
-	GroupErrFor map[string]error // per-groupID error override for GetGroupRecords (before fan-out)
+	GroupErrFor map[string]error // per-groupID error override for GroupExists and GetGroupRecords (before fan-out)
 }
 
 // NewTrackingStore returns an empty TrackingStore mock.
@@ -92,6 +92,16 @@ func (m *TrackingStore) AppendToGroup(_ context.Context, groupID, emailID string
 	return nil
 }
 
+func (m *TrackingStore) GroupExists(_ context.Context, groupID string) (bool, error) {
+	if err, ok := m.GroupErrFor[groupID]; ok {
+		return false, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.groups[groupID]
+	return ok, nil
+}
+
 func (m *TrackingStore) GetRecord(_ context.Context, emailID string) (api.EmailRecipientRecord, error) {
 	if err, ok := m.GetErrFor[emailID]; ok {
 		return api.EmailRecipientRecord{}, err
@@ -109,7 +119,8 @@ func (m *TrackingStore) GetRecord(_ context.Context, emailID string) (api.EmailR
 // total number of IDs in that index.
 // Returns domain.ErrNotFound when the group itself is absent.
 // All per-record errors (absent records, injected errors via GetErrFor, etc.)
-// are silently skipped; totalIDs reflects the raw index count.
+// and records belonging to another group are silently skipped, matching
+// kv.Store; totalIDs reflects the raw index count.
 func (m *TrackingStore) GetGroupRecords(ctx context.Context, groupID string) ([]api.EmailRecipientRecord, int, error) {
 	if err, ok := m.GroupErrFor[groupID]; ok {
 		return nil, 0, err
@@ -128,7 +139,7 @@ func (m *TrackingStore) GetGroupRecords(ctx context.Context, groupID string) ([]
 	out := make([]api.EmailRecipientRecord, 0, totalIDs)
 	for _, id := range idsCopy {
 		r, err := m.GetRecord(ctx, id)
-		if err != nil {
+		if err != nil || r.GroupID != groupID {
 			continue
 		}
 		out = append(out, r)

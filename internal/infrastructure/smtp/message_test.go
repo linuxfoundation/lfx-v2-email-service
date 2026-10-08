@@ -53,8 +53,8 @@ func TestBuildEmailMessage_ConfigurationSetHeader(t *testing.T) {
 func TestBuildEmailMessage_TrackingIDHeader(t *testing.T) {
 	t.Parallel()
 
-	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "", "", "group-uuid/email-uuid")
-	assert.Contains(t, msg, "X-LFX-TRACKING-ID: group-uuid/email-uuid")
+	msg := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "", "", "email-uuid")
+	assert.Contains(t, msg, "X-LFX-TRACKING-ID: email-uuid")
 
 	msgNoTracking := buildEmailMessage("bob@example.com", "Sub", "<p>Hi</p>", "Hi", "from@example.com", "LFX Self Serve", "", "", "")
 	assert.NotContains(t, msgNoTracking, "X-LFX-TRACKING-ID")

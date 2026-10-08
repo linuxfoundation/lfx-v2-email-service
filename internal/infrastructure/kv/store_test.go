@@ -202,6 +202,21 @@ func TestStore_AppendToGroup(t *testing.T) {
 	})
 }
 
+func TestStore_GroupExists(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newStore(t)
+	ctx := context.Background()
+
+	ok, err := store.GroupExists(ctx, "g1")
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	require.NoError(t, store.AppendToGroup(ctx, "g1", uuid1))
+	ok, err = store.GroupExists(ctx, "g1")
+	require.NoError(t, err)
+	assert.True(t, ok)
+}
+
 func TestStore_GetGroupRecords(t *testing.T) {
 	t.Parallel()
 
@@ -222,6 +237,26 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		require.Len(t, got, 2)
 		assert.Equal(t, uuid1, got[0].EmailID)
 		assert.Equal(t, uuid2, got[1].EmailID)
+	})
+
+	t.Run("skips index entries whose record belongs to another group", func(t *testing.T) {
+		t.Parallel()
+		store, _, groupIndexKV := newStore(t)
+
+		own := api.EmailRecipientRecord{EmailID: uuid1, GroupID: "g3", To: "a@b.com", Subject: "S", SentAt: time.Now().UTC()}
+		foreign := api.EmailRecipientRecord{EmailID: uuid2, GroupID: "other", To: "x@y.com", Subject: "Secret", SentAt: time.Now().UTC()}
+		require.NoError(t, store.WriteRecord(context.Background(), uuid1, own))
+		require.NoError(t, store.WriteRecord(context.Background(), uuid2, foreign))
+
+		// Index altered to list another group's email.
+		_, err := groupIndexKV.Put("g3", []byte(`["`+uuid1+`","`+uuid2+`"]`))
+		require.NoError(t, err)
+
+		got, totalIDs, err := store.GetGroupRecords(context.Background(), "g3")
+		require.NoError(t, err)
+		assert.Equal(t, 2, totalIDs)
+		require.Len(t, got, 1)
+		assert.Equal(t, uuid1, got[0].EmailID)
 	})
 
 	t.Run("returns ErrNotFound for unknown group", func(t *testing.T) {
@@ -311,6 +346,9 @@ func TestStore_RejectsInvalidKeysWithoutBucketCall(t *testing.T) {
 
 			_, _, err = store.GetGroupRecords(ctx, key)
 			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "GetGroupRecords")
+
+			_, err = store.GroupExists(ctx, key)
+			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "GroupExists")
 
 			err = store.AppendToGroup(ctx, key, uuid1)
 			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "AppendToGroup groupID")

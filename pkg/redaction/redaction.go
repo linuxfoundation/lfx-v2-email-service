@@ -22,6 +22,16 @@ func Redact(sensitive string) string {
 	return string(runes[:3]) + "****"
 }
 
+// RedactGroupHandle redacts a group handle for logging. A group handle grants
+// read access to a group's tracking records, so only a short prefix is kept
+// ("grp_" + 8 hex chars, 32 of the 128 random bits) for log correlation.
+func RedactGroupHandle(handle string) string {
+	if len(handle) <= 12 {
+		return Redact(handle)
+	}
+	return handle[:12] + "****"
+}
+
 // RedactEmail redacts an email address, keeping the domain visible for debugging.
 func RedactEmail(email string) string {
 	if email == "" {

@@ -24,11 +24,13 @@ const (
 	statusEmailUUID1   = "11111111-1111-1111-1111-111111111111"
 	statusEmailUUID2   = "22222222-2222-2222-2222-222222222222"
 	statusEmailUUIDErr = "77777777-7777-7777-7777-777777777777"
-	statusGroupUUIDA   = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	statusGroupUUIDB   = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	statusGroupUUIDF   = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+	statusGroupUUIDA   = "grp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	statusGroupUUIDB   = "grp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	statusGroupUUIDF   = "grp_ffffffffffffffffffffffffffffffff"
 	statusEmailMissing = "99999999-9999-9999-9999-999999999999"
-	statusGroupMissing = "88888888-8888-8888-8888-888888888888"
+	statusGroupMissing = "grp_88888888888888888888888888888888"
+	statusLegacyLabel  = "invite-batch-abc123"
+	statusLegacyUUID   = "dddddddd-dddd-dddd-dddd-dddddddddddd"
 	statusEmailExists  = "33333333-3333-3333-3333-333333333333"
 	statusEmailGone    = "44444444-4444-4444-4444-444444444444"
 	statusEmailBad     = "55555555-5555-5555-5555-555555555555"
@@ -72,22 +74,59 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 		{
 			name:       "neither email_id nor group_id",
 			payload:    api.GetEmailStatusRequest{},
-			wantErrMsg: "email_id or group_id is required",
+			wantErrMsg: "group_id is required",
 		},
 		{
-			name:       "both email_id and group_id",
-			payload:    api.GetEmailStatusRequest{EmailID: statusEmailUUID1, GroupID: statusGroupUUIDA},
-			wantErrMsg: "only one of email_id or group_id may be set",
+			name:    "email_id without group_id — refused even though record exists",
+			payload: api.GetEmailStatusRequest{EmailID: statusEmailUUID1},
+			setup: func(store *mocks.TrackingStore) {
+				seedRecipient(t, store, statusEmailUUID1, statusGroupUUIDA)
+			},
+			wantErrMsg: "group_id is required",
 		},
 		{
 			name:       "email_id not a UUID",
-			payload:    api.GetEmailStatusRequest{EmailID: "email-1"},
+			payload:    api.GetEmailStatusRequest{EmailID: "email-1", GroupID: statusGroupUUIDA},
 			wantErrMsg: "invalid email_id",
 		},
 		{
 			name:       "email_id 100 KiB oversized value",
-			payload:    api.GetEmailStatusRequest{EmailID: strings.Repeat("a", 100_000)},
+			payload:    api.GetEmailStatusRequest{EmailID: strings.Repeat("a", 100_000), GroupID: statusGroupUUIDA},
 			wantErrMsg: "invalid email_id",
+		},
+		{
+			name:    "email_id with another group's handle — not found",
+			payload: api.GetEmailStatusRequest{EmailID: statusEmailUUID1, GroupID: statusGroupUUIDB},
+			setup: func(store *mocks.TrackingStore) {
+				seedRecipient(t, store, statusEmailUUID1, statusGroupUUIDA)
+			},
+			wantErrMsg: "not found",
+		},
+		{
+			name:    "group_id caller-chosen legacy label — refused even though group exists",
+			payload: api.GetEmailStatusRequest{GroupID: statusLegacyLabel},
+			setup: func(store *mocks.TrackingStore) {
+				seedRecipient(t, store, statusEmailUUID1, statusLegacyLabel)
+				seedGroupIndex(t, store, statusLegacyLabel, []string{statusEmailUUID1})
+			},
+			wantErrMsg: "invalid group_id",
+		},
+		{
+			name:    "group_id legacy UUID — refused even though group exists",
+			payload: api.GetEmailStatusRequest{GroupID: statusLegacyUUID},
+			setup: func(store *mocks.TrackingStore) {
+				seedRecipient(t, store, statusEmailUUID1, statusLegacyUUID)
+				seedGroupIndex(t, store, statusLegacyUUID, []string{statusEmailUUID1})
+			},
+			wantErrMsg: "invalid group_id",
+		},
+		{
+			name:    "email_id with legacy label group_id — refused",
+			payload: api.GetEmailStatusRequest{EmailID: statusEmailUUID1, GroupID: statusLegacyLabel},
+			setup: func(store *mocks.TrackingStore) {
+				seedRecipient(t, store, statusEmailUUID1, statusLegacyLabel)
+			},
+			wantErrMsg: "invalid group_id",
 		},
 		{
 			name:       "group_id over 256 chars",
@@ -106,7 +145,7 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 		},
 		{
 			name:    "email_id happy path",
-			payload: api.GetEmailStatusRequest{EmailID: statusEmailUUID1},
+			payload: api.GetEmailStatusRequest{EmailID: statusEmailUUID1, GroupID: statusGroupUUIDA},
 			setup: func(store *mocks.TrackingStore) {
 				seedRecipient(t, store, statusEmailUUID1, statusGroupUUIDA)
 			},
@@ -114,12 +153,12 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 		},
 		{
 			name:       "email_id not found",
-			payload:    api.GetEmailStatusRequest{EmailID: statusEmailMissing},
+			payload:    api.GetEmailStatusRequest{EmailID: statusEmailMissing, GroupID: statusGroupUUIDA},
 			wantErrMsg: "not found",
 		},
 		{
 			name:    "email_id KV internal error",
-			payload: api.GetEmailStatusRequest{EmailID: statusEmailUUIDErr},
+			payload: api.GetEmailStatusRequest{EmailID: statusEmailUUIDErr, GroupID: statusGroupUUIDA},
 			setup: func(store *mocks.TrackingStore) {
 				store.GetErrFor = map[string]error{statusEmailUUIDErr: errors.New("kv unavailable")}
 			},
@@ -142,6 +181,18 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 			name:       "group_id not found",
 			payload:    api.GetEmailStatusRequest{GroupID: statusGroupMissing},
 			wantErrMsg: "not found",
+		},
+		{
+			name:    "group_id — index entry for another group's record is not returned",
+			payload: api.GetEmailStatusRequest{GroupID: statusGroupUUIDA},
+			setup: func(store *mocks.TrackingStore) {
+				seedRecipient(t, store, statusEmailUUID1, statusGroupUUIDA)
+				seedRecipient(t, store, statusEmailUUID2, statusGroupUUIDB)
+				seedGroupIndex(t, store, statusGroupUUIDA, []string{statusEmailUUID1, statusEmailUUID2})
+			},
+			wantRecords: &[]api.EmailRecipientRecord{
+				{EmailID: statusEmailUUID1, GroupID: statusGroupUUIDA, To: "user@example.com", Subject: "Hello"},
+			},
 		},
 		{
 			name:    "group_id — missing recipient records skipped",

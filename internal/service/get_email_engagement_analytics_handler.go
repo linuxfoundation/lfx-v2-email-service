@@ -14,6 +14,7 @@ import (
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/logging"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
+	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
 // GetEmailEngagementAnalyticsHandler handles requests on the get_email_engagement_analytics subject.
@@ -50,7 +51,7 @@ func (h *GetEmailEngagementAnalyticsHandler) HandleData(ctx context.Context, dat
 		return
 	}
 
-	ctx = logging.AppendCtx(ctx, slog.String("group_id", req.GroupID))
+	ctx = logging.AppendCtx(ctx, slog.String("group_id", redaction.RedactGroupHandle(req.GroupID)))
 
 	records, totalIDs, err := h.store.GetGroupRecords(ctx, req.GroupID)
 	if err != nil {

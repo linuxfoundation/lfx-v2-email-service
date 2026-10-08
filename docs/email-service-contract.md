@@ -26,7 +26,7 @@ The service does not render templates. Callers must send pre-rendered HTML and p
 | Constant | Subject | Reply |
 | --- | --- | --- |
 | `api.SendEmailSubject` | `lfx.email-service.send_email` | `SendEmailResponse` on success, `SendEmailErrorResponse` on failure |
-| `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | `EmailRecipientRecord` for `email_id`, `[]EmailRecipientRecord` for `group_id`, or `SendEmailErrorResponse` |
+| `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | `EmailRecipientRecord` for `group_id` + `email_id`, `[]EmailRecipientRecord` for `group_id` alone, or `SendEmailErrorResponse` |
 | `api.GetEmailEngagementAnalyticsSubject` | `lfx.email-service.get_email_engagement_analytics` | `GetEmailEngagementAnalyticsResponse` or `SendEmailErrorResponse` |
 
 All request/reply subscriptions use queue group `api.QueueGroup`, value `lfx.email-service.queue`.
@@ -59,14 +59,14 @@ Request: `api.SendEmailRequest`
 | `from` | no | Sender address override. The domain must be an exact match in `SMTP_ALLOWED_FROM_DOMAINS` (default: `lfx.linuxfoundation.org`). If omitted, the service default (`DEFAULT_SMTP_FROM`) is used. |
 | `from_display_name` | no | Display name in the From header. If omitted, the service default (`DEFAULT_SMTP_FROM_DISPLAY_NAME`, default `"LFX Self Serve"`) is used. |
 | `reply_to` | no | Sets the SMTP `Reply-To` header. The domain must be in `SMTP_ALLOWED_REPLY_TO_DOMAINS` (default: `linuxfoundation.org`); subdomain suffix matching applies, so the default also permits `lfx.linuxfoundation.org`. |
-| `group_id` | no | Caller-supplied correlation ID for a batch or campaign. If omitted, the service generates one. Must be at most 256 bytes, contain only characters from the NATS KV key character set (`[-/_=.a-zA-Z0-9]`), and must not start or end with `.` or contain consecutive dots (`..`). |
+| `group_id` | no | Group handle for a batch or campaign. Omit it to start a new group: the service issues a handle and returns it in `SendEmailResponse.group_id`. To add a send to an existing group, pass a handle previously returned by `send_email`. Any other value (wrong format, or a well-formed handle with no group index entry) is rejected before sending, except in degraded mode (see [Group Handles](#group-handles)). |
 
 Success reply: `api.SendEmailResponse`
 
 | Field | Description |
 | --- | --- |
 | `email_id` | Service-generated UUID for this send. Used as the key in `email-recipients`. |
-| `group_id` | Caller-provided or service-generated group ID. Used as the key in `email-group-index`. |
+| `group_id` | Service-issued group handle (`grp_` + 32 lowercase hex chars). Used as the key in `email-group-index`. |
 
 Error reply: `api.SendEmailErrorResponse`
 
@@ -78,7 +78,8 @@ Error reply: `api.SendEmailErrorResponse`
 | `from address domain not allowed` | `from` domain is not in `SMTP_ALLOWED_FROM_DOMAINS`. |
 | `invalid reply_to address` | `reply_to` is set but is not a parseable email address, contains non-ASCII characters, or its local part would require RFC 5322 quoting (only ASCII dot-atom local parts are accepted). |
 | `reply_to address domain not allowed` | `reply_to` domain is not in `SMTP_ALLOWED_REPLY_TO_DOMAINS`. |
-| `invalid group_id` | `group_id` exceeds 256 bytes, contains characters outside the NATS KV key character set (`[-/_=.a-zA-Z0-9]`), or starts/ends with `.` or contains consecutive dots (`..`). |
+| `invalid group_id` | `group_id` is not a group handle issued by this service: wrong format, or no group index entry exists for it. |
+| `internal error` | The group index could not be read to verify `group_id`. No mail is sent. |
 | `email delivery failed` | SMTP delivery failed after the service accepted the request. |
 
 When `EMAIL_ENABLED=false`, the service uses `NoOpSender`: the request still succeeds but returns an empty `SendEmailResponse` (`email_id` and `group_id` both empty). No SMTP message is sent and no tracking records are written.
@@ -98,20 +99,18 @@ Subject: `lfx.email-service.get_email_status`
 
 Request: `api.GetEmailStatusRequest`
 
-Exactly one field must be set:
-
-| Field | Description |
-| --- | --- |
-| `email_id` | Fetch one `EmailRecipientRecord`. |
-| `group_id` | Fetch all `EmailRecipientRecord` entries in a group. |
+| Field | Required | Description |
+| --- | --- | --- |
+| `group_id` | yes | Group handle returned by `send_email`. Alone, fetches all `EmailRecipientRecord` entries in the group. |
+| `email_id` | no | With `group_id`, fetches one `EmailRecipientRecord`. The record is returned only if it was sent under `group_id`; otherwise the reply is `not found`. |
 
 Reply:
 
-- `email_id` lookup returns one `api.EmailRecipientRecord`.
+- `group_id` + `email_id` lookup returns one `api.EmailRecipientRecord`.
 - `group_id` lookup returns a JSON array of `api.EmailRecipientRecord`.
   The array may contain **fewer** entries than the group index lists: any per-recipient
   error (missing record, unmarshal failure, or transient KV read error) is silently
-  omitted from the array rather than erroring, so the returned count can be less than
+  omitted from the array rather than erroring (as is any record whose `group_id` does not match the requested group), so the returned count can be less than
   the number of `email_id`s originally sent for the group. Index entries that are not
   valid UUIDs are also omitted, without any recipient KV read. The group-status reply
   carries no total count; callers that need the raw index count to detect partial
@@ -123,11 +122,10 @@ Error values:
 | Error | Cause |
 | --- | --- |
 | `invalid request payload` | Request body is not valid JSON. |
-| `email_id or group_id is required` | Neither lookup field was set. |
-| `only one of email_id or group_id may be set` | Both lookup fields were set. |
+| `group_id is required` | `group_id` was not set (including an `email_id`-only request). |
 | `invalid email_id` | `email_id` is not a valid UUID (8-4-4-4-12 hex, case-insensitive; normalized to lowercase before lookup). |
-| `invalid group_id` | `group_id` exceeds 256 bytes, contains characters outside the NATS KV key character set (`[-/_=.a-zA-Z0-9]`), or starts/ends with `.` or contains consecutive dots (`..`). |
-| `not found` | No matching record or group index exists. |
+| `invalid group_id` | `group_id` is not in the group handle format issued by this service. |
+| `not found` | No group index exists for `group_id`, or the `email_id` record does not exist or was not sent under `group_id`. |
 | `internal error` | KV read, decode, or response serialization failed. |
 
 ## Engagement Analytics
@@ -138,7 +136,7 @@ Request: `api.GetEmailEngagementAnalyticsRequest`
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `group_id` | yes | Group ID returned by `send_email` or supplied by the caller. |
+| `group_id` | yes | Group handle returned by `send_email`. |
 
 Success reply: `api.GetEmailEngagementAnalyticsResponse`
 
@@ -157,15 +155,16 @@ Error values:
 | --- | --- |
 | `invalid request payload` | Request body is not valid JSON. |
 | `group_id is required` | The request omitted `group_id`. |
-| `invalid group_id` | `group_id` exceeds 256 bytes, contains characters outside the NATS KV key character set (`[-/_=.a-zA-Z0-9]`), or starts/ends with `.` or contains consecutive dots (`..`). |
+| `invalid group_id` | `group_id` is not in the group handle format issued by this service. |
 | `not found` | No group index exists for `group_id`. |
 | `internal error` | Reading or decoding the group index failed. |
 
 Only failures reading or decoding the **group index** return `internal error`. Per-recipient
 `email-recipients` reads in the analytics loop are best-effort: a missing or corrupt recipient
 record (any `KV.Get` error or unmarshal failure) is silently skipped and excluded from the
-aggregate counts. Group-index entries that are not valid UUIDs are skipped the same way, without
-any recipient KV read. `total_sent` reflects the number of `email_id`s in the group index, so the
+aggregate counts, as is any record whose `group_id` does not match the requested group.
+Group-index entries that are not valid UUIDs are skipped the same way, without any recipient
+KV read. `total_sent` reflects the number of `email_id`s in the group index, so the
 sum of `delivered` / `failed` / `unique_opened` may be less than `total_sent` when records are
 missing or unreadable.
 
@@ -173,12 +172,14 @@ missing or unreadable.
 
 Each push payload is a JSON-encoded struct from `pkg/api`.
 
+Push events do not carry the group handle (the `GroupID` struct field is kept for compile compatibility but is always empty). Push subjects can be read by any permitted NATS subscriber, and the group handle is the credential for a group's tracking records. Correlate events using the `email_id` returned by `send_email`.
+
 ### `EmailDeliveredEvent` (`api.EmailDeliveredSubject`)
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `email_id` | string | Per-send UUID. |
-| `group_id` | string | Caller-supplied or service-generated group ID. |
+| `group_id` | string | Deprecated; always omitted. See note below. |
 | `delivered_at` | RFC3339 UTC | Timestamp from the SES DELIVERY event. |
 
 ### `EmailOpenedEvent` (`api.EmailOpenedSubject`)
@@ -186,7 +187,7 @@ Each push payload is a JSON-encoded struct from `pkg/api`.
 | Field | Type | Description |
 | --- | --- | --- |
 | `email_id` | string | Per-send UUID. |
-| `group_id` | string | Group ID. |
+| `group_id` | string | Deprecated; always omitted. |
 | `open_count` | int | Cumulative open count after this event. |
 | `opened_at` | RFC3339 UTC | Timestamp of **this** SES OPEN event (not the max across all opens). |
 
@@ -197,7 +198,7 @@ Published once per unique SNS `MessageId` **within the bounded deduplication win
 | Field | Type | Description |
 | --- | --- | --- |
 | `email_id` | string | Per-send UUID. |
-| `group_id` | string | Group ID. |
+| `group_id` | string | Deprecated; always omitted. |
 | `event_id` | string | SNS `MessageId` of this SES CLICK event. Use as the deduplication key for at-most-once processing (see note below). |
 | `link` | string | URL that was clicked, with query string and fragment stripped to avoid exposing tokens or signed parameters. |
 | `click_count` | int | Cumulative click count after this event. |
@@ -210,7 +211,7 @@ Published once per unique SNS `MessageId` **within the bounded deduplication win
 | Field | Type | Description |
 | --- | --- | --- |
 | `email_id` | string | Per-send UUID. |
-| `group_id` | string | Group ID. |
+| `group_id` | string | Deprecated; always omitted. |
 | `reason` | string | `"bounce"` or `"complaint"`. |
 | `failed_at` | RFC3339 UTC | Timestamp from the SES BOUNCE or COMPLAINT event. |
 
@@ -222,7 +223,7 @@ Published at most once per email (BOUNCE and COMPLAINT are single-fire; subseque
 
 | Field | Description |
 | --- | --- |
-| `group_id` | Group/campaign correlation ID. |
+| `group_id` | Group handle the email was sent under. |
 | `email_id` | Per-send UUID. |
 | `to` | Recipient email address. |
 | `subject` | Email subject. |
@@ -233,6 +234,17 @@ Published at most once per email (BOUNCE and COMPLAINT are single-fire; subseque
 | `failed`, `failed_at` | Bounce or complaint status and timestamp. |
 
 `email-group-index` stores a JSON `[]string` of `email_id` values, keyed by `group_id`.
+
+## Group Handles
+
+Group tracking data is scoped by a service-issued group handle, not by a caller-chosen name:
+
+- The handle is `grp_` followed by 32 lowercase hex characters (128 bits from `crypto/rand`), generated by `domain.NewGroupHandle` when `send_email` is called without `group_id`.
+- It is returned only in the `send_email` reply. If the new group could not be recorded in `email-group-index` (KV write failure, or degraded mode), the reply carries an empty `group_id` rather than a handle that later calls would reject, and no recipient record is written under it; send the next email without `group_id` to start a new group. It is not written to the `X-LFX-TRACKING-ID` mail header and is not included in push events.
+- `get_email_status` (including single-email lookups) and `get_email_engagement_analytics` require it. `send_email` accepts it only if the group index already has an entry for it, so only a holder of an issued handle can add sends to a group.
+- Degraded mode: when NATS KV is unavailable at startup the service uses `NullTrackingStore`. It has no group index, so `send_email` cannot record new groups and replies with an empty `group_id` when none was supplied. It also cannot check supplied handles, so it accepts any well-formed one. Nothing is stored in this mode and status and analytics always reply `not found`, so no tracking data can be read or altered.
+- Groups stored before handles were introduced are keyed by caller-chosen strings or UUIDs. Those values almost never match the handle format and are then rejected by all three subjects and their tracking data can no longer be read through the API. Before rolling this change out, confirm no existing `email-group-index` key already has the handle format (`nats kv ls email-group-index | grep -E '^grp_[0-9a-f]{32}$'` must print nothing): the earlier validation allowed callers to choose exactly that format, and such a key would be treated as an issued handle.
+- Rollout: old and new pods must not overlap when this change ships. Old pods disclose the handle in mail headers and push events. Follow the required all-at-once procedure in `docs/service-helm-chart.md` § Group Handle Rollout.
 
 ## Change Checklist
 

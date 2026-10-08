@@ -58,7 +58,8 @@ non-retryable cases (unknown event type, missing tracking header, malformed payl
 
 ## `tracking-kv-engagement/group-id-tracking-id-split` — Critical
 
-**Pattern:** the `X-LFX-TRACKING-ID` header is `<group_id>/<email_id>`, and `group_id` is
+**Pattern:** the `X-LFX-TRACKING-ID` header was `<group_id>/<email_id>` (now the bare
+`<email_id>`, but legacy mail still carries the old form), and legacy `group_id`s were
 caller-supplied and may contain `/`. Splitting on the *first* `/` extracts the wrong
 `email_id`, so the wrong KV record (or none) is updated.
 

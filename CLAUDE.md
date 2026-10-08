@@ -19,7 +19,7 @@ Development guide for Claude instances working on this service.
 
 ## Service Overview
 
-Thin NATS request/reply relay. Receives pre-rendered `{to, subject, html, text, from?, from_display_name?, reply_to?}`
+Thin NATS request/reply relay. Receives pre-rendered `{to, subject, html, text, from?, from_display_name?, reply_to?, group_id?}`
 payloads and delivers them via Amazon SES SMTP. No templates, no template registry —
 callers are responsible for rendering their own content.
 
@@ -66,7 +66,7 @@ Clean layered architecture:
 
 ```
 cmd/email-service/                  → entry point, wiring, config
-internal/domain/                    → interfaces (Sender, TrackingStore, AddressPolicy, NullTrackingStore)
+internal/domain/                    → interfaces (Sender, TrackingStore, AddressPolicy, NullTrackingStore), group handle issue/validate (NewGroupHandle, IsGroupHandle)
 internal/service/                   → NATS message handlers (SendEmail, GetEmailStatus, GetEmailEngagementAnalytics, EngagementEvent)
 internal/service/mocks/             → test doubles (mocks.TrackingStore satisfies domain.TrackingStore)
 internal/infrastructure/kv/         → KV adapter (kv.Store implements domain.TrackingStore; owns JSON marshaling, CAS retry, group fan-out)
@@ -76,7 +76,7 @@ internal/infrastructure/nats/       → NATS tracing helpers (ExtractAndStartCon
 internal/infrastructure/observability/ → OpenTelemetry SDK setup (traces, metrics, logs via autoexport)
 internal/logging/                   → structured log helpers (AppendCtx, ErrKey, InitStructuredLogConfig)
 pkg/api/                            → PUBLIC: NATS subjects, KV bucket names, wire types (callers import this)
-pkg/redaction/                      → email address redaction for logs
+pkg/redaction/                      → email address and group handle redaction for logs
 ```
 
 ### Key design decisions
@@ -94,12 +94,13 @@ pkg/redaction/                      → email address redaction for logs
 - **Queue group for horizontal scaling.** The subscription uses queue group
   `lfx.email-service.queue` so each message is delivered to exactly one pod.
 - **All four subjects are always subscribed.** Status and analytics handlers are subscribed unconditionally at startup. When NATS KV is unavailable, `NullTrackingStore` is wired in and all reads return `ErrNotFound`, which the handlers map to a `"not found"` error reply. Never skip a subscription based on KV availability — callers must not hang on `RequestWithContext`.
+- **The group handle is the access credential for tracking data.** `group_id` is never caller-chosen: `SMTPSender` issues it with `domain.NewGroupHandle` (128 bits from `crypto/rand`) when the request has none, and returns it only in the `send_email` reply. `send_email` accepts a caller-supplied `group_id` only if it is in handle format **and** `TrackingStore.GroupExists` reports an index entry (so nobody can append to a group they were not issued). `get_email_status` always requires `group_id` — single-email lookups also need it and reply `not found` unless `record.GroupID` matches (constant-time compare) — because `email_id` is not secret. Group lookups (`kv.Store.GetGroupRecords`) likewise drop any indexed record whose `GroupID` does not match the requested handle. The handle must never be disclosed elsewhere: `X-LFX-TRACKING-ID` carries only `<email_id>`, and push events leave `GroupID` empty (deprecated field). Do not reintroduce caller-chosen group labels as lookup keys, and do not add the handle to headers or push payloads. `NullTrackingStore.GroupExists` returns `true` (nothing is stored or readable without KV) and its `AppendToGroup` returns `domain.ErrTrackingUnavailable`. Log group handles only through `redaction.RedactGroupHandle`. `writeTrackingRecords` appends to `email-group-index` before writing the recipient record; if a newly issued group cannot be recorded (KV error or no KV), `send_email` returns an empty `group_id` and writes no record, rather than handing out a handle later calls would reject.
 - **Handle always responds.** The NATS handler calls `msg.Respond` on every path
   (success → JSON `SendEmailResponse`, failure → JSON `SendEmailErrorResponse`) so
   callers' `RequestWithContext` never hangs.
 - **30-second SMTP bounded wait.** `SMTPSender.Send` runs `smtp.SendMail` in a goroutine and waits up to 30 seconds (`smtpTimeout` constant in `internal/infrastructure/smtp/sender.go`). If the deadline fires, `Send` returns an error to the caller; the underlying network connection may continue briefly in the background goroutine until the OS-level TCP timeout fires.
   Do not add outer retries that ignore this timeout — they will compound rather than bound latency.
-- **KV key validation before any KV call.** `email_id` (always service-generated) is validated as a UUID (`isValidUUID` in `internal/service/validate.go`) before any KV lookup; a non-UUID value is rejected with `"invalid email_id"` or silently dropped (engagement handler) without touching the NATS connection. `group_id` (caller-supplied) is validated as a KV-safe string (`isValidGroupID`): max 256 bytes, charset `[-/_=.a-zA-Z0-9]`, no leading/trailing/consecutive dots. Consecutive dots (e.g. `a..b`) are rejected here even though nats.go's `keyValid` accepts them, because the resulting NATS subject contains an empty token that nats-server will not route. Any handler that accepts a caller-controlled `email_id` or `group_id` must reuse these validators before passing the value to the KV store. `email_id`s read back from the `email-group-index` bucket are stored data, not trusted input: `kv.Store.GetGroupRecords` re-validates each entry as a UUID and skips (logging count and max length only, never the raw value) any that fail, without a KV call. As defence in depth, `kv.Store` also rejects any key that is empty, over 256 bytes, outside `[-/_=.a-zA-Z0-9]`, starts/ends with `.`, or contains `..` with `kv.ErrInvalidKey` before touching a bucket, and `AppendToGroup` only accepts UUID `email_id`s.
+- **KV key validation before any KV call.** `email_id` (always service-generated) is validated as a UUID (`isValidUUID` in `internal/service/validate.go`) before any KV lookup; a non-UUID value is rejected with `"invalid email_id"` or silently dropped (engagement handler) without touching the NATS connection. `group_id` is validated as a service-issued group handle (`isValidGroupID` → `domain.IsGroupHandle`: `grp_` + 32 lowercase hex chars), which is always a valid KV key. Any handler that accepts a caller-controlled `email_id` or `group_id` must reuse these validators before passing the value to the KV store. `email_id`s read back from the `email-group-index` bucket are stored data, not trusted input: `kv.Store.GetGroupRecords` re-validates each entry as a UUID and skips (logging count and max length only, never the raw value) any that fail, without a KV call. As defence in depth, `kv.Store` also rejects any key that is empty, over 256 bytes, outside `[-/_=.a-zA-Z0-9]`, starts/ends with `.`, or contains `..` with `kv.ErrInvalidKey` before touching a bucket, and `AppendToGroup` only accepts UUID `email_id`s.
 
 ## Development Workflow
 
@@ -263,7 +264,7 @@ nats req lfx.email-service.send_email \
 |---|---|---|
 | `api.SendEmailSubject` | `lfx.email-service.send_email` | request/reply; reply is JSON `SendEmailResponse` |
 | `api.QueueGroup` | `lfx.email-service.queue` | queue group for all subscriptions |
-| `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | request/reply; payload `GetEmailStatusRequest` → `EmailRecipientRecord` for `email_id`, `[]EmailRecipientRecord` for `group_id` |
+| `api.GetEmailStatusSubject` | `lfx.email-service.get_email_status` | request/reply; payload `GetEmailStatusRequest` (`group_id` required) → `EmailRecipientRecord` for `group_id` + `email_id`, `[]EmailRecipientRecord` for `group_id` alone |
 | `api.GetEmailEngagementAnalyticsSubject` | `lfx.email-service.get_email_engagement_analytics` | request/reply; payload `GetEmailEngagementAnalyticsRequest` → `GetEmailEngagementAnalyticsResponse` |
 
 **Push (publish-only, service-initiated, best-effort):**
@@ -288,10 +289,10 @@ All constants are in `pkg/api/nats.go`.
 | Constant | Bucket | Key | Value |
 |---|---|---|---|
 | `api.EmailRecipientsKVBucket` | `email-recipients` | `<email_id>` (UUID per send) | JSON `EmailRecipientRecord` |
-| `api.EmailGroupIndexKVBucket` | `email-group-index` | `<group_id>` (caller-supplied KV-safe ID or service-generated UUID) | JSON `[]string` of `email_id`s |
+| `api.EmailGroupIndexKVBucket` | `email-group-index` | `<group_id>` (service-issued group handle, `grp_` + 32 hex) | JSON `[]string` of `email_id`s |
 
 The `email_id` and `group_id` are returned to callers in `SendEmailResponse`.
-The `group_id` is optional in `SendEmailRequest` — if not provided the email service generates one.
+The `group_id` is optional in `SendEmailRequest` — if not provided the email service issues a new group handle; if provided it must be a handle previously issued by the service.
 
 ## SES Engagement Event Processing
 
@@ -300,7 +301,7 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
 **Event flow:**
 1. SQS message body is a JSON SNS envelope: `{"MessageId": "<sns-id>", "Message": "<ses-event-json>"}`.
 2. The inner SES event JSON contains `eventType` and `mail.headers`.
-3. The handler reads the `X-LFX-TRACKING-ID` header (format: `<group_id>/<email_id>`), splits on the last `/` to extract `email_id`. If the extracted `email_id` is not a valid UUID (`isValidUUID`), the message is dropped without any KV access (non-retryable skip). Otherwise it is normalized to lowercase and used to look up the `EmailRecipientRecord` in the `email-recipients` KV bucket.
+3. The handler reads the `X-LFX-TRACKING-ID` header (format: `<email_id>`; mail sent by earlier versions used `<group_id>/<email_id>`), splits on the last `/` to extract `email_id`. If the extracted `email_id` is not a valid UUID (`isValidUUID`), the message is dropped without any KV access (non-retryable skip). Otherwise it is normalized to lowercase and used to look up the `EmailRecipientRecord` in the `email-recipients` KV bucket.
 
 **Handled event types** (all others are silently dropped):
 
@@ -359,7 +360,8 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
 - **`mockSender`** in `internal/service/send_email_handler_test.go` — satisfies `domain.Sender`.
 - **`mocks.TrackingStore`** in `internal/service/mocks/tracking.go` — a thread-safe
   in-memory mock that satisfies `domain.TrackingStore`. Construct with
-  `mocks.NewTrackingStore()` and pre-seed records with `PutRecord` / `PutGroup`.
+  `mocks.NewTrackingStore()` and pre-seed records with `PutRecord` / `PutGroup`
+  (`PutGroup` is also what makes `GroupExists` report an issued group).
   `WriteErr`, `AppendErr`, `GetErrFor`, and `GroupErrFor` inject errors for specific
   conditions. Use this for all handler tests that touch KV tracking — do not write a
   new tracking mock.

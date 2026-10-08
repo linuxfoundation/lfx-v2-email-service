@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 )
 
 func TestIsValidUUID(t *testing.T) {
@@ -49,24 +51,20 @@ func TestIsValidGroupID(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{"uuid format", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", true},
-		{"slug style", "invite-batch-abc123", true},
-		{"alphanumeric only", "campaign2026", true},
-		{"dots and underscores", "lf.email_campaign", true},
-		{"slashes allowed", "org/campaign/001", true},
-		{"equals sign", "v=1.2.3", true},
-		{"exactly 256 chars", strings.Repeat("a", 256), true},
+		{"service-issued handle", "grp_0123456789abcdef0123456789abcdef", true},
+		{"freshly issued handle", domain.NewGroupHandle(), true},
 		{"empty string", "", false},
-		{"257 chars — over limit", strings.Repeat("a", 257), false},
-		{"100 KiB — far over limit", strings.Repeat("a", 100_000), false},
-		{"space — invalid char", "has space", false},
-		{"tab — invalid char", "has\ttab", false},
-		{"newline — invalid char", "has\nnewline", false},
-		{"at-sign — invalid char", "user@domain", false},
-		{"caret — invalid char", "bad^char", false},
-		{"leading dot — nats keyValid rejects", ".campaign", false},
-		{"trailing dot — nats keyValid rejects", "campaign.", false},
-		{"consecutive dots — empty NATS subject token", "a..b", false},
+		{"uuid format — legacy service-generated group_id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", false},
+		{"slug style — legacy caller-chosen label", "invite-batch-abc123", false},
+		{"uppercase hex", "grp_0123456789ABCDEF0123456789ABCDEF", false},
+		{"too short", "grp_0123456789abcdef0123456789abcde", false},
+		{"too long", "grp_0123456789abcdef0123456789abcdef0", false},
+		{"missing prefix", "0123456789abcdef0123456789abcdef", false},
+		{"wrong prefix", "grq_0123456789abcdef0123456789abcdef", false},
+		{"non-hex char", "grp_0123456789abcdef0123456789abcdeg", false},
+		{"trailing newline", "grp_0123456789abcdef0123456789abcdef\n", false},
+		{"slash suffix", "grp_0123456789abcdef0123456789abcdef/x", false},
+		{"100 KiB oversized value", strings.Repeat("a", 100_000), false},
 	}
 
 	for _, tc := range tests {

@@ -21,7 +21,7 @@ func TestGetEmailEngagementAnalyticsHandler_HandleData(t *testing.T) {
 	t.Parallel()
 
 	const (
-		analyticsGroupUUID  = "11111111-1111-1111-1111-111111111111"
+		analyticsGroupUUID  = "grp_11111111111111111111111111111111"
 		analyticsEmailUUID1 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 		analyticsEmailUUID2 = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 	)
@@ -56,6 +56,14 @@ func TestGetEmailEngagementAnalyticsHandler_HandleData(t *testing.T) {
 		{
 			name:       "group_id 100 KiB oversized value",
 			payload:    api.GetEmailEngagementAnalyticsRequest{GroupID: strings.Repeat("a", 100_000)},
+			wantErrMsg: "invalid group_id",
+		},
+		{
+			name:    "group_id caller-chosen legacy label — refused even though group exists",
+			payload: api.GetEmailEngagementAnalyticsRequest{GroupID: "invite-batch-abc123"},
+			setup: func(store *mocks.TrackingStore) {
+				store.PutGroup("invite-batch-abc123", []string{analyticsEmailUUID1})
+			},
 			wantErrMsg: "invalid group_id",
 		},
 		{

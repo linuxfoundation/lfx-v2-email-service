@@ -12,7 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
+	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
 const smtpTimeout = 30 * time.Second
@@ -42,7 +44,9 @@ const defaultFromDisplayName = "LFX Self Serve"
 
 // Send renders and delivers an email via SMTP.
 // A 30-second deadline is applied to the blocking SMTP call.
-// Returns the emailID (per-send UUID) and groupID (campaign UUID) assigned to this message.
+// Returns the emailID (per-send UUID) and groupID (group handle) assigned to this message.
+// req.GroupID, when set, has already been verified upstream as a service-issued
+// handle; when empty a new handle is issued with domain.NewGroupHandle.
 //
 // req.From overrides the service-level DEFAULT_SMTP_FROM default. req.FromDisplayName overrides
 // the display name shown in the From header (defaults to DEFAULT_SMTP_FROM_DISPLAY_NAME, itself
@@ -52,10 +56,13 @@ func (s *SMTPSender) Send(ctx context.Context, req api.SendEmailRequest) (emailI
 	emailID = uuid.NewString()
 	groupID = req.GroupID
 	if groupID == "" {
-		groupID = uuid.NewString()
+		groupID = domain.NewGroupHandle()
 	}
 
-	trackingID := groupID + "/" + emailID
+	// The tracking header carries only the email_id. The group handle is the
+	// credential for reading a group's tracking records, so it must not be
+	// disclosed to recipients or in SES event payloads.
+	trackingID := emailID
 
 	// Resolve effective FROM values: per-message values take priority over service defaults.
 	fromAddr := req.From
@@ -78,6 +85,6 @@ func (s *SMTPSender) Send(ctx context.Context, req api.SendEmailRequest) (emailI
 		return "", "", fmt.Errorf("smtp send: %w", err)
 	}
 
-	slog.DebugContext(ctx, "email sent", "email_id", emailID, "group_id", groupID)
+	slog.DebugContext(ctx, "email sent", "email_id", emailID, "group_id", redaction.RedactGroupHandle(groupID))
 	return emailID, groupID, nil
 }

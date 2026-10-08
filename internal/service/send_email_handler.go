@@ -115,6 +115,24 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		}
 	}
 
+	// A caller-supplied group_id must name a group this service issued (returned
+	// in an earlier SendEmailResponse) and recorded. Checking the format alone
+	// would let a caller pick its own handle value; checking existence means only
+	// a holder of an issued handle can append further sends to that group.
+	if req.GroupID != "" {
+		exists, err := h.store.GroupExists(ctx, req.GroupID)
+		if err != nil {
+			slog.ErrorContext(ctx, "failed to check group index", logging.ErrKey, err)
+			replyError(ctx, respond, "internal error")
+			return
+		}
+		if !exists {
+			slog.WarnContext(ctx, "send email request group_id was not issued by this service")
+			replyError(ctx, respond, "invalid group_id")
+			return
+		}
+	}
+
 	ctx = logging.AppendCtx(ctx, slog.String("recipient", redaction.RedactEmail(req.To)))
 	ctx = logging.AppendCtx(ctx, slog.String("subject", req.Subject))
 
@@ -125,8 +143,10 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		return
 	}
 
-	if emailID != "" {
-		h.writeTrackingRecords(ctx, emailID, groupID, req)
+	if emailID != "" && !h.writeTrackingRecords(ctx, emailID, groupID, req.GroupID == "", req) {
+		// The newly issued group was never recorded, so its handle would be
+		// rejected by later sends and lookups. Do not hand out an unusable handle.
+		groupID = ""
 	}
 
 	resp, _ := json.Marshal(api.SendEmailResponse{EmailID: emailID, GroupID: groupID})
@@ -135,7 +155,24 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	}
 }
 
-func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, groupID string, req api.SendEmailRequest) {
+// writeTrackingRecords appends the email to the group index and stores the
+// recipient record. Both writes are best-effort. The group index is written
+// first: for a newly issued group it is what records the handle, and if it
+// fails the handle is not returned, so no record is written that only that
+// handle could reach. It reports false only when a new group was not recorded.
+func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, groupID string, newGroup bool, req api.SendEmailRequest) bool {
+	if groupID != "" {
+		if err := h.store.AppendToGroup(ctx, groupID, emailID); err != nil {
+			if errors.Is(err, domain.ErrTrackingUnavailable) {
+				slog.DebugContext(ctx, "tracking unavailable, email not added to a group")
+			} else {
+				slog.WarnContext(ctx, "failed to append email to group index", logging.ErrKey, err, "email_id", emailID, "group_id", redaction.RedactGroupHandle(groupID))
+			}
+			if newGroup {
+				return false
+			}
+		}
+	}
 	record := api.EmailRecipientRecord{
 		GroupID: groupID,
 		EmailID: emailID,
@@ -145,13 +182,8 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 	}
 	if err := h.store.WriteRecord(ctx, emailID, record); err != nil {
 		slog.WarnContext(ctx, "failed to write recipient record to store", logging.ErrKey, err, "email_id", emailID)
-		return
 	}
-	if groupID != "" {
-		if err := h.store.AppendToGroup(ctx, groupID, emailID); err != nil {
-			slog.WarnContext(ctx, "failed to append email to group index", logging.ErrKey, err, "email_id", emailID, "group_id", groupID)
-		}
-	}
+	return true
 }
 
 // domainFromAddress extracts the host part of an RFC 5322 address for logging.

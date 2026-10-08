@@ -173,7 +173,6 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 	// (i.e. the event was not a deduplicated replay); publishing is skipped for
 	// replays to avoid duplicate downstream notifications.
 	var (
-		capturedGroupID      string
 		capturedAt           time.Time
 		capturedOpenCount    int
 		capturedClickLink    string
@@ -191,7 +190,6 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 		if !eventApplied {
 			return // deduplicated or already-set; skip capture
 		}
-		capturedGroupID = record.GroupID
 		switch eventType {
 		case "OPEN":
 			capturedOpenCount = record.OpenCount
@@ -218,7 +216,7 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 	slog.DebugContext(ctx, "ses engagement event applied", "event_type", strings.ToLower(eventType))
 
 	if eventApplied && h.publisher != nil {
-		h.publishEngagementEvent(ctx, emailID, eventType, capturedGroupID, capturedAt, capturedOpenCount, capturedClickCount, capturedClickLink, capturedClickEventID)
+		h.publishEngagementEvent(ctx, emailID, eventType, capturedAt, capturedOpenCount, capturedClickCount, capturedClickLink, capturedClickEventID)
 	}
 	return nil
 }
@@ -226,9 +224,13 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 // publishEngagementEvent marshals and publishes the appropriate engagement
 // event payload for the given SES event type. Failures are logged but do not
 // propagate — publishing is best-effort.
+//
+// Events carry no group_id: push subjects are readable by any NATS subscriber,
+// and the group handle is the credential for reading a group's tracking
+// records. Consumers correlate by the email_id returned from send_email.
 func (h *EngagementEventHandler) publishEngagementEvent(
 	ctx context.Context,
-	emailID, eventType, groupID string,
+	emailID, eventType string,
 	at time.Time,
 	openCount, clickCount int,
 	clickLink, clickEventID string,
@@ -239,19 +241,19 @@ func (h *EngagementEventHandler) publishEngagementEvent(
 	switch eventType {
 	case "DELIVERY":
 		subject = api.EmailDeliveredSubject
-		payload = api.EmailDeliveredEvent{EmailID: emailID, GroupID: groupID, DeliveredAt: at}
+		payload = api.EmailDeliveredEvent{EmailID: emailID, DeliveredAt: at}
 	case "OPEN":
 		subject = api.EmailOpenedSubject
-		payload = api.EmailOpenedEvent{EmailID: emailID, GroupID: groupID, OpenCount: openCount, OpenedAt: at}
+		payload = api.EmailOpenedEvent{EmailID: emailID, OpenCount: openCount, OpenedAt: at}
 	case "CLICK":
 		subject = api.EmailLinkClickedSubject
-		payload = api.EmailLinkClickedEvent{EmailID: emailID, GroupID: groupID, EventID: clickEventID, Link: clickLink, ClickCount: clickCount, ClickedAt: at}
+		payload = api.EmailLinkClickedEvent{EmailID: emailID, EventID: clickEventID, Link: clickLink, ClickCount: clickCount, ClickedAt: at}
 	case "BOUNCE":
 		subject = api.EmailFailedSubject
-		payload = api.EmailFailedEvent{EmailID: emailID, GroupID: groupID, Reason: "bounce", FailedAt: at}
+		payload = api.EmailFailedEvent{EmailID: emailID, Reason: "bounce", FailedAt: at}
 	case "COMPLAINT":
 		subject = api.EmailFailedSubject
-		payload = api.EmailFailedEvent{EmailID: emailID, GroupID: groupID, Reason: "complaint", FailedAt: at}
+		payload = api.EmailFailedEvent{EmailID: emailID, Reason: "complaint", FailedAt: at}
 	default:
 		return
 	}
@@ -486,9 +488,10 @@ func redactLink(raw string) string {
 	return s
 }
 
-// extractEmailID finds the X-LFX-TRACKING-ID header (format: group_id/email_id)
-// and returns the email_id portion (everything after the last '/').
-// Splitting on the last '/' means a group_id that itself contains '/' is handled safely.
+// extractEmailID finds the X-LFX-TRACKING-ID header and returns the email_id.
+// The header value is the bare email_id; mail sent before the group_id was
+// removed from the header used group_id/email_id, so the value is split on the
+// last '/' to keep handling events for those messages.
 func extractEmailID(headers []sesHeader) string {
 	for _, h := range headers {
 		if strings.EqualFold(h.Name, "X-LFX-TRACKING-ID") {

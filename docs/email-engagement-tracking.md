@@ -10,10 +10,10 @@ Update it in the same PR as any change to SMTP tracking headers, SES/SQS handlin
 ## Flow
 
 1. A caller sends a pre-rendered email request to `lfx.email-service.send_email`.
-2. `SMTPSender` generates an `email_id` and resolves a `group_id`.
-3. The MIME message includes `X-LFX-TRACKING-ID: <group_id>/<email_id>`.
+2. `SMTPSender` generates an `email_id` and uses the verified caller-supplied group handle, or issues a new one (`domain.NewGroupHandle`).
+3. The MIME message includes `X-LFX-TRACKING-ID: <email_id>`. The group handle is not included because it is the credential for the group's tracking data.
 4. If configured, the MIME message also includes `X-SES-CONFIGURATION-SET`.
-5. After successful SMTP delivery, `SendEmailHandler` writes an `EmailRecipientRecord` to `email-recipients` and appends the `email_id` to `email-group-index`.
+5. After successful SMTP delivery, `SendEmailHandler` first appends the `email_id` to `email-group-index` (optimistic locking, one retry), then writes an `EmailRecipientRecord` to `email-recipients` (plain put). If a newly issued group cannot be recorded in the index, no recipient record is written and the reply carries an empty `group_id`.
 6. SES emits engagement events to SNS, SNS sends them to SQS, and the service's SQS poller consumes the queue.
 7. `EngagementEventHandler` extracts `email_id`, loads the KV record, applies the event, and writes the updated record back with optimistic locking.
 8. If the event was new (not a deduplicated replay), the handler publishes a typed push event to the appropriate NATS subject so subscribers can react in real time without polling.
@@ -22,19 +22,19 @@ Update it in the same PR as any change to SMTP tracking headers, SES/SQS handlin
 
 | Header | Source | Purpose |
 | --- | --- | --- |
-| `X-LFX-TRACKING-ID` | Always set by `SMTPSender` when sending through SMTP. | Correlates SES events back to the KV record. Format is `<group_id>/<email_id>`. |
+| `X-LFX-TRACKING-ID` | Always set by `SMTPSender` when sending through SMTP. | Correlates SES events back to the KV record. Format is `<email_id>`. Mail sent by earlier versions used `<group_id>/<email_id>`; the handler splits on the last `/` so events for that mail still resolve. |
 | `X-SES-CONFIGURATION-SET` | Set only when `SES_CONFIGURATION_SET` is non-empty. | Routes SES engagement events to the configured SES event destination. |
 
-The engagement handler extracts the email ID from the part after the last `/`, so group IDs may contain `/`.
+The engagement handler extracts the email ID from the part after the last `/`, so legacy `<group_id>/<email_id>` headers whose group ID contains `/` still resolve.
 
 ## KV Buckets
 
 | Bucket | Key | Value |
 | --- | --- | --- |
 | `email-recipients` | `<email_id>` | JSON `api.EmailRecipientRecord` |
-| `email-group-index` | `<group_id>` | JSON `[]string` of `email_id` values |
+| `email-group-index` | `<group_id>` (service-issued group handle) | JSON `[]string` of `email_id` values |
 
-Tracking is optional for basic sending. If JetStream or either bucket is missing, the service still subscribes to `send_email`, but status and analytics subjects are not registered.
+Tracking is optional for basic sending. If JetStream or either bucket is missing, the service still subscribes to every subject; `NullTrackingStore` is used, so status and analytics reply `not found` and no new group handles are issued.
 
 When `SES_EVENTING_ENABLED=true`, `email-recipients` is required. Missing AWS config, missing queue URL, or missing recipient KV is fatal at startup.
 
