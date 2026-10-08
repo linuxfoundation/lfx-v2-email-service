@@ -595,10 +595,12 @@ real-time push notification to a NATS subject (see [Event Subscriptions](#event-
    - `X-SES-CONFIGURATION-SET: <name>` — routes SES events to the configured event destination
    - `X-LFX-TRACKING-ID: <email_id>` — a stable key SES echoes back in every engagement event (the group handle is deliberately not included)
 
-2. **KV write on send**: After each successful SMTP delivery the handler writes an
-   `EmailRecipientRecord` to the `email-recipients` NATS KV bucket (key: `email_id`)
-   and appends the `email_id` to the group in the `email-group-index` bucket
-   (key: the group handle). Both writes use optimistic locking with a single retry on conflict.
+2. **KV write on send**: After each successful SMTP delivery the handler first appends
+   the `email_id` to the group in the `email-group-index` bucket (key: the group handle;
+   optimistic locking with a single retry on conflict), then writes an
+   `EmailRecipientRecord` to the `email-recipients` NATS KV bucket (key: `email_id`;
+   a plain put). If a newly issued group cannot be recorded, no recipient record is
+   written and the reply carries an empty `group_id`.
 
 3. **SES event pipeline**: SES → SNS topic → SQS queue. The email service polls
    the SQS queue in a background goroutine.
