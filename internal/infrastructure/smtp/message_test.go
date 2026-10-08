@@ -4,7 +4,11 @@
 package smtp
 
 import (
+	"context"
+	"errors"
+	"net"
 	"net/mail"
+	"net/textproto"
 	"strings"
 	"testing"
 
@@ -223,6 +227,112 @@ func TestGenerateMessageID_FallbackDomain(t *testing.T) {
 
 	id := generateMessageID("not-an-email")
 	assert.Contains(t, id, "localhost")
+}
+
+func TestSendMessage_MalformedAddressDoesNotEchoInput(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{Host: "127.0.0.1", Port: 1}
+	tests := []struct {
+		name    string
+		to      string
+		from    string
+		wantErr error
+		secret  string
+	}{
+		{"comma-separated recipients", "a@x.com, b@y.com", "noreply@example.org", errInvalidRecipientAddress, "b@y.com"},
+		{"space-separated recipients", "a@x.com b@y.com", "noreply@example.org", errInvalidRecipientAddress, "b@y.com"},
+		{"trailing text", "a@x.com trailing-secret", "noreply@example.org", errInvalidRecipientAddress, "trailing-secret"},
+		{"invalid utf-8", "\"a\xffsecret\"@x.com", "noreply@example.org", errInvalidRecipientAddress, "secret"},
+		{"malformed from", "a@x.com", "noreply@example.org, c@z.com", errInvalidFromAddress, "c@z.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := sendMessage(context.Background(), tt.to, tt.from, "msg", cfg)
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.NotContains(t, err.Error(), tt.secret)
+		})
+	}
+}
+
+func TestSendMessage_ServerReplyRedactsEnvelopeAddresses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		rejectAt string
+		reply    string
+		leaked   string
+	}{
+		{"recipient rejected", "RCPT", "554 Message rejected: Email address is not verified: <Jane.Doe@Example.com>", "jane.doe@example.com"},
+		{"sender rejected", "MAIL", "554 Message rejected: Email address is not verified: <Events@Example.org>", "events@example.org"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = ln.Close() })
+
+			// Minimal SMTP server that rejects one command with a reply echoing an envelope address.
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				tp := textproto.NewConn(conn)
+				_ = tp.PrintfLine("220 test ready")
+				for {
+					line, err := tp.ReadLine()
+					if err != nil {
+						return
+					}
+					switch cmd := strings.ToUpper(strings.SplitN(line, " ", 2)[0]); cmd {
+					case tt.rejectAt:
+						_ = tp.PrintfLine("%s", tt.reply)
+					case "EHLO", "HELO", "MAIL", "RCPT":
+						_ = tp.PrintfLine("250 ok")
+					default:
+						_ = tp.PrintfLine("221 bye")
+						return
+					}
+				}
+			}()
+
+			port := ln.Addr().(*net.TCPAddr).Port
+			err = sendMessage(context.Background(), "Jane Doe <jane.doe@example.com>", "events@example.org", "msg", Config{Host: "127.0.0.1", Port: port})
+			require.Error(t, err)
+			// textproto.Error formatting differs across Go versions (newer releases quote the text).
+			assert.Contains(t, err.Error(), "554")
+			assert.Contains(t, err.Error(), "Message rejected")
+			assert.NotContains(t, strings.ToLower(err.Error()), tt.leaked)
+		})
+	}
+}
+
+func TestRedactAddressesInError(t *testing.T) {
+	t.Parallel()
+
+	assert.NoError(t, redactAddressesInError(nil, "jane@example.com"))
+
+	orig := errors.New("421 service not available")
+	assert.Same(t, orig, redactAddressesInError(orig, "jane@example.com", "noreply@example.org"), "error without the addresses is returned unchanged")
+
+	err := redactAddressesInError(errors.New("554 Message rejected: Email address is not verified: <JANE@Example.com>"), "jane@example.com", "noreply@example.org")
+	assert.NotContains(t, strings.ToLower(err.Error()), "jane@example.com")
+	assert.Contains(t, err.Error(), "<j****@example.com>")
+
+	err = redactAddressesInError(errors.New("550 <noreply@example.org> rejected for <jane@example.com>"), "jane@example.com", "noreply@example.org")
+	assert.Equal(t, "550 <nor****@example.org> rejected for <j****@example.com>", err.Error())
+
+	// The recipient is a suffix of the sender: the sender must still be fully redacted.
+	err = redactAddressesInError(errors.New("554 <sensitivea@example.com> not verified"), "a@example.com", "sensitivea@example.com")
+	assert.Equal(t, "554 <sen****@example.com> not verified", err.Error())
+	err = redactAddressesInError(errors.New("554 <SensitiveA@example.com> and <a@example.com>"), "sensitivea@example.com", "a@example.com")
+	assert.Equal(t, "554 <sen****@example.com> and <**@example.com>", err.Error())
 }
 
 func TestGenerateBoundary_Unique(t *testing.T) {

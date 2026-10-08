@@ -45,6 +45,22 @@ var ErrInvalidKey = errors.New("invalid kv key")
 // matches the group_id bound enforced by the service layer.
 const maxKeyLen = 256
 
+// jsErrCodeMessageTooLarge is the JetStream API error code nats-server returns
+// when a published value exceeds the stream's max message size (the KV
+// bucket's maxValueSize). nats.go v1.47.0 does not export a constant for it.
+const jsErrCodeMessageTooLarge natsgo.ErrorCode = 10054
+
+// isValueTooLarge reports whether err is a deterministic rejection of a value
+// for its size: the server's max-message-size error, or the client's
+// max-payload check. Retrying such a write with the same value cannot succeed.
+func isValueTooLarge(err error) bool {
+	if errors.Is(err, natsgo.ErrMaxPayload) {
+		return true
+	}
+	var apiErr *natsgo.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode == jsErrCodeMessageTooLarge
+}
+
 // keyRe matches the NATS KV key character set accepted by nats.go keyValid.
 var keyRe = regexp.MustCompile(`^[-/_=.a-zA-Z0-9]+$`)
 
@@ -248,7 +264,9 @@ func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.Emai
 // UpdateRecord fetches the record for emailID, applies fn, and writes it back
 // using optimistic concurrency. It retries once on write conflict. If the record
 // does not exist, fn is not called and nil is returned (late-arriving SES events
-// for unknown email IDs are expected and non-retryable).
+// for unknown email IDs are expected and non-retryable). A write rejected because
+// the value exceeds the bucket's size limit is not retried and is returned
+// wrapping domain.ErrRecordTooLarge.
 func (s *Store) UpdateRecord(ctx context.Context, emailID string, fn func(*api.EmailRecipientRecord)) error {
 	if err := checkKey(emailID); err != nil {
 		return err
@@ -278,6 +296,9 @@ func (s *Store) UpdateRecord(ctx context.Context, emailID string, fn func(*api.E
 		_, lastUpdateErr = s.recipientsKV.Update(emailID, updated, entry.Revision())
 		if lastUpdateErr == nil {
 			return nil
+		}
+		if isValueTooLarge(lastUpdateErr) {
+			return fmt.Errorf("kv update recipient record (%d bytes): %w: %w", len(updated), domain.ErrRecordTooLarge, lastUpdateErr)
 		}
 		if attempt == 0 {
 			slog.DebugContext(ctx, "recipient record write conflict, retrying", "email_id", emailID)

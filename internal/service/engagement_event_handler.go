@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -23,8 +24,22 @@ import (
 // to JSON. The email-recipients bucket has maxValueSize 65 536 bytes; we leave
 // ~15 KB headroom so that other fields can grow without bumping against the
 // hard limit. ClickList is not appended to once the tentative serialised size
-// would exceed this threshold.
+// would exceed this threshold, and neither is OpenedAtList.
 const maxKVRecordBytes = 50_000
+
+// compactAboveBytes is the serialised size above which compactOpenedAtList
+// trims OpenedAtList. Records written since OPEN appends were bounded stay
+// within maxKVRecordBytes plus a few fixed-size timestamp fields, so only
+// records inflated before then exceed it. The gap above maxKVRecordBytes
+// prevents trimming churn on records near the soft ceiling.
+const compactAboveBytes = 55_000
+
+// maxOpenEvents caps OpenedAtList, which doubles as the OPEN dedup list. Each
+// entry is ~90 bytes serialised; 500 entries ≈ 45 KB. SES emits one OPEN per
+// load of the tracking pixel, so without a cap a recipient could grow the
+// record past the bucket's maxValueSize. The list is also enforced against
+// maxKVRecordBytes together with the click collections.
+const maxOpenEvents = 500
 
 // maxClickEventIDs caps the ClickEventIDs dedup list. Each entry is a 36-byte
 // UUID; 500 entries ≈ 18 KB, well within the KV size budget. Dedup tracking
@@ -186,6 +201,13 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 			capturedClickEventID = env.MessageID
 		}
 	})
+	if errors.Is(err, domain.ErrRecordTooLarge) {
+		// Deterministic for this record: redelivery would fail the same way,
+		// so acknowledge the message instead of leaving it as a poison message.
+		slog.WarnContext(ctx, "recipient record too large to update, dropping event",
+			logging.ErrKey, err, "event_type", strings.ToLower(eventType))
+		return nil
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to update recipient record", logging.ErrKey, err)
 		return fmt.Errorf("store update for email_id %s: %w", emailID, err)
@@ -257,23 +279,38 @@ func (h *EngagementEventHandler) publishEngagementEvent(
 // The returned time is the same value written to the record so callers can
 // use it directly without re-parsing the SES timestamp.
 func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessageID string, event sesEvent) (bool, time.Time) {
-	switch eventType {
-	case "OPEN":
+	// OPEN dedup runs before compaction so that trimming OpenedAtList cannot
+	// discard the MessageId of the replay being checked.
+	if eventType == "OPEN" {
 		for _, e := range record.OpenedAtList {
 			if e.EventID == snsMessageID {
 				return false, time.Time{} // already processed this SNS delivery
 			}
 		}
+	}
+	compactOpenedAtList(record)
+	switch eventType {
+	case "OPEN":
 		var ts string
 		if event.Open != nil {
 			ts = event.Open.Timestamp
 		}
 		t := parseTimestamp(ts)
 		record.Opened = true
-		record.OpenedAtList = append(record.OpenedAtList, api.OpenEvent{EventID: snsMessageID, OpenedAt: t})
-		record.OpenCount = len(record.OpenedAtList)
+		record.OpenCount++
 		if record.LastOpenedAt == nil || t.After(*record.LastOpenedAt) {
 			record.LastOpenedAt = &t
+		}
+		// Bounded dedup window, mirroring CLICK: the entry is stored only while
+		// OpenedAtList is under maxOpenEvents and the record stays within
+		// maxKVRecordBytes. Once the window is full, OpenCount and LastOpenedAt
+		// still advance, but SQS replays of later opens are not detected and
+		// re-increment OpenCount.
+		if len(record.OpenedAtList) < maxOpenEvents {
+			record.OpenedAtList = append(record.OpenedAtList, api.OpenEvent{EventID: snsMessageID, OpenedAt: t})
+			if b, err := json.Marshal(record); err != nil || len(b) > maxKVRecordBytes {
+				record.OpenedAtList = record.OpenedAtList[:len(record.OpenedAtList)-1]
+			}
 		}
 		return true, t
 	case "CLICK":
@@ -371,6 +408,33 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 		return true, t
 	}
 	return false, time.Time{}
+}
+
+// compactOpenedAtList repairs records written before OpenedAtList was bounded.
+// It applies when the list is longer than maxOpenEvents (trimmed to its newest
+// entries first) or the serialised record exceeds compactAboveBytes. The list
+// is then trimmed from the oldest end until the record fits maxKVRecordBytes,
+// so that any event can still be written to a record that was inflated
+// earlier. OpenCount is first raised to at least the stored list length so
+// trimming never loses count. It is a no-op for records within both bounds.
+func compactOpenedAtList(record *api.EmailRecipientRecord) {
+	if record.OpenCount < len(record.OpenedAtList) {
+		record.OpenCount = len(record.OpenedAtList)
+	}
+	if len(record.OpenedAtList) == 0 {
+		return
+	}
+	if len(record.OpenedAtList) > maxOpenEvents {
+		record.OpenedAtList = record.OpenedAtList[len(record.OpenedAtList)-maxOpenEvents:]
+	} else if b, err := json.Marshal(record); err != nil || len(b) <= compactAboveBytes {
+		return
+	}
+	for len(record.OpenedAtList) > 0 {
+		if b, err := json.Marshal(record); err == nil && len(b) <= maxKVRecordBytes {
+			return
+		}
+		record.OpenedAtList = record.OpenedAtList[min(len(record.OpenedAtList), maxOpenEvents/10):]
+	}
 }
 
 // parseTimestamp parses an RFC3339 timestamp string, falling back to time.Now().UTC().

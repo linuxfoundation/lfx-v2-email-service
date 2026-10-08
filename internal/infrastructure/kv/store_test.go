@@ -44,6 +44,7 @@ type fakeBucket struct {
 	mu            sync.Mutex
 	entries       map[string]*fakeEntry
 	UpdateErrOnce bool     // if true, the next Update call fails and resets to false
+	UpdateErr     error    // if non-nil, every Update call returns this error
 	calls         []string // keys passed to any bucket method, in call order
 }
 
@@ -85,6 +86,9 @@ func (b *fakeBucket) Update(key string, value []byte, last uint64) (uint64, erro
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.calls = append(b.calls, key)
+	if b.UpdateErr != nil {
+		return 0, b.UpdateErr
+	}
 	if b.UpdateErrOnce {
 		b.UpdateErrOnce = false
 		return 0, errWrongRevision
@@ -423,6 +427,49 @@ func TestStore_UpdateRecord(t *testing.T) {
 		got, err := store.GetRecord(context.Background(), "e-conflict")
 		require.NoError(t, err)
 		assert.True(t, got.Delivered)
+	})
+
+	// A value rejected for its size fails the same way on every attempt, so it
+	// must be reported as domain.ErrRecordTooLarge without a retry.
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"server max message size", &natsgo.APIError{Code: 400, ErrorCode: 10054, Description: "message size exceeds maximum allowed"}},
+		{"client max payload", natsgo.ErrMaxPayload},
+	} {
+		t.Run("value too large is not retried: "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, recipientsKV, _ := newStore(t)
+
+			r := api.EmailRecipientRecord{EmailID: "e-big", GroupID: "g1", SentAt: time.Now().UTC()}
+			require.NoError(t, store.WriteRecord(context.Background(), "e-big", r))
+			recipientsKV.UpdateErr = tc.err
+
+			err := store.UpdateRecord(context.Background(), "e-big", func(rec *api.EmailRecipientRecord) {
+				rec.Delivered = true
+			})
+			require.ErrorIs(t, err, domain.ErrRecordTooLarge)
+			// Put, then a single Get + Update: no retry.
+			assert.Len(t, recipientsKV.calledKeys(), 3)
+		})
+	}
+
+	t.Run("other update errors are retried and not classified as too large", func(t *testing.T) {
+		t.Parallel()
+		store, recipientsKV, _ := newStore(t)
+
+		r := api.EmailRecipientRecord{EmailID: "e-down", GroupID: "g1", SentAt: time.Now().UTC()}
+		require.NoError(t, store.WriteRecord(context.Background(), "e-down", r))
+		recipientsKV.UpdateErr = errors.New("nats: timeout")
+
+		err := store.UpdateRecord(context.Background(), "e-down", func(rec *api.EmailRecipientRecord) {
+			rec.Delivered = true
+		})
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, domain.ErrRecordTooLarge)
+		// Put, then two Get + Update attempts.
+		assert.Len(t, recipientsKV.calledKeys(), 5)
 	})
 }
 
