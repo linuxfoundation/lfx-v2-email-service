@@ -297,6 +297,13 @@ func main() {
 	}
 	fmt.Println("sent, email_id:", sendResp.EmailID)
 
+	// group_id is empty when tracking is unavailable or the new group could not
+	// be recorded: the email was sent, but there is nothing to query.
+	if sendResp.GroupID == "" {
+		fmt.Println("tracking unavailable for this send")
+		return
+	}
+
 	// Query the delivery/open status of the email we just sent.
 	statusReq, _ := json.Marshal(emailapi.GetEmailStatusRequest{GroupID: sendResp.GroupID, EmailID: sendResp.EmailID})
 	statusReply, err := nc.RequestWithContext(ctx, emailapi.GetEmailStatusSubject, statusReq)
