@@ -285,6 +285,11 @@ func (s *Store) ScanGroupRecords(ctx context.Context, groupID string, offset, li
 	}
 
 	totalIDs := len(emailIDs)
+	// Decoding a large index takes time too; like the final return below,
+	// this empty-window success is not reported once ctx is done.
+	if err := ctx.Err(); err != nil {
+		return totalIDs, fmt.Errorf("scan group records: %w", err)
+	}
 	if offset >= totalIDs {
 		return totalIDs, nil
 	}

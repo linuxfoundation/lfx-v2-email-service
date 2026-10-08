@@ -156,6 +156,32 @@ func (b *racingIndex) Update(key string, value []byte, last uint64) (uint64, err
 	return 0, errWrongRevision
 }
 
+// cancelOnValue is a group-index bucket whose entries cancel the scan's context
+// when their value is read, i.e. after Get has returned and while the index is
+// being decoded.
+type cancelOnValue struct {
+	*fakeBucket
+	cancel context.CancelFunc
+}
+
+type cancellingEntry struct {
+	natsgo.KeyValueEntry
+	cancel context.CancelFunc
+}
+
+func (e cancellingEntry) Value() []byte {
+	e.cancel()
+	return e.KeyValueEntry.Value()
+}
+
+func (b *cancelOnValue) Get(key string) (natsgo.KeyValueEntry, error) {
+	e, err := b.fakeBucket.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	return cancellingEntry{KeyValueEntry: e, cancel: b.cancel}, nil
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // Group-index entries must be UUIDs; ScanGroupRecords skips anything else.
@@ -630,6 +656,19 @@ func TestStore_ScanGroupRecords_Bounds(t *testing.T) {
 		})
 		require.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, 3, calls)
+	})
+
+	t.Run("a deadline expiring while the index is decoded ends an empty-window scan", func(t *testing.T) {
+		t.Parallel()
+		groupIndexKV := newFakeBucket()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store := kvinfra.New(newFakeBucket(), &cancelOnValue{fakeBucket: groupIndexKV, cancel: cancel})
+		seedFullGroup(t, groupIndexKV, "g", 3)
+
+		// The offset is past the end, so the early empty-window return is taken.
+		_, err := store.ScanGroupRecords(ctx, "g", 3, 10, func(api.EmailRecipientRecord) bool { return true })
+		require.ErrorIs(t, err, context.Canceled)
 	})
 
 	t.Run("rejects an invalid range", func(t *testing.T) {
