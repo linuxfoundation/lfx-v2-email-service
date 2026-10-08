@@ -13,6 +13,11 @@ import (
 // ErrNotFound is returned by TrackingStore when the requested key does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrRecordTooLarge is returned by TrackingStore.UpdateRecord when the updated
+// record is rejected because it exceeds the store's maximum value size. The
+// failure is deterministic for that record, so callers must not retry it.
+var ErrRecordTooLarge = errors.New("record exceeds maximum value size")
+
 // TrackingStore is the interface for reading and writing email tracking records.
 // All implementations must be safe for concurrent use.
 //
@@ -31,6 +36,7 @@ var ErrNotFound = errors.New("not found")
 // UpdateRecord fetches the record for emailID, applies fn in place, and writes it
 // back with optimistic concurrency (one retry on conflict). If the record does not
 // exist it returns nil without calling fn — expected for late-arriving SES events.
+// If the updated record is too large to store it returns ErrRecordTooLarge.
 type TrackingStore interface {
 	WriteRecord(ctx context.Context, emailID string, r api.EmailRecipientRecord) error
 	AppendToGroup(ctx context.Context, groupID, emailID string) error
