@@ -491,6 +491,19 @@ func TestStore_ScanGroupRecords_Bounds(t *testing.T) {
 		assert.False(t, called, "no record is handed out after the deadline")
 	})
 
+	t.Run("a deadline expiring during the index read ends the scan", func(t *testing.T) {
+		t.Parallel()
+		groupIndexKV := newFakeBucket()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store := kvinfra.New(newFakeBucket(), &cancelOnGet{fakeBucket: groupIndexKV, cancel: cancel})
+		seedFullGroup(t, groupIndexKV, "g", 3)
+
+		// An offset past the end would otherwise be an empty success.
+		_, err := store.ScanGroupRecords(ctx, "g", 3, 10, func(api.EmailRecipientRecord) bool { return true })
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
 	t.Run("rejects an invalid range", func(t *testing.T) {
 		t.Parallel()
 		store, _, _ := seed(t, 1)

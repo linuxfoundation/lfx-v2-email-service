@@ -247,6 +247,11 @@ func (s *Store) ScanGroupRecords(ctx context.Context, groupID string, offset, li
 		return 0, fmt.Errorf("scan group records: %w", err)
 	}
 	entry, err := s.groupIndexKV.Get(groupID)
+	// The index read itself can outlast the deadline; observe that before any
+	// outcome, including an empty window, is reported.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return 0, fmt.Errorf("scan group records: %w", ctxErr)
+	}
 	if err != nil {
 		if errors.Is(err, natsgo.ErrKeyNotFound) {
 			return 0, domain.ErrNotFound
