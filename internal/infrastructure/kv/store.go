@@ -294,6 +294,11 @@ func (s *Store) ScanGroupRecords(ctx context.Context, groupID string, offset, li
 			}()
 		}
 		wg.Wait()
+		// Re-check after the reads: a deadline that expired while this chunk
+		// (possibly the last one) was being read must still end the scan.
+		if err := ctx.Err(); err != nil {
+			return totalIDs, fmt.Errorf("scan group records: %w", err)
+		}
 
 		for i := range chunk {
 			if !valid[i] {

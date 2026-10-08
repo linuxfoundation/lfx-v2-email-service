@@ -25,8 +25,8 @@ import (
 // resolving a page of records, and analyticsReadTimeout the time one analytics
 // request may spend resolving up to api.MaxGroupEmails records. The NATS
 // subscription callbacks carry no deadline of their own, so the handlers apply
-// these. ctx is checked between chunks of reads, so a request can overrun its
-// deadline by at most one KV read.
+// these. ctx is checked before and after each chunk of reads, so a request can
+// run past its deadline by at most one KV read before replying "timeout".
 const (
 	groupReadTimeout     = 5 * time.Second
 	analyticsReadTimeout = 10 * time.Second

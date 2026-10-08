@@ -115,6 +115,18 @@ func (b *fakeBucket) Create(key string, value []byte) (uint64, error) {
 	return 1, nil
 }
 
+// cancelOnGet is a recipients bucket that cancels the scan's context on every
+// Get, simulating a deadline that expires while a chunk is being read.
+type cancelOnGet struct {
+	*fakeBucket
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnGet) Get(key string) (natsgo.KeyValueEntry, error) {
+	b.cancel()
+	return b.fakeBucket.Get(key)
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // Group-index entries must be UUIDs; ScanGroupRecords skips anything else.
@@ -455,6 +467,28 @@ func TestStore_ScanGroupRecords_Bounds(t *testing.T) {
 		_, err := store.ScanGroupRecords(ctx, "g", 0, 100, func(api.EmailRecipientRecord) bool { return true })
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		assert.Equal(t, reads, len(recipientsKV.calledKeys()), "no record is read once the deadline has passed")
+	})
+
+	t.Run("a deadline expiring during the last chunk's reads ends the scan", func(t *testing.T) {
+		t.Parallel()
+		recipientsKV := newFakeBucket()
+		groupIndexKV := newFakeBucket()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store := kvinfra.New(&cancelOnGet{fakeBucket: recipientsKV, cancel: cancel}, groupIndexKV)
+		ids := seedFullGroup(t, groupIndexKV, "g", 3) // a single chunk
+		for _, id := range ids {
+			_, err := recipientsKV.Put(id, []byte(`{"email_id":"`+id+`","group_id":"g"}`))
+			require.NoError(t, err)
+		}
+
+		called := false
+		_, err := store.ScanGroupRecords(ctx, "g", 0, 10, func(api.EmailRecipientRecord) bool {
+			called = true
+			return true
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		assert.False(t, called, "no record is handed out after the deadline")
 	})
 
 	t.Run("rejects an invalid range", func(t *testing.T) {

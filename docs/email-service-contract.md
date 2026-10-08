@@ -263,8 +263,8 @@ proportional to an arbitrarily large group:
   connection's max payload is answered with `response too large` instead of being dropped.
 - Status and analytics requests resolve recipient records 16 at a time under a per-request
   deadline (`timeout` when exceeded): 5 seconds for a status page, 10 seconds for analytics. The
-  deadline is checked between batches of reads, so a request can overrun it by at most one KV
-  read. Analytics aggregates while reading and never holds the group's records in memory.
+  deadline is checked before and after each batch of reads, so a request can run past it by at
+  most one KV read before it replies `timeout`. Analytics aggregates while reading and never holds the group's records in memory.
 - Each replica runs at most 8 status and analytics requests at once, off the NATS subscription
   goroutine, so a slow lookup does not delay other requests. Requests beyond that are answered
   immediately with `service busy`; callers should retry with backoff. On shutdown the replica
