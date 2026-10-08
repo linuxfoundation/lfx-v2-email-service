@@ -188,9 +188,9 @@ arrives.
 | `invalid group_id` | `group_id` is not a group handle issued by this service |
 | `invalid offset` / `invalid limit` | `offset` is negative, or `limit` is negative or above 1,000 |
 | `not found` | No group exists for `group_id`, or no record for `email_id` was sent under `group_id` |
-| `response too large` | The page would exceed the NATS max payload; request a smaller `limit` |
+| `response too large` | The page would exceed the NATS max payload; the whole page is refused, so request a smaller `limit` |
 | `timeout` | The lookup exceeded the 5-second per-request deadline |
-| `service busy` | The replica is at its limit of concurrent status/analytics requests; retry later |
+| `service busy` | The replica is at its limit of concurrent status/analytics requests; retry with backoff |
 
 **Examples (NATS CLI):**
 ```bash
@@ -235,8 +235,8 @@ NATS KV is configured.
 | `invalid request payload` | Request body is not valid JSON or `group_id` is missing |
 | `invalid group_id` | `group_id` is not a group handle issued by this service |
 | `not found` | No emails have been sent under the given `group_id` |
-| `timeout` | The lookup exceeded the 5-second per-request deadline |
-| `service busy` | The replica is at its limit of concurrent status/analytics requests; retry later |
+| `timeout` | The lookup exceeded the 10-second per-request deadline |
+| `service busy` | The replica is at its limit of concurrent status/analytics requests; retry with backoff |
 
 **Example (NATS CLI):**
 ```bash

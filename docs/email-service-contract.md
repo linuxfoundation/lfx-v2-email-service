@@ -134,9 +134,9 @@ Error values:
 | `invalid offset` | `offset` is negative. |
 | `invalid limit` | `limit` is negative or greater than `api.MaxGroupStatusLimit`. |
 | `not found` | No group index exists for `group_id`, or the `email_id` record does not exist or was not sent under `group_id`. |
-| `response too large` | The requested page would exceed the NATS connection's max payload. Request a smaller `limit`. |
+| `response too large` | The requested page would exceed the NATS connection's max payload. The whole page is refused; request it again with a smaller `limit`. |
 | `timeout` | Resolving the page took longer than the per-request deadline (5 seconds). |
-| `service busy` | The replica is already handling its maximum number of concurrent status and analytics requests (8). Retry later. |
+| `service busy` | The replica is already handling its maximum number of concurrent status and analytics requests (8). Retry with backoff. |
 | `internal error` | KV read, decode, or response serialization failed. |
 
 ## Engagement Analytics
@@ -168,8 +168,8 @@ Error values:
 | `group_id is required` | The request omitted `group_id`. |
 | `invalid group_id` | `group_id` is not in the group handle format issued by this service. |
 | `not found` | No group index exists for `group_id`. |
-| `timeout` | Resolving the group took longer than the per-request deadline (5 seconds). |
-| `service busy` | The replica is already handling its maximum number of concurrent status and analytics requests (8). Retry later. |
+| `timeout` | Resolving the group took longer than the per-request deadline (10 seconds). |
+| `service busy` | The replica is already handling its maximum number of concurrent status and analytics requests (8). Retry with backoff. |
 | `internal error` | Reading or decoding the group index failed. |
 
 Only failures reading or decoding the **group index** return `internal error`. Per-recipient
@@ -261,12 +261,15 @@ proportional to an arbitrarily large group:
   no recipient record is written, as for a new group that could not be recorded.
 - Group status replies are paged (`offset` / `limit`), and a page that would exceed the
   connection's max payload is answered with `response too large` instead of being dropped.
-- Status and analytics requests resolve recipient records a few at a time with a 5-second
-  deadline per request (`timeout` when exceeded). Analytics aggregates while reading and never
-  holds the whole group in memory.
+- Status and analytics requests resolve recipient records 16 at a time under a per-request
+  deadline (`timeout` when exceeded): 5 seconds for a status page, 10 seconds for analytics. The
+  deadline is checked between batches of reads, so a request can overrun it by at most one KV
+  read. Analytics aggregates while reading and never holds the group's records in memory.
 - Each replica runs at most 8 status and analytics requests at once, off the NATS subscription
   goroutine, so a slow lookup does not delay other requests. Requests beyond that are answered
-  immediately with `service busy`.
+  immediately with `service busy`; callers should retry with backoff. On shutdown the replica
+  stops taking status and analytics requests and finishes the in-flight ones before it drains
+  its NATS connection.
 
 ## Group Handles
 

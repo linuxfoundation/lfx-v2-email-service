@@ -65,7 +65,7 @@ func isValueTooLarge(err error) bool {
 // groupReadConcurrency is how many recipient records ScanGroupRecords reads
 // at once. Records are read in chunks of this size, so at most this many are
 // held in memory by a scan at any time.
-const groupReadConcurrency = 8
+const groupReadConcurrency = 16
 
 // keyRe matches the NATS KV key character set accepted by nats.go keyValid.
 var keyRe = regexp.MustCompile(`^[-/_=.a-zA-Z0-9]+$`)

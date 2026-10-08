@@ -41,6 +41,13 @@ const gracefulShutdownSeconds = 25
 // further requests are answered immediately with "service busy".
 const maxInFlightReads = 8
 
+// readDrainTimeout bounds how long shutdown waits for in-flight status and
+// analytics requests. It just exceeds the handlers' own deadlines (at most 10s
+// plus one KV read) so a draining pod stays within the default 30s
+// termination grace period in the common case. The send subscription keeps
+// working meanwhile, so the NATS drain that follows rarely has much left to do.
+const readDrainTimeout = 11 * time.Second
+
 func main() {
 	logging.InitStructuredLogConfig()
 	env := parseEnv()
@@ -104,7 +111,8 @@ func main() {
 	}
 
 	wg.Add(2) // HTTP server + NATS drain
-	if err := subscribeHandlers(ctx, nc, sender, store, addrPolicy, &wg, done); err != nil {
+	drainReads, err := subscribeHandlers(ctx, nc, sender, store, addrPolicy, &wg, done)
+	if err != nil {
 		slog.Error("failed to subscribe NATS handlers", logging.ErrKey, err)
 		cancel()
 		os.Exit(1) //nolint:gocritic // startup failure; deferred OTel flush skipped, no spans emitted yet
@@ -171,6 +179,9 @@ func main() {
 	}()
 
 	if !nc.IsClosed() && !nc.IsDraining() {
+		// Status and analytics requests run on their own goroutines, which
+		// nc.Drain does not wait for; finish them while replies can still be sent.
+		drainReads(readDrainTimeout)
 		slog.Info("draining NATS connection")
 		_ = nc.Drain()
 	}
@@ -235,7 +246,7 @@ func subscribeHandlers(
 	addrPolicy domain.AddressPolicy,
 	wg *sync.WaitGroup,
 	done chan os.Signal,
-) error {
+) (drainReads func(timeout time.Duration), err error) {
 	msgCtx, msgCancel := context.WithCancel(context.Background())
 
 	nc.SetClosedHandler(func(_ *natsgo.Conn) {
@@ -257,7 +268,7 @@ func subscribeHandlers(
 		sendHandler.Handle(spanCtx, msg)
 	}); err != nil {
 		msgCancel()
-		return fmt.Errorf("nats subscribe %s: %w", api.SendEmailSubject, err)
+		return nil, fmt.Errorf("nats subscribe %s: %w", api.SendEmailSubject, err)
 	}
 	slog.Info("subscribed to NATS subject", "subject", api.SendEmailSubject, "queue", api.QueueGroup)
 
@@ -287,24 +298,63 @@ func subscribeHandlers(
 	}
 
 	statusHandler := service.NewGetEmailStatusHandler(store).WithMaxPayload(nc.MaxPayload())
-	if _, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+	statusSub, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
 		dispatchRead(msg, api.GetEmailStatusSubject, statusHandler.Handle)
-	}); err != nil {
+	})
+	if err != nil {
 		msgCancel()
-		return fmt.Errorf("nats subscribe %s: %w", api.GetEmailStatusSubject, err)
+		return nil, fmt.Errorf("nats subscribe %s: %w", api.GetEmailStatusSubject, err)
 	}
 	slog.Info("subscribed to NATS subject", "subject", api.GetEmailStatusSubject)
 
 	analyticsHandler := service.NewGetEmailEngagementAnalyticsHandler(store)
-	if _, err := nc.QueueSubscribe(api.GetEmailEngagementAnalyticsSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+	analyticsSub, err := nc.QueueSubscribe(api.GetEmailEngagementAnalyticsSubject, api.QueueGroup, func(msg *natsgo.Msg) {
 		dispatchRead(msg, api.GetEmailEngagementAnalyticsSubject, analyticsHandler.Handle)
-	}); err != nil {
+	})
+	if err != nil {
 		msgCancel()
-		return fmt.Errorf("nats subscribe %s: %w", api.GetEmailEngagementAnalyticsSubject, err)
+		return nil, fmt.Errorf("nats subscribe %s: %w", api.GetEmailEngagementAnalyticsSubject, err)
 	}
 	slog.Info("subscribed to NATS subject", "subject", api.GetEmailEngagementAnalyticsSubject)
 
-	return nil
+	// drainReads stops delivery on the read subscriptions, waits for their
+	// callbacks to finish, then waits for every in-flight read goroutine by
+	// taking all maxInFlightReads slots. Taking the slots (rather than a
+	// WaitGroup) is safe against a late callback: it finds no free slot and
+	// replies "service busy" while the connection is still open.
+	drainReads = func(timeout time.Duration) {
+		deadline := time.After(timeout)
+		var closed []<-chan natsgo.SubStatus
+		for _, sub := range []*natsgo.Subscription{statusSub, analyticsSub} {
+			if !sub.IsValid() {
+				continue
+			}
+			closed = append(closed, sub.StatusChanged(natsgo.SubscriptionClosed))
+			if err := sub.Drain(); err != nil {
+				slog.Warn("failed to drain read subscription", "subject", sub.Subject, logging.ErrKey, err)
+			}
+		}
+		for _, ch := range closed {
+			for open := true; open; {
+				select {
+				case _, open = <-ch: // closed once the subscription is closed
+				case <-deadline:
+					slog.Warn("timed out waiting for read subscriptions to drain")
+					return
+				}
+			}
+		}
+		for range maxInFlightReads {
+			select {
+			case readSlots <- struct{}{}:
+			case <-deadline:
+				slog.Warn("timed out waiting for in-flight read requests")
+				return
+			}
+		}
+	}
+
+	return drainReads, nil
 }
 
 func setupHTTPServer(port string, nc *natsgo.Conn) *http.Server {

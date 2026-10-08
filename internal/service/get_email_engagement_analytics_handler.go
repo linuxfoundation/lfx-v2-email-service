@@ -53,11 +53,12 @@ func (h *GetEmailEngagementAnalyticsHandler) HandleData(ctx context.Context, dat
 
 	ctx = logging.AppendCtx(ctx, slog.String("group_id", redaction.RedactGroupHandle(req.GroupID)))
 
-	ctx, cancel := context.WithTimeout(ctx, groupReadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, analyticsReadTimeout)
 	defer cancel()
 
 	// Aggregate while scanning so no more than one chunk of records is held in
-	// memory; the scan resolves at most api.MaxGroupEmails entries.
+	// memory (plus the decoded index); the scan resolves at most
+	// api.MaxGroupEmails entries.
 	resp := api.GetEmailEngagementAnalyticsResponse{GroupID: req.GroupID}
 	totalIDs, err := h.store.ScanGroupRecords(ctx, req.GroupID, 0, api.MaxGroupEmails, func(record api.EmailRecipientRecord) bool {
 		if record.Delivered {
@@ -80,6 +81,9 @@ func (h *GetEmailEngagementAnalyticsHandler) HandleData(ctx context.Context, dat
 		case errors.Is(err, context.DeadlineExceeded):
 			slog.WarnContext(ctx, "group analytics lookup timed out")
 			replyError(ctx, respond, "timeout")
+		case errors.Is(err, context.Canceled):
+			slog.WarnContext(ctx, "group analytics lookup canceled")
+			replyError(ctx, respond, "internal error")
 		default:
 			slog.ErrorContext(ctx, "failed to read group records", logging.ErrKey, err)
 			replyError(ctx, respond, "internal error")

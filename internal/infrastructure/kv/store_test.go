@@ -443,7 +443,7 @@ func TestStore_ScanGroupRecords_Bounds(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 3, count)
-		assert.LessOrEqual(t, len(recipientsKV.calledKeys())-reads, 8, "only the first chunk is read")
+		assert.LessOrEqual(t, len(recipientsKV.calledKeys())-reads, 16, "only the first chunk is read")
 	})
 
 	t.Run("a done context stops the scan", func(t *testing.T) {

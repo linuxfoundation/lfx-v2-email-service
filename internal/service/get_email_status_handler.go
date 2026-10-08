@@ -21,10 +21,16 @@ import (
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
-// groupReadTimeout bounds the time one status or analytics request may spend
-// resolving a group's records. The NATS subscription callbacks carry no
-// deadline of their own, so the handlers apply this one.
-const groupReadTimeout = 5 * time.Second
+// groupReadTimeout bounds the time one group status request may spend
+// resolving a page of records, and analyticsReadTimeout the time one analytics
+// request may spend resolving up to api.MaxGroupEmails records. The NATS
+// subscription callbacks carry no deadline of their own, so the handlers apply
+// these. ctx is checked between chunks of reads, so a request can overrun its
+// deadline by at most one KV read.
+const (
+	groupReadTimeout     = 5 * time.Second
+	analyticsReadTimeout = 10 * time.Second
+)
 
 // defaultMaxPayload is the NATS server's default max_payload, used when the
 // handler is not told the connection's actual limit.
@@ -166,6 +172,10 @@ func (h *GetEmailStatusHandler) handleByGroupID(ctx context.Context, respond fun
 	case errors.Is(err, context.DeadlineExceeded):
 		slog.WarnContext(ctx, "group status lookup timed out", "offset", offset, "limit", limit)
 		replyError(ctx, respond, "timeout")
+		return
+	case errors.Is(err, context.Canceled):
+		slog.WarnContext(ctx, "group status lookup canceled")
+		replyError(ctx, respond, "internal error")
 		return
 	case err != nil:
 		slog.ErrorContext(ctx, "failed to read group records", logging.ErrKey, err)
