@@ -31,14 +31,39 @@ jobs:
         id: container_tag
         env:
           HEAD_REF: "${{ github.head_ref }}"
+          PR_NUMBER: "${{ github.event.pull_request.number }}"
         run: |
-          container_tag=$(echo "$HEAD_REF" | sed 's/[^_0-9a-zA-Z]/-/g' | cut -c -127)
-          echo tag="$container_tag" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          # PR images share the image repository with the main and release
+          # pipelines, so the tag is namespaced under pr-<number>- and can
+          # never equal a tag those pipelines own (latest, development, semver).
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Unexpected pull request number"
+            exit 1
+          fi
+          branch_tag=$(echo "${HEAD_REF//[!_0-9a-zA-Z]/-}" | cut -c -$((124 - ${#PR_NUMBER})))
+          container_tag="pr-${PR_NUMBER}-${branch_tag}"
+          if [[ ! "$container_tag" =~ ^pr-[0-9]+-[-_0-9a-zA-Z]*$ ]]; then
+            echo "::error::Computed PR container tag is outside the pr-<number>- namespace"
+            exit 1
+          fi
+          sha_tag="pr-${PR_NUMBER}-${GITHUB_SHA}"
+          if [[ ! "$sha_tag" =~ ^pr-[0-9]+-[0-9a-f]{40}$ ]]; then
+            echo "::error::Computed PR SHA tag is outside the pr-<number>- namespace"
+            exit 1
+          fi
+          {
+            echo "tag=$container_tag"
+            echo "sha_tag=$sha_tag"
+          } >> "$GITHUB_OUTPUT"
       - name: Build email-service for PR
         env:
           VERSION: ${{ steps.container_tag.outputs.tag }}
+          CONTAINER_TAG: ${{ steps.container_tag.outputs.tag }}
+          SHA_TAG: ${{ steps.container_tag.outputs.sha_tag }}
           GIT_COMMIT: ${{ github.sha }}
         run: |
+          set -euo pipefail
           BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
           export BUILD_TIME
           GIT_COMMIT=${GIT_COMMIT:0:7}
@@ -46,6 +71,6 @@ jobs:
           ko build github.com/linuxfoundation/lfx-v2-email-service/cmd/email-service \
             -B \
             --platform linux/amd64,linux/arm64 \
-            -t ${{ github.sha }} \
-            -t ${{ steps.container_tag.outputs.tag }} \
+            -t "$SHA_TAG" \
+            -t "$CONTAINER_TAG" \
             --sbom spdx

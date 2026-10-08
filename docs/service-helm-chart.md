@@ -24,6 +24,18 @@ Important templates:
 
 This service does not expose a public HTTP API through Gateway/Heimdall. Its business surface is NATS request/reply. The HTTP server only serves `/livez` and `/readyz`.
 
+## Image Tag
+
+`deployment.yaml` uses `image.tag`, falling back to `Chart.yaml` `appVersion`. The in-repo `appVersion` is pinned to a released semver (e.g. `0.2.1`), never the mutable `latest` or `development` tag, so a default install (`make helm-install`) always deploys a reviewed release. The release pipeline overrides `appVersion` with the release version when it publishes the chart. Bump the in-repo pin when a newer release should become the local default.
+
+Image tags in `ghcr.io/linuxfoundation/lfx-v2-email-service/email-service`:
+
+| Tag | Published by |
+| --- | --- |
+| `vX.Y.Z`, `X.Y.Z`, `latest` | `ko-build-tag.yaml` on a release tag push. |
+| `development`, `<commit sha>` | `ko-build-main.yaml` on a push to `main`. |
+| `pr-<number>-<branch>`, `pr-<number>-<merge sha>` | `ko-build-branch.yaml` on a same-repo pull request. The `pr-<number>-` prefix keeps unreviewed builds from overwriting release or `development` tags. |
+
 ## Runtime Values
 
 | Value | Env var | Notes |
