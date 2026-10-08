@@ -162,8 +162,9 @@ Error values:
 Only failures reading or decoding the **group index** return `internal error`. Per-recipient
 `email-recipients` reads in the analytics loop are best-effort: a missing or corrupt recipient
 record (any `KV.Get` error or unmarshal failure) is silently skipped and excluded from the
-aggregate counts. Group-index entries that are not valid UUIDs are skipped the same way, without
-any recipient KV read. `total_sent` reflects the number of `email_id`s in the group index, so the
+aggregate counts, as is any record whose `group_id` does not match the requested group.
+Group-index entries that are not valid UUIDs are skipped the same way, without any recipient
+KV read. `total_sent` reflects the number of `email_id`s in the group index, so the
 sum of `delivered` / `failed` / `unique_opened` may be less than `total_sent` when records are
 missing or unreadable.
 
@@ -242,7 +243,7 @@ Group tracking data is scoped by a service-issued group handle, not by a caller-
 - It is returned only in the `send_email` reply. If the new group could not be recorded in `email-group-index` (KV write failure, or degraded mode), the reply carries an empty `group_id` rather than a handle that later calls would reject, and no recipient record is written under it; send the next email without `group_id` to start a new group. It is not written to the `X-LFX-TRACKING-ID` mail header and is not included in push events.
 - `get_email_status` (including single-email lookups) and `get_email_engagement_analytics` require it. `send_email` accepts it only if the group index already has an entry for it, so only a holder of an issued handle can add sends to a group.
 - Degraded mode: when NATS KV is unavailable at startup the service uses `NullTrackingStore`. It has no group index, so `send_email` cannot record new groups and replies with an empty `group_id` when none was supplied. It also cannot check supplied handles, so it accepts any well-formed one. Nothing is stored in this mode and status and analytics always reply `not found`, so no tracking data can be read or altered.
-- Groups stored before handles were introduced are keyed by caller-chosen strings or UUIDs. Those values do not match the handle format, so they are rejected by all three subjects and their tracking data can no longer be read through the API. Before rolling this change out, confirm no existing `email-group-index` key already has the handle format (`nats kv ls email-group-index | grep -E '^grp_[0-9a-f]{32}$'` must print nothing): such a key would be treated as an issued handle.
+- Groups stored before handles were introduced are keyed by caller-chosen strings or UUIDs. Those values almost never match the handle format and are then rejected by all three subjects and their tracking data can no longer be read through the API. Before rolling this change out, confirm no existing `email-group-index` key already has the handle format (`nats kv ls email-group-index | grep -E '^grp_[0-9a-f]{32}$'` must print nothing): the earlier validation allowed callers to choose exactly that format, and such a key would be treated as an issued handle.
 
 ## Change Checklist
 

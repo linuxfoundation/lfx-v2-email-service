@@ -31,8 +31,11 @@ var groupHandleRe = regexp.MustCompile(`^grp_[0-9a-f]{32}$`)
 // tracking data (status, analytics, and appending further sends), so it must
 // be unguessable, must only ever be issued by this service, and must not be
 // disclosed outside the send_email reply (not in outbound mail headers, not in
-// push events). The distinct "grp_" format also keeps caller-chosen group_id
+// push events). The distinct "grp_" format keeps typical caller-chosen group_id
 // values written before handles were introduced from being accepted as handles.
+// The format alone does not prove provenance: earlier validation allowed a
+// caller to choose an exact "grp_" + 32 hex key, which is why the rollout
+// requires checking email-group-index for such keys first.
 func NewGroupHandle() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:]) // crypto/rand.Read never returns an error (Go 1.24+).

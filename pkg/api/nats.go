@@ -100,6 +100,9 @@ type SendEmailRequest struct {
 // GroupID is the service-issued group handle (format "grp_" + 32 hex chars).
 // It is the credential required by GetEmailStatusSubject and
 // GetEmailEngagementAnalyticsSubject and is returned only in this reply.
+// GroupID is empty on a successful send when a newly issued group could not be
+// recorded (tracking storage error or unavailable): the email was sent, but it
+// cannot be queried through the tracking subjects.
 type SendEmailResponse struct {
 	EmailID string `json:"email_id"`
 	GroupID string `json:"group_id"`
