@@ -1221,3 +1221,38 @@ func TestEngagementEventHandler_Open_RecordNearSoftCeilingNotCompacted(t *testin
 	assert.Len(t, record.OpenedAtList, opens, "records under the compaction threshold must not be trimmed")
 	assert.Equal(t, opens, record.OpenCount)
 }
+
+// TestEngagementEventHandler_Open_ReplayOfTrimmableEntryDeduplicated verifies
+// that an OPEN replay whose MessageId is among the oldest stored entries (the
+// ones compaction would trim) is still recognised as a duplicate, for both
+// compaction triggers.
+func TestEngagementEventHandler_Open_ReplayOfTrimmableEntryDeduplicated(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		opens       int
+		targetBytes int
+	}{
+		{"over entry cap", 720, 65_000},
+		{"over size threshold under entry cap", 450, 64_000},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := mocks.NewTrackingStore()
+			list := seedLegacyOpens(t, store, tc.opens, tc.targetBytes)
+
+			pub := &mockPublisher{}
+			h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+			require.NoError(t, h.Handle(context.Background(), makeOpenSNSMsg(t, list[0].EventID, testEmailID, testGroupID, testTimestamp)))
+
+			record, ok := store.GetStoredRecord(testEmailID)
+			require.True(t, ok)
+			assert.Equal(t, tc.opens, record.OpenCount, "a replayed OPEN must not be counted")
+			assert.Empty(t, pub.calls, "a replayed OPEN must not be published")
+		})
+	}
+}

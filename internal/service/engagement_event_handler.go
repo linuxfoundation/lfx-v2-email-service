@@ -277,14 +277,18 @@ func (h *EngagementEventHandler) publishEngagementEvent(
 // The returned time is the same value written to the record so callers can
 // use it directly without re-parsing the SES timestamp.
 func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessageID string, event sesEvent) (bool, time.Time) {
-	compactOpenedAtList(record)
-	switch eventType {
-	case "OPEN":
+	// OPEN dedup runs before compaction so that trimming OpenedAtList cannot
+	// discard the MessageId of the replay being checked.
+	if eventType == "OPEN" {
 		for _, e := range record.OpenedAtList {
 			if e.EventID == snsMessageID {
 				return false, time.Time{} // already processed this SNS delivery
 			}
 		}
+	}
+	compactOpenedAtList(record)
+	switch eventType {
+	case "OPEN":
 		var ts string
 		if event.Open != nil {
 			ts = event.Open.Timestamp
