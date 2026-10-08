@@ -119,7 +119,8 @@ func (m *TrackingStore) GetRecord(_ context.Context, emailID string) (api.EmailR
 // total number of IDs in that index.
 // Returns domain.ErrNotFound when the group itself is absent.
 // All per-record errors (absent records, injected errors via GetErrFor, etc.)
-// are silently skipped; totalIDs reflects the raw index count.
+// and records belonging to another group are silently skipped, matching
+// kv.Store; totalIDs reflects the raw index count.
 func (m *TrackingStore) GetGroupRecords(ctx context.Context, groupID string) ([]api.EmailRecipientRecord, int, error) {
 	if err, ok := m.GroupErrFor[groupID]; ok {
 		return nil, 0, err
@@ -138,7 +139,7 @@ func (m *TrackingStore) GetGroupRecords(ctx context.Context, groupID string) ([]
 	out := make([]api.EmailRecipientRecord, 0, totalIDs)
 	for _, id := range idsCopy {
 		r, err := m.GetRecord(ctx, id)
-		if err != nil {
+		if err != nil || r.GroupID != groupID {
 			continue
 		}
 		out = append(out, r)

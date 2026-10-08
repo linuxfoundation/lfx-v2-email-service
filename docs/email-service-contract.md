@@ -110,7 +110,7 @@ Reply:
 - `group_id` lookup returns a JSON array of `api.EmailRecipientRecord`.
   The array may contain **fewer** entries than the group index lists: any per-recipient
   error (missing record, unmarshal failure, or transient KV read error) is silently
-  omitted from the array rather than erroring, so the returned count can be less than
+  omitted from the array rather than erroring (as is any record whose `group_id` does not match the requested group), so the returned count can be less than
   the number of `email_id`s originally sent for the group. Index entries that are not
   valid UUIDs are also omitted, without any recipient KV read. The group-status reply
   carries no total count; callers that need the raw index count to detect partial

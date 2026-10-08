@@ -235,6 +235,26 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		assert.Equal(t, uuid2, got[1].EmailID)
 	})
 
+	t.Run("skips index entries whose record belongs to another group", func(t *testing.T) {
+		t.Parallel()
+		store, _, groupIndexKV := newStore(t)
+
+		own := api.EmailRecipientRecord{EmailID: uuid1, GroupID: "g3", To: "a@b.com", Subject: "S", SentAt: time.Now().UTC()}
+		foreign := api.EmailRecipientRecord{EmailID: uuid2, GroupID: "other", To: "x@y.com", Subject: "Secret", SentAt: time.Now().UTC()}
+		require.NoError(t, store.WriteRecord(context.Background(), uuid1, own))
+		require.NoError(t, store.WriteRecord(context.Background(), uuid2, foreign))
+
+		// Index altered to list another group's email.
+		_, err := groupIndexKV.Put("g3", []byte(`["`+uuid1+`","`+uuid2+`"]`))
+		require.NoError(t, err)
+
+		got, totalIDs, err := store.GetGroupRecords(context.Background(), "g3")
+		require.NoError(t, err)
+		assert.Equal(t, 2, totalIDs)
+		require.Len(t, got, 1)
+		assert.Equal(t, uuid1, got[0].EmailID)
+	})
+
 	t.Run("returns ErrNotFound for unknown group", func(t *testing.T) {
 		t.Parallel()
 		store, _, _ := newStore(t)

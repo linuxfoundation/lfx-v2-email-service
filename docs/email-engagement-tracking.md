@@ -34,7 +34,7 @@ The engagement handler extracts the email ID from the part after the last `/`, s
 | `email-recipients` | `<email_id>` | JSON `api.EmailRecipientRecord` |
 | `email-group-index` | `<group_id>` (service-issued group handle) | JSON `[]string` of `email_id` values |
 
-Tracking is optional for basic sending. If JetStream or either bucket is missing, the service still subscribes to `send_email`, but status and analytics subjects are not registered.
+Tracking is optional for basic sending. If JetStream or either bucket is missing, the service still subscribes to every subject; `NullTrackingStore` is used, so status and analytics reply `not found` and no new group handles are issued.
 
 When `SES_EVENTING_ENABLED=true`, `email-recipients` is required. Missing AWS config, missing queue URL, or missing recipient KV is fatal at startup.
 

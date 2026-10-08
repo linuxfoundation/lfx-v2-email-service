@@ -6,6 +6,7 @@ package kv
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -187,6 +188,7 @@ func (s *Store) GetRecord(_ context.Context, emailID string) (api.EmailRecipient
 // Returns domain.ErrNotFound when the group index key does not exist.
 // Individual recipient records that are absent or unreadable are silently
 // skipped; the returned totalIDs reflects the raw index count regardless.
+// Records whose GroupID does not match groupID are skipped.
 // Index entries that are not UUIDs are skipped without any bucket call: the
 // index value is stored data writable by any principal with publish rights on
 // the bucket subject, so its entries are re-validated before use as KV keys.
@@ -209,7 +211,7 @@ func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.Emai
 
 	totalIDs := len(emailIDs)
 	records := make([]api.EmailRecipientRecord, 0, totalIDs)
-	invalidIDs, maxInvalidLen := 0, 0
+	invalidIDs, maxInvalidLen, foreignIDs := 0, 0, 0
 	for _, emailID := range emailIDs {
 		if !emailIDRe.MatchString(emailID) {
 			invalidIDs++
@@ -222,7 +224,18 @@ func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.Emai
 				"email_id", emailID, "group_id", redaction.RedactGroupHandle(groupID), logging.ErrKey, err)
 			continue
 		}
+		// A record is returned only if it was sent under this group, mirroring the
+		// single-email check in GetEmailStatusHandler, so a stale or altered index
+		// entry cannot pull another group's record into this group's results.
+		if subtle.ConstantTimeCompare([]byte(r.GroupID), []byte(groupID)) != 1 {
+			foreignIDs++
+			continue
+		}
 		records = append(records, r)
+	}
+	if foreignIDs > 0 {
+		slog.WarnContext(ctx, "skipping group index entries whose record belongs to another group",
+			"group_id", redaction.RedactGroupHandle(groupID), "foreign_count", foreignIDs)
 	}
 	if invalidIDs > 0 {
 		// Log counts and lengths only; the raw values are untrusted.

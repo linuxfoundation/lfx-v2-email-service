@@ -183,6 +183,18 @@ func TestGetEmailStatusHandler_HandleData(t *testing.T) {
 			wantErrMsg: "not found",
 		},
 		{
+			name:    "group_id — index entry for another group's record is not returned",
+			payload: api.GetEmailStatusRequest{GroupID: statusGroupUUIDA},
+			setup: func(store *mocks.TrackingStore) {
+				seedRecipient(t, store, statusEmailUUID1, statusGroupUUIDA)
+				seedRecipient(t, store, statusEmailUUID2, statusGroupUUIDB)
+				seedGroupIndex(t, store, statusGroupUUIDA, []string{statusEmailUUID1, statusEmailUUID2})
+			},
+			wantRecords: &[]api.EmailRecipientRecord{
+				{EmailID: statusEmailUUID1, GroupID: statusGroupUUIDA, To: "user@example.com", Subject: "Hello"},
+			},
+		},
+		{
 			name:    "group_id — missing recipient records skipped",
 			payload: api.GetEmailStatusRequest{GroupID: statusGroupUUIDB},
 			setup: func(store *mocks.TrackingStore) {
