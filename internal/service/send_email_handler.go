@@ -143,7 +143,7 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		return
 	}
 
-	if emailID != "" && !h.writeTrackingRecords(ctx, emailID, groupID, req) && req.GroupID == "" {
+	if emailID != "" && !h.writeTrackingRecords(ctx, emailID, groupID, req.GroupID == "", req) {
 		// The newly issued group was never recorded, so its handle would be
 		// rejected by later sends and lookups. Do not hand out an unusable handle.
 		groupID = ""
@@ -155,10 +155,24 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	}
 }
 
-// writeTrackingRecords stores the recipient record and appends it to the group
-// index. Both writes are best-effort; it reports whether the group index now
-// holds the email (true when there is no group to update).
-func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, groupID string, req api.SendEmailRequest) bool {
+// writeTrackingRecords appends the email to the group index and stores the
+// recipient record. Both writes are best-effort. The group index is written
+// first: for a newly issued group it is what records the handle, and if it
+// fails the handle is not returned, so no record is written that only that
+// handle could reach. It reports false only when a new group was not recorded.
+func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, groupID string, newGroup bool, req api.SendEmailRequest) bool {
+	if groupID != "" {
+		if err := h.store.AppendToGroup(ctx, groupID, emailID); err != nil {
+			if errors.Is(err, domain.ErrTrackingUnavailable) {
+				slog.DebugContext(ctx, "tracking unavailable, email not added to a group")
+			} else {
+				slog.WarnContext(ctx, "failed to append email to group index", logging.ErrKey, err, "email_id", emailID, "group_id", redaction.RedactGroupHandle(groupID))
+			}
+			if newGroup {
+				return false
+			}
+		}
+	}
 	record := api.EmailRecipientRecord{
 		GroupID: groupID,
 		EmailID: emailID,
@@ -168,13 +182,6 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 	}
 	if err := h.store.WriteRecord(ctx, emailID, record); err != nil {
 		slog.WarnContext(ctx, "failed to write recipient record to store", logging.ErrKey, err, "email_id", emailID)
-		return groupID == ""
-	}
-	if groupID != "" {
-		if err := h.store.AppendToGroup(ctx, groupID, emailID); err != nil {
-			slog.WarnContext(ctx, "failed to append email to group index", logging.ErrKey, err, "email_id", emailID, "group_id", redaction.RedactGroupHandle(groupID))
-			return false
-		}
 	}
 	return true
 }

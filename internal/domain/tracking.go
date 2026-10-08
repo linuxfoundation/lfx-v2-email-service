@@ -16,6 +16,11 @@ import (
 // ErrNotFound is returned by TrackingStore when the requested key does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrTrackingUnavailable is returned by NullTrackingStore.AppendToGroup: with no
+// KV there is no group index, so a newly issued group handle cannot be recorded
+// and must not be returned to the caller.
+var ErrTrackingUnavailable = errors.New("tracking unavailable")
+
 // groupHandleRe matches a service-issued group handle: the "grp_" prefix
 // followed by 32 lowercase hex characters (128 bits from crypto/rand).
 var groupHandleRe = regexp.MustCompile(`^grp_[0-9a-f]{32}$`)
@@ -71,7 +76,8 @@ type TrackingStore interface {
 }
 
 // NullTrackingStore is a no-op TrackingStore used when the NATS KV buckets are
-// unavailable at startup. All writes succeed silently; all reads return ErrNotFound.
+// unavailable at startup. Record writes succeed silently, AppendToGroup returns
+// ErrTrackingUnavailable, and all reads return ErrNotFound.
 type NullTrackingStore struct{}
 
 func (NullTrackingStore) WriteRecord(_ context.Context, _ string, _ api.EmailRecipientRecord) error {
@@ -79,12 +85,13 @@ func (NullTrackingStore) WriteRecord(_ context.Context, _ string, _ api.EmailRec
 }
 
 func (NullTrackingStore) AppendToGroup(_ context.Context, _, _ string) error {
-	return nil
+	return ErrTrackingUnavailable
 }
 
 // GroupExists reports true: with no KV there is no group index to check, and
-// nothing is stored or readable, so accepting a well-formed handle exposes no
-// data while keeping multi-send groups working when tracking is unavailable.
+// nothing is stored or readable, so accepting a well-formed handle (issued
+// before tracking became unavailable) exposes no data while keeping sends to
+// existing groups working. Documented as the degraded-mode exception.
 func (NullTrackingStore) GroupExists(_ context.Context, _ string) (bool, error) {
 	return true, nil
 }

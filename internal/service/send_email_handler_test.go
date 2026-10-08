@@ -235,7 +235,9 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			t.Parallel()
 
 			sender := &mockSender{err: tc.senderErr, emailID: tc.emailID, groupID: tc.groupID}
-			handler := service.NewSendEmailHandler(sender, domain.NullTrackingStore{}, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
+			store := mocks.NewTrackingStore()
+			store.PutGroup(callerGroupUUID, nil) // the only handle "issued" before these sends
+			handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
 			var data []byte
 			switch v := tc.payload.(type) {
@@ -417,30 +419,68 @@ func TestSendEmailHandler_KVTracking(t *testing.T) {
 		assert.False(t, sender.called, "sender must not be called")
 	})
 
-	t.Run("new group not recorded — empty group_id returned instead of unusable handle", func(t *testing.T) {
+	t.Run("new group not recorded — empty group_id, no record only the handle could reach", func(t *testing.T) {
 		t.Parallel()
 
-		for name, setErr := range map[string]func(*mocks.TrackingStore){
-			"append fails": func(m *mocks.TrackingStore) { m.AppendErr = errors.New("kv unavailable") },
-			"record fails": func(m *mocks.TrackingStore) { m.WriteErr = errors.New("kv unavailable") },
-		} {
-			t.Run(name, func(t *testing.T) {
-				t.Parallel()
-				store := mocks.NewTrackingStore()
-				setErr(store)
-				sender := &mockSender{emailID: "email-n", groupID: kvGroupUUID1}
-				handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
+		store := mocks.NewTrackingStore()
+		store.AppendErr = errors.New("kv unavailable")
+		sender := &mockSender{emailID: "email-n", groupID: kvGroupUUID1}
+		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
 
-				data, _ := json.Marshal(api.SendEmailRequest{To: "n@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"})
-				var resp []byte
-				handler.HandleData(context.Background(), data, func(d []byte) error { resp = d; return nil })
+		data, _ := json.Marshal(api.SendEmailRequest{To: "n@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"})
+		var resp []byte
+		handler.HandleData(context.Background(), data, func(d []byte) error { resp = d; return nil })
 
-				var r api.SendEmailResponse
-				require.NoError(t, json.Unmarshal(resp, &r))
-				assert.Equal(t, "email-n", r.EmailID)
-				assert.Empty(t, r.GroupID)
-			})
-		}
+		var r api.SendEmailResponse
+		require.NoError(t, json.Unmarshal(resp, &r))
+		assert.Equal(t, "email-n", r.EmailID)
+		assert.Empty(t, r.GroupID)
+		_, ok := store.GetStoredRecord("email-n")
+		assert.False(t, ok, "no record should be stranded under an unreturned handle")
+	})
+
+	t.Run("new group recorded but record write fails — handle still returned and usable", func(t *testing.T) {
+		t.Parallel()
+
+		store := mocks.NewTrackingStore()
+		store.WriteErr = errors.New("kv unavailable")
+		sender := &mockSender{emailID: "email-w", groupID: kvGroupUUID1}
+		handler := service.NewSendEmailHandler(sender, store, domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil))
+
+		data, _ := json.Marshal(api.SendEmailRequest{To: "w@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"})
+		var resp []byte
+		handler.HandleData(context.Background(), data, func(d []byte) error { resp = d; return nil })
+
+		var r api.SendEmailResponse
+		require.NoError(t, json.Unmarshal(resp, &r))
+		assert.Equal(t, kvGroupUUID1, r.GroupID)
+		ids, ok := store.GetStoredGroup(kvGroupUUID1)
+		require.True(t, ok)
+		assert.Equal(t, []string{"email-w"}, ids)
+	})
+
+	t.Run("tracking unavailable — no new handle returned; supplied handle still sends", func(t *testing.T) {
+		t.Parallel()
+
+		policy := domain.NewAddressPolicy([]string{"lfx.linuxfoundation.org"}, []string{"linuxfoundation.org"}, nil)
+
+		sender := &mockSender{emailID: "email-d1", groupID: kvGroupUUID1}
+		handler := service.NewSendEmailHandler(sender, domain.NullTrackingStore{}, policy)
+		data, _ := json.Marshal(api.SendEmailRequest{To: "d@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi"})
+		var resp []byte
+		handler.HandleData(context.Background(), data, func(d []byte) error { resp = d; return nil })
+		var r api.SendEmailResponse
+		require.NoError(t, json.Unmarshal(resp, &r))
+		assert.Equal(t, "email-d1", r.EmailID)
+		assert.Empty(t, r.GroupID, "an unrecorded new handle must not be returned")
+
+		sender2 := &mockSender{emailID: "email-d2", groupID: kvGroupUUID2}
+		handler2 := service.NewSendEmailHandler(sender2, domain.NullTrackingStore{}, policy)
+		data, _ = json.Marshal(api.SendEmailRequest{To: "d@example.com", Subject: "Hi", HTML: "<p>Hi</p>", Text: "Hi", GroupID: kvGroupUUID2})
+		handler2.HandleData(context.Background(), data, func(d []byte) error { resp = d; return nil })
+		require.NoError(t, json.Unmarshal(resp, &r))
+		assert.True(t, sender2.called)
+		assert.Equal(t, kvGroupUUID2, r.GroupID)
 	})
 
 	t.Run("existing group append fails — issued handle still returned", func(t *testing.T) {

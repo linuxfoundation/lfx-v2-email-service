@@ -89,8 +89,10 @@ type SendEmailRequest struct {
 	// new group handle and returns it in SendEmailResponse.GroupID. To add
 	// further emails to that group, pass the returned handle back here. Any
 	// value that is not a group handle previously issued by this service is
-	// rejected with "invalid group_id". The handle is the credential for
-	// reading the group's tracking data, so callers must keep it private.
+	// rejected with "invalid group_id" (when tracking storage is unavailable,
+	// any well-formed handle is accepted, since nothing is stored or readable).
+	// The handle is the credential for reading the group's tracking data, so
+	// callers must keep it private.
 	GroupID string `json:"group_id,omitempty"`
 }
 

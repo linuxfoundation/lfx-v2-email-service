@@ -6,6 +6,8 @@ package domain_test
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/stretchr/testify/assert"
 
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
@@ -47,9 +49,12 @@ func TestIsGroupHandle(t *testing.T) {
 	}
 }
 
-func TestNullTrackingStore_GroupExists(t *testing.T) {
+func TestNullTrackingStore_GroupHandles(t *testing.T) {
 	t.Parallel()
 	ok, err := domain.NullTrackingStore{}.GroupExists(t.Context(), domain.NewGroupHandle())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, ok)
+
+	err = domain.NullTrackingStore{}.AppendToGroup(t.Context(), domain.NewGroupHandle(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	assert.ErrorIs(t, err, domain.ErrTrackingUnavailable)
 }

@@ -34,10 +34,12 @@ to NATS subjects so subscribers can react without polling.
   "text": "You've been added as a Writer on Demo Project.",
   "from": "newsletter@lfx.linuxfoundation.org",
   "from_display_name": "LFX Newsletter",
-  "reply_to": "support@lfx.linuxfoundation.org",
-  "group_id": "grp_3f0c2a9e5b7d4c1a8e6f0b2d4a6c8e0f"
+  "reply_to": "support@lfx.linuxfoundation.org"
 }
 ```
+
+To add a later email to the same group, send the same payload shape with the
+`group_id` returned by the first send, e.g. `"group_id": "grp_3f0c2a9e5b7d4c1a8e6f0b2d4a6c8e0f"`.
 
 **Success response:**
 ```json
