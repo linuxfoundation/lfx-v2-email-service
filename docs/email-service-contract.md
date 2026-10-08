@@ -79,6 +79,7 @@ Error reply: `api.SendEmailErrorResponse`
 | `invalid reply_to address` | `reply_to` is set but is not a parseable email address, contains non-ASCII characters, or its local part would require RFC 5322 quoting (only ASCII dot-atom local parts are accepted). |
 | `reply_to address domain not allowed` | `reply_to` domain is not in `SMTP_ALLOWED_REPLY_TO_DOMAINS`. |
 | `invalid group_id` | `group_id` is not a group handle issued by this service: wrong format, or no group index entry exists for it. |
+| `group is full` | The group already holds `api.MaxGroupEmails` (10,000) emails. No mail is sent; start a new group by omitting `group_id`. |
 | `internal error` | The group index could not be read to verify `group_id`. No mail is sent. |
 | `email delivery failed` | SMTP delivery failed after the service accepted the request. |
 
@@ -101,13 +102,18 @@ Request: `api.GetEmailStatusRequest`
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `group_id` | yes | Group handle returned by `send_email`. Alone, fetches all `EmailRecipientRecord` entries in the group. |
+| `group_id` | yes | Group handle returned by `send_email`. Alone, fetches one page of the group's `EmailRecipientRecord` entries. |
 | `email_id` | no | With `group_id`, fetches one `EmailRecipientRecord`. The record is returned only if it was sent under `group_id`; otherwise the reply is `not found`. |
+| `offset` | no | Group lookups only: index position of the first entry in the page. Default `0`; must not be negative. |
+| `limit` | no | Group lookups only: number of index entries in the page. Default `api.DefaultGroupStatusLimit` (500); at most `api.MaxGroupStatusLimit` (1,000). |
 
 Reply:
 
 - `group_id` + `email_id` lookup returns one `api.EmailRecipientRecord`.
-- `group_id` lookup returns a JSON array of `api.EmailRecipientRecord`.
+- `group_id` lookup returns a JSON array of `api.EmailRecipientRecord` for the group index
+  entries at positions `[offset, offset+limit)`, in index order. To read a whole group, request
+  successive pages (`offset += limit`) until `offset` reaches `total_sent` from
+  `get_email_engagement_analytics`; an `offset` at or past the end returns `[]`.
   The array may contain **fewer** entries than the group index lists: any per-recipient
   error (missing record, unmarshal failure, or transient KV read error) is silently
   omitted from the array rather than erroring (as is any record whose `group_id` does not match the requested group), so the returned count can be less than
@@ -125,7 +131,12 @@ Error values:
 | `group_id is required` | `group_id` was not set (including an `email_id`-only request). |
 | `invalid email_id` | `email_id` is not a valid UUID (8-4-4-4-12 hex, case-insensitive; normalized to lowercase before lookup). |
 | `invalid group_id` | `group_id` is not in the group handle format issued by this service. |
+| `invalid offset` | `offset` is negative. |
+| `invalid limit` | `limit` is negative or greater than `api.MaxGroupStatusLimit`. |
 | `not found` | No group index exists for `group_id`, or the `email_id` record does not exist or was not sent under `group_id`. |
+| `response too large` | The requested page would exceed the NATS connection's max payload. The whole page is refused; request it again with a smaller `limit`. |
+| `timeout` | Resolving the page took longer than the per-request deadline (5 seconds). |
+| `service busy` | The replica is already handling its maximum number of concurrent status and analytics requests (8). Retry with backoff. |
 | `internal error` | KV read, decode, or response serialization failed. |
 
 ## Engagement Analytics
@@ -157,6 +168,8 @@ Error values:
 | `group_id is required` | The request omitted `group_id`. |
 | `invalid group_id` | `group_id` is not in the group handle format issued by this service. |
 | `not found` | No group index exists for `group_id`. |
+| `timeout` | Resolving the group took longer than the per-request deadline (10 seconds). |
+| `service busy` | The replica is already handling its maximum number of concurrent status and analytics requests (8). Retry with backoff. |
 | `internal error` | Reading or decoding the group index failed. |
 
 Only failures reading or decoding the **group index** return `internal error`. Per-recipient
@@ -166,7 +179,8 @@ aggregate counts, as is any record whose `group_id` does not match the requested
 Group-index entries that are not valid UUIDs are skipped the same way, without any recipient
 KV read. `total_sent` reflects the number of `email_id`s in the group index, so the
 sum of `delivered` / `failed` / `unique_opened` may be less than `total_sent` when records are
-missing or unreadable.
+missing or unreadable. At most the first `api.MaxGroupEmails` index entries are resolved; only
+an index written before the cap existed can hold more.
 
 ## Engagement Push Events
 
@@ -235,12 +249,34 @@ Published at most once per email (BOUNCE and COMPLAINT are single-fire; subseque
 
 `email-group-index` stores a JSON `[]string` of `email_id` values, keyed by `group_id`.
 
+## Group Size and Read Bounds
+
+Group reads are bounded so that one small request cannot cause work, memory, or a reply
+proportional to an arbitrarily large group:
+
+- A group holds at most `api.MaxGroupEmails` (10,000) emails, which keeps a group index value
+  (about 39 bytes per entry) far below the bucket's 1 MiB `maxValueSize`. `send_email` to a full
+  group is rejected with `group is full` before any mail is sent. If concurrent sends fill the
+  group after that check, the email is still sent, but the reply carries an empty `group_id` and
+  no recipient record is written, as for a new group that could not be recorded.
+- Group status replies are paged (`offset` / `limit`), and a page that would exceed the
+  connection's max payload is answered with `response too large` instead of being dropped.
+- Status and analytics requests resolve recipient records 16 at a time under a per-request
+  deadline (`timeout` when exceeded): 5 seconds for a status page, 10 seconds for analytics. The
+  deadline is checked before and after each batch of reads, so a request can run past it by at
+  most one KV read before it replies `timeout`. Analytics aggregates while reading and never holds the group's records in memory.
+- Each replica runs at most 8 status and analytics requests at once, off the NATS subscription
+  goroutine, so a slow lookup does not delay other requests. Requests beyond that are answered
+  immediately with `service busy`; callers should retry with backoff. On shutdown the replica
+  stops taking status and analytics requests and finishes the in-flight ones before it drains
+  its NATS connection, all within one 25-second shutdown budget.
+
 ## Group Handles
 
 Group tracking data is scoped by a service-issued group handle, not by a caller-chosen name:
 
 - The handle is `grp_` followed by 32 lowercase hex characters (128 bits from `crypto/rand`), generated by `domain.NewGroupHandle` when `send_email` is called without `group_id`.
-- It is returned only in the `send_email` reply. If the new group could not be recorded in `email-group-index` (KV write failure, or degraded mode), the reply carries an empty `group_id` rather than a handle that later calls would reject, and no recipient record is written under it; send the next email without `group_id` to start a new group. It is not written to the `X-LFX-TRACKING-ID` mail header and is not included in push events.
+- It is returned only in the `send_email` reply. If the new group could not be recorded in `email-group-index` (KV write failure, or degraded mode), or a caller-supplied group reached `api.MaxGroupEmails` between the pre-send check and the append (see [Group Size and Read Bounds](#group-size-and-read-bounds)), the reply carries an empty `group_id` rather than a handle the email is not tracked under, and no recipient record is written; send the next email without `group_id` to start a new group. It is not written to the `X-LFX-TRACKING-ID` mail header and is not included in push events.
 - `get_email_status` (including single-email lookups) and `get_email_engagement_analytics` require it. `send_email` accepts it only if the group index already has an entry for it, so only a holder of an issued handle can add sends to a group.
 - Degraded mode: when NATS KV is unavailable at startup the service uses `NullTrackingStore`. It has no group index, so `send_email` cannot record new groups and replies with an empty `group_id` when none was supplied. It also cannot check supplied handles, so it accepts any well-formed one. Nothing is stored in this mode and status and analytics always reply `not found`, so no tracking data can be read or altered.
 - Groups stored before handles were introduced are keyed by caller-chosen strings or UUIDs. Those values almost never match the handle format and are then rejected by all three subjects and their tracking data can no longer be read through the API. Before rolling this change out, confirm no existing `email-group-index` key already has the handle format (`nats kv ls email-group-index | grep -E '^grp_[0-9a-f]{32}$'` must print nothing): the earlier validation allowed callers to choose exactly that format, and such a key would be treated as an issued handle.

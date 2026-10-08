@@ -5,6 +5,7 @@ package mocks
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
@@ -15,16 +16,17 @@ import (
 // Construct with NewTrackingStore and pre-seed records with PutRecord / PutGroup.
 // Inject errors via WriteErr, AppendErr, GetErrFor, and GroupErrFor.
 //
-// GetGroupRecords skips any per-record error (including those injected via GetErrFor),
-// matching the best-effort fan-out semantics of kv.Store.
+// ScanGroupRecords skips any per-record error (including those injected via GetErrFor),
+// matching the best-effort fan-out semantics of kv.Store. AppendToGroup and
+// GroupExists enforce api.MaxGroupEmails with domain.ErrGroupFull, like kv.Store.
 type TrackingStore struct {
 	mu          sync.RWMutex
 	records     map[string]api.EmailRecipientRecord
 	groups      map[string][]string
 	WriteErr    error            // if non-nil, WriteRecord returns this error
 	AppendErr   error            // if non-nil, AppendToGroup returns this error
-	GetErrFor   map[string]error // per-emailID error override for GetRecord / UpdateRecord / GetGroupRecords fan-out
-	GroupErrFor map[string]error // per-groupID error override for GroupExists and GetGroupRecords (before fan-out)
+	GetErrFor   map[string]error // per-emailID error override for GetRecord / UpdateRecord / ScanGroupRecords fan-out
+	GroupErrFor map[string]error // per-groupID error override for GroupExists and ScanGroupRecords (before fan-out)
 }
 
 // NewTrackingStore returns an empty TrackingStore mock.
@@ -88,6 +90,9 @@ func (m *TrackingStore) AppendToGroup(_ context.Context, groupID, emailID string
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(m.groups[groupID]) >= api.MaxGroupEmails {
+		return domain.ErrGroupFull
+	}
 	m.groups[groupID] = append(m.groups[groupID], emailID)
 	return nil
 }
@@ -98,7 +103,10 @@ func (m *TrackingStore) GroupExists(_ context.Context, groupID string) (bool, er
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	_, ok := m.groups[groupID]
+	ids, ok := m.groups[groupID]
+	if ok && len(ids) >= api.MaxGroupEmails {
+		return true, domain.ErrGroupFull
+	}
 	return ok, nil
 }
 
@@ -115,36 +123,58 @@ func (m *TrackingStore) GetRecord(_ context.Context, emailID string) (api.EmailR
 	return r, nil
 }
 
-// GetGroupRecords returns records for all email_ids in the group index and the
-// total number of IDs in that index.
+// ScanGroupRecords calls fn, in index order, for the records at index positions
+// [offset, offset+limit) (limit capped at api.MaxGroupEmails) and returns the
+// total number of IDs in the group index.
 // Returns domain.ErrNotFound when the group itself is absent.
 // All per-record errors (absent records, injected errors via GetErrFor, etc.)
 // and records belonging to another group are silently skipped, matching
-// kv.Store; totalIDs reflects the raw index count.
-func (m *TrackingStore) GetGroupRecords(ctx context.Context, groupID string) ([]api.EmailRecipientRecord, int, error) {
+// kv.Store. A done ctx stops the scan with a wrapped ctx.Err(), checked after
+// the group lookup (so an empty window still reports it), before each record,
+// and before returning success.
+func (m *TrackingStore) ScanGroupRecords(ctx context.Context, groupID string, offset, limit int, fn func(api.EmailRecipientRecord) bool) (int, error) {
 	if err, ok := m.GroupErrFor[groupID]; ok {
-		return nil, 0, err
+		return 0, err
+	}
+	if offset < 0 || limit <= 0 {
+		return 0, fmt.Errorf("invalid group scan range (offset %d, limit %d)", offset, limit)
 	}
 	m.mu.RLock()
 	ids, ok := m.groups[groupID]
 	if !ok {
 		m.mu.RUnlock()
-		return nil, 0, domain.ErrNotFound
+		return 0, domain.ErrNotFound
 	}
 	idsCopy := make([]string, len(ids))
 	copy(idsCopy, ids)
 	m.mu.RUnlock()
 
 	totalIDs := len(idsCopy)
-	out := make([]api.EmailRecipientRecord, 0, totalIDs)
-	for _, id := range idsCopy {
+	// Like kv.Store, a done ctx is reported even when the window is empty.
+	if err := ctx.Err(); err != nil {
+		return totalIDs, fmt.Errorf("scan group records: %w", err)
+	}
+	if offset >= totalIDs {
+		return totalIDs, nil
+	}
+	for _, id := range idsCopy[offset:min(totalIDs, offset+min(limit, api.MaxGroupEmails))] {
+		if err := ctx.Err(); err != nil {
+			return totalIDs, fmt.Errorf("scan group records: %w", err)
+		}
 		r, err := m.GetRecord(ctx, id)
 		if err != nil || r.GroupID != groupID {
 			continue
 		}
-		out = append(out, r)
+		if !fn(r) {
+			break
+		}
 	}
-	return out, totalIDs, nil
+	// Like kv.Store, never report success once ctx is done, including when it
+	// was cancelled during the last fn call.
+	if err := ctx.Err(); err != nil {
+		return totalIDs, fmt.Errorf("scan group records: %w", err)
+	}
+	return totalIDs, nil
 }
 
 func (m *TrackingStore) UpdateRecord(_ context.Context, emailID string, fn func(*api.EmailRecipientRecord)) error {
