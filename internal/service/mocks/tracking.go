@@ -129,8 +129,8 @@ func (m *TrackingStore) GetRecord(_ context.Context, emailID string) (api.EmailR
 // Returns domain.ErrNotFound when the group itself is absent.
 // All per-record errors (absent records, injected errors via GetErrFor, etc.)
 // and records belonging to another group are silently skipped, matching
-// kv.Store. A done ctx stops the scan with a wrapped ctx.Err(), checked before
-// each record.
+// kv.Store. A done ctx stops the scan with a wrapped ctx.Err(), checked after
+// the group lookup (so an empty window still reports it) and before each record.
 func (m *TrackingStore) ScanGroupRecords(ctx context.Context, groupID string, offset, limit int, fn func(api.EmailRecipientRecord) bool) (int, error) {
 	if err, ok := m.GroupErrFor[groupID]; ok {
 		return 0, err
@@ -149,6 +149,10 @@ func (m *TrackingStore) ScanGroupRecords(ctx context.Context, groupID string, of
 	m.mu.RUnlock()
 
 	totalIDs := len(idsCopy)
+	// Like kv.Store, a done ctx is reported even when the window is empty.
+	if err := ctx.Err(); err != nil {
+		return totalIDs, fmt.Errorf("scan group records: %w", err)
+	}
 	if offset >= totalIDs {
 		return totalIDs, nil
 	}

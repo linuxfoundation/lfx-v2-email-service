@@ -277,11 +277,12 @@ func subscribeHandlers(
 	})
 
 	sendHandler := service.NewSendEmailHandler(sender, store, addrPolicy)
-	if _, err := nc.QueueSubscribe(api.SendEmailSubject, api.QueueGroup, func(msg *natsgo.Msg) {
+	sendSub, err := nc.QueueSubscribe(api.SendEmailSubject, api.QueueGroup, func(msg *natsgo.Msg) {
 		spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.SendEmailSubject)
 		defer span.End()
 		sendHandler.Handle(spanCtx, msg)
-	}); err != nil {
+	})
+	if err != nil {
 		msgCancel()
 		return nil, fmt.Errorf("nats subscribe %s: %w", api.SendEmailSubject, err)
 	}
@@ -332,12 +333,20 @@ func subscribeHandlers(
 	}
 	slog.Info("subscribed to NATS subject", "subject", api.GetEmailEngagementAnalyticsSubject)
 
-	// drainReads stops delivery on the read subscriptions, waits for their
-	// callbacks to finish, then waits for every in-flight read goroutine by
-	// taking all maxInFlightReads slots. Taking the slots (rather than a
-	// WaitGroup) is safe against a late callback: it finds no free slot and
-	// replies "service busy" while the connection is still open.
+	// drainReads first starts draining the send subscription, so the replica
+	// stops taking new send_email work (which could outlive the shutdown
+	// deadline) while it waits; in-flight sends keep running and nc.Drain
+	// waits for them. It then stops delivery on the read subscriptions, waits
+	// for their callbacks to finish, and waits for every in-flight read
+	// goroutine by taking all maxInFlightReads slots. Taking the slots (rather
+	// than a WaitGroup) is safe against a late callback: it finds no free slot
+	// and replies "service busy" while the connection is still open.
 	drainReads = func(timeout time.Duration) {
+		if sendSub.IsValid() {
+			if err := sendSub.Drain(); err != nil {
+				slog.Warn("failed to drain send subscription", "subject", sendSub.Subject, logging.ErrKey, err)
+			}
+		}
 		deadline := time.After(timeout)
 		var closed []<-chan natsgo.SubStatus
 		for _, sub := range []*natsgo.Subscription{statusSub, analyticsSub} {

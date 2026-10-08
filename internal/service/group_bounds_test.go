@@ -135,6 +135,10 @@ func TestGroupReadHandlers_Deadline(t *testing.T) {
 	resp := call(ctx, t, service.NewGetEmailStatusHandler(store).HandleData, api.GetEmailStatusRequest{GroupID: boundsGroup})
 	assert.Equal(t, "timeout", errorOf(t, resp))
 
+	// An empty window still reports the expired deadline, as kv.Store does.
+	resp = call(ctx, t, service.NewGetEmailStatusHandler(store).HandleData, api.GetEmailStatusRequest{GroupID: boundsGroup, Offset: 10})
+	assert.Equal(t, "timeout", errorOf(t, resp))
+
 	resp = call(ctx, t, service.NewGetEmailEngagementAnalyticsHandler(store).HandleData, api.GetEmailEngagementAnalyticsRequest{GroupID: boundsGroup})
 	assert.Equal(t, "timeout", errorOf(t, resp))
 }

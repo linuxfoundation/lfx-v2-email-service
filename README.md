@@ -329,10 +329,19 @@ func main() {
 	}
 	fmt.Printf("status: delivered=%v opened=%v failed=%v\n", record.Delivered, record.Opened, record.Failed)
 
+	// Give each tracking request its own timeout: paging a full group takes up
+	// to 20 status requests, more than one shared 5s context allows. Analytics
+	// can take up to 10s on a full group.
+	request := func(subject string, payload []byte, timeout time.Duration) (*nats.Msg, error) {
+		reqCtx, reqCancel := context.WithTimeout(context.Background(), timeout)
+		defer reqCancel()
+		return nc.RequestWithContext(reqCtx, subject, payload)
+	}
+
 	// Query aggregate engagement counts for the whole group. TotalSent is also
 	// the number of index entries to page through below.
 	analyticsReq, _ := json.Marshal(emailapi.GetEmailEngagementAnalyticsRequest{GroupID: sendResp.GroupID})
-	analyticsReply, err := nc.RequestWithContext(ctx, emailapi.GetEmailEngagementAnalyticsSubject, analyticsReq)
+	analyticsReply, err := request(emailapi.GetEmailEngagementAnalyticsSubject, analyticsReq, 12*time.Second)
 	if err != nil {
 		panic(err)
 	}
@@ -361,7 +370,7 @@ func main() {
 			Offset:  offset,
 			Limit:   emailapi.DefaultGroupStatusLimit,
 		})
-		pageReply, err := nc.RequestWithContext(ctx, emailapi.GetEmailStatusSubject, pageReq)
+		pageReply, err := request(emailapi.GetEmailStatusSubject, pageReq, 7*time.Second)
 		if err != nil {
 			panic(err)
 		}
