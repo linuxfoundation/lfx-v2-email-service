@@ -416,6 +416,62 @@ func TestStore_ScanGroupRecords_Bounds(t *testing.T) {
 		assert.Equal(t, ids[10:17], got)
 	})
 
+	t.Run("spans several chunks with skipped entries, preserving order", func(t *testing.T) {
+		t.Parallel()
+		store, _, groupIndexKV := newStore(t)
+
+		// 60 index entries cross several 16-record chunks. Every 7th entry is
+		// not a UUID, every 5th has no record, and every 11th belongs to
+		// another group; the rest must come back exactly once, in index order.
+		var index, want []string
+		for i := range 60 {
+			id := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
+			switch {
+			case i%7 == 3:
+				index = append(index, fmt.Sprintf("not-a-uuid-%d", i))
+				continue
+			case i%5 == 4:
+				// no record written
+			case i%11 == 6:
+				require.NoError(t, store.WriteRecord(context.Background(), id, api.EmailRecipientRecord{EmailID: id, GroupID: "other"}))
+			default:
+				require.NoError(t, store.WriteRecord(context.Background(), id, api.EmailRecipientRecord{EmailID: id, GroupID: "g"}))
+				want = append(want, id)
+			}
+			index = append(index, id)
+		}
+		b, err := json.Marshal(index)
+		require.NoError(t, err)
+		_, err = groupIndexKV.Put("g", b)
+		require.NoError(t, err)
+
+		var got []string
+		total, err := store.ScanGroupRecords(context.Background(), "g", 0, len(index), func(r api.EmailRecipientRecord) bool {
+			got = append(got, r.EmailID)
+			return true
+		})
+		require.NoError(t, err)
+		assert.Equal(t, len(index), total)
+		assert.Equal(t, want, got)
+
+		// A window starting mid-chunk and ending mid-chunk.
+		got = nil
+		_, err = store.ScanGroupRecords(context.Background(), "g", 10, 30, func(r api.EmailRecipientRecord) bool {
+			got = append(got, r.EmailID)
+			return true
+		})
+		require.NoError(t, err)
+		var wantWindow []string
+		for _, id := range want {
+			for _, w := range index[10:40] {
+				if id == w {
+					wantWindow = append(wantWindow, id)
+				}
+			}
+		}
+		assert.Equal(t, wantWindow, got)
+	})
+
 	t.Run("offset past the end yields nothing", func(t *testing.T) {
 		t.Parallel()
 		store, _, _ := seed(t, 3)
