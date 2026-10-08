@@ -6,12 +6,24 @@ package smtp
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"mime"
 	"net/mail"
 	"net/smtp"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
+)
+
+// Sentinel errors returned by sendMessage when an address cannot be parsed.
+// They deliberately carry no input text so callers can log them safely.
+var (
+	errInvalidFromAddress      = errors.New("invalid From address")
+	errInvalidRecipientAddress = errors.New("invalid recipient address")
 )
 
 func generateBoundary() string {
@@ -117,13 +129,15 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 		auth = smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
 	}
 
+	// mail.ParseAddress errors can quote the unparsed input (e.g. a second
+	// recipient after a comma), so return sentinels instead of wrapping them.
 	fromAddr, err := mail.ParseAddress(from)
 	if err != nil {
-		return fmt.Errorf("invalid From address: %w", err)
+		return errInvalidFromAddress
 	}
 	toAddr, err := mail.ParseAddress(to)
 	if err != nil {
-		return fmt.Errorf("invalid recipient address: %w", err)
+		return errInvalidRecipientAddress
 	}
 
 	type result struct{ err error }
@@ -136,6 +150,53 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 	case <-ctx.Done():
 		return ctx.Err()
 	case r := <-ch:
-		return r.err
+		return redactAddressesInError(r.err, toAddr.Address, fromAddr.Address)
 	}
+}
+
+// redactAddressesInError replaces case-insensitive occurrences of each addr in
+// err's text with its redacted form, so SMTP server replies that echo an
+// envelope address (e.g. "554 Message rejected: ... <addr>") do not leak it
+// into logs. err is returned unchanged when it contains none of addrs. The
+// redacted error deliberately does not wrap err, so the unredacted text stays
+// unreachable.
+//
+// All addresses are matched in a single pass, longest first, so an address
+// that is a substring of another (e.g. a@x.com inside ba@x.com) cannot break
+// up the longer one before it is redacted.
+func redactAddressesInError(err error, addrs ...string) error {
+	if err == nil {
+		return err
+	}
+	byLower := make(map[string]string, len(addrs))
+	var patterns []string
+	for _, addr := range addrs {
+		if addr == "" {
+			continue
+		}
+		if _, dup := byLower[strings.ToLower(addr)]; dup {
+			continue
+		}
+		byLower[strings.ToLower(addr)] = addr
+		patterns = append(patterns, regexp.QuoteMeta(addr))
+	}
+	if len(patterns) == 0 {
+		return err
+	}
+	// Go regexp alternation is leftmost-first, so list longer addresses first.
+	sort.Slice(patterns, func(i, j int) bool { return len(patterns[i]) > len(patterns[j]) })
+	re, reErr := regexp.Compile("(?i)(?:" + strings.Join(patterns, "|") + ")")
+	if reErr != nil {
+		return errors.New("smtp server rejected message")
+	}
+	msg := err.Error()
+	if !re.MatchString(msg) {
+		return err
+	}
+	return errors.New(re.ReplaceAllStringFunc(msg, func(m string) string {
+		if addr, ok := byLower[strings.ToLower(m)]; ok {
+			return redaction.RedactEmail(addr)
+		}
+		return redaction.Redact(m)
+	}))
 }
