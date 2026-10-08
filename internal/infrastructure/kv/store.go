@@ -362,6 +362,11 @@ func (s *Store) ScanGroupRecords(ctx context.Context, groupID string, offset, li
 		slog.WarnContext(ctx, "skipping non-UUID email_ids in group index",
 			"group_id", redaction.RedactGroupHandle(groupID), "invalid_count", invalidIDs, "max_invalid_len", maxInvalidLen)
 	}
+	// A scan never reports success once ctx is done, including when the
+	// deadline expired while fn was handling the last records.
+	if err := ctx.Err(); err != nil {
+		return totalIDs, fmt.Errorf("scan group records: %w", err)
+	}
 	return totalIDs, nil
 }
 

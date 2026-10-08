@@ -143,6 +143,26 @@ func TestGroupReadHandlers_Deadline(t *testing.T) {
 	assert.Equal(t, "timeout", errorOf(t, resp))
 }
 
+// The mock must honour the same contract as kv.Store, or handler timeout tests
+// would not model production.
+func TestTrackingStoreMock_CancelDuringLastCallback(t *testing.T) {
+	t.Parallel()
+	store := mocks.NewTrackingStore()
+	seedBigGroup(t, store, 3)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	_, err := store.ScanGroupRecords(ctx, boundsGroup, 0, 10, func(api.EmailRecipientRecord) bool {
+		calls++
+		if calls == 3 {
+			cancel()
+		}
+		return true
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 3, calls)
+}
+
 func TestGetEmailEngagementAnalyticsHandler_FullGroup(t *testing.T) {
 	t.Parallel()
 	store := mocks.NewTrackingStore()

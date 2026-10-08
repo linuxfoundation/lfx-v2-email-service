@@ -130,7 +130,8 @@ func (m *TrackingStore) GetRecord(_ context.Context, emailID string) (api.EmailR
 // All per-record errors (absent records, injected errors via GetErrFor, etc.)
 // and records belonging to another group are silently skipped, matching
 // kv.Store. A done ctx stops the scan with a wrapped ctx.Err(), checked after
-// the group lookup (so an empty window still reports it) and before each record.
+// the group lookup (so an empty window still reports it), before each record,
+// and before returning success.
 func (m *TrackingStore) ScanGroupRecords(ctx context.Context, groupID string, offset, limit int, fn func(api.EmailRecipientRecord) bool) (int, error) {
 	if err, ok := m.GroupErrFor[groupID]; ok {
 		return 0, err
@@ -167,6 +168,11 @@ func (m *TrackingStore) ScanGroupRecords(ctx context.Context, groupID string, of
 		if !fn(r) {
 			break
 		}
+	}
+	// Like kv.Store, never report success once ctx is done, including when it
+	// was cancelled during the last fn call.
+	if err := ctx.Err(); err != nil {
+		return totalIDs, fmt.Errorf("scan group records: %w", err)
 	}
 	return totalIDs, nil
 }

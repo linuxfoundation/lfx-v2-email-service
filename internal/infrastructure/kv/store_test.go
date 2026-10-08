@@ -615,6 +615,23 @@ func TestStore_ScanGroupRecords_Bounds(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
+	t.Run("a deadline expiring during the last callback ends the scan", func(t *testing.T) {
+		t.Parallel()
+		store, _, _ := seed(t, 3) // a single chunk
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		calls := 0
+		_, err := store.ScanGroupRecords(ctx, "g", 0, 10, func(api.EmailRecipientRecord) bool {
+			calls++
+			if calls == 3 {
+				cancel() // the deadline passes while the last record is handled
+			}
+			return true
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, 3, calls)
+	})
+
 	t.Run("rejects an invalid range", func(t *testing.T) {
 		t.Parallel()
 		store, _, _ := seed(t, 1)
