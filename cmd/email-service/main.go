@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -32,6 +33,13 @@ import (
 )
 
 const gracefulShutdownSeconds = 25
+
+// maxInFlightReads bounds how many get_email_status and
+// get_email_engagement_analytics requests one replica handles at once. These
+// handlers run off the subscription goroutine so a slow group lookup does not
+// hold up every other request on the subject; once all slots are taken,
+// further requests are answered immediately with "service busy".
+const maxInFlightReads = 8
 
 func main() {
 	logging.InitStructuredLogConfig()
@@ -253,11 +261,34 @@ func subscribeHandlers(
 	}
 	slog.Info("subscribed to NATS subject", "subject", api.SendEmailSubject, "queue", api.QueueGroup)
 
-	statusHandler := service.NewGetEmailStatusHandler(store)
+	// Each read request runs on its own goroutine while it holds one of the
+	// maxInFlightReads slots; the handlers bound each request's own work with a
+	// deadline. The consumer span is started here, in the subscription
+	// callback, and ended by the goroutine.
+	readSlots := make(chan struct{}, maxInFlightReads)
+	busyReply, _ := json.Marshal(api.SendEmailErrorResponse{Error: "service busy"})
+	dispatchRead := func(msg *natsgo.Msg, subject string, handle func(context.Context, *natsgo.Msg)) {
+		spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, subject)
+		select {
+		case readSlots <- struct{}{}:
+		default:
+			defer span.End()
+			slog.WarnContext(spanCtx, "read request rejected, all read slots busy", "subject", subject)
+			if err := msg.Respond(busyReply); err != nil {
+				slog.WarnContext(spanCtx, "failed to respond with busy error to NATS request", logging.ErrKey, err)
+			}
+			return
+		}
+		go func() {
+			defer func() { <-readSlots }()
+			defer span.End()
+			handle(spanCtx, msg)
+		}()
+	}
+
+	statusHandler := service.NewGetEmailStatusHandler(store).WithMaxPayload(nc.MaxPayload())
 	if _, err := nc.QueueSubscribe(api.GetEmailStatusSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-		spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailStatusSubject)
-		defer span.End()
-		statusHandler.Handle(spanCtx, msg)
+		dispatchRead(msg, api.GetEmailStatusSubject, statusHandler.Handle)
 	}); err != nil {
 		msgCancel()
 		return fmt.Errorf("nats subscribe %s: %w", api.GetEmailStatusSubject, err)
@@ -266,9 +297,7 @@ func subscribeHandlers(
 
 	analyticsHandler := service.NewGetEmailEngagementAnalyticsHandler(store)
 	if _, err := nc.QueueSubscribe(api.GetEmailEngagementAnalyticsSubject, api.QueueGroup, func(msg *natsgo.Msg) {
-		spanCtx, span := natstracing.ExtractAndStartConsumerSpan(msgCtx, msg, api.GetEmailEngagementAnalyticsSubject)
-		defer span.End()
-		analyticsHandler.Handle(spanCtx, msg)
+		dispatchRead(msg, api.GetEmailEngagementAnalyticsSubject, analyticsHandler.Handle)
 	}); err != nil {
 		msgCancel()
 		return fmt.Errorf("nats subscribe %s: %w", api.GetEmailEngagementAnalyticsSubject, err)

@@ -60,6 +60,22 @@ const (
 	EmailLinkClickedSubject = "lfx.email-service.email_link_clicked"
 )
 
+const (
+	// MaxGroupEmails is the maximum number of emails one group can hold.
+	// send_email rejects a send to a group that is already full with
+	// "group is full", so a group index stays far below the bucket's value size
+	// limit and the work done by a single status or analytics request is bounded.
+	MaxGroupEmails = 10000
+
+	// DefaultGroupStatusLimit is the page size used by a group get_email_status
+	// request that does not set Limit.
+	DefaultGroupStatusLimit = 500
+
+	// MaxGroupStatusLimit is the largest Limit a group get_email_status request
+	// may set.
+	MaxGroupStatusLimit = 1000
+)
+
 // SendEmailRequest is the JSON payload published to SendEmailSubject.
 // Callers render the HTML and plain-text bodies before publishing.
 //
@@ -162,10 +178,18 @@ type EmailRecipientRecord struct {
 // GroupID is required and must be the group handle returned by send_email.
 // When EmailID is also set the reply is the single EmailRecipientRecord for
 // that email, provided it was sent under GroupID ("not found" otherwise).
-// When only GroupID is set the reply is a JSON array of EmailRecipientRecord values.
+// When only GroupID is set the reply is a JSON array of EmailRecipientRecord values
+// for one page of the group: the group index entries at positions
+// [Offset, Offset+Limit). Limit defaults to DefaultGroupStatusLimit and may not
+// exceed MaxGroupStatusLimit. To read a whole group, request successive pages
+// until Offset reaches the group's total_sent (from
+// GetEmailEngagementAnalyticsSubject). Offset and Limit are ignored when
+// EmailID is set.
 type GetEmailStatusRequest struct {
 	EmailID string `json:"email_id,omitempty"`
 	GroupID string `json:"group_id,omitempty"`
+	Offset  int    `json:"offset,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
 }
 
 // GetEmailEngagementAnalyticsRequest is the payload for GetEmailEngagementAnalyticsSubject.

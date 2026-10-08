@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 
 	natsgo "github.com/nats-io/nats.go"
 
@@ -60,6 +61,11 @@ func isValueTooLarge(err error) bool {
 	var apiErr *natsgo.APIError
 	return errors.As(err, &apiErr) && apiErr.ErrorCode == jsErrCodeMessageTooLarge
 }
+
+// groupReadConcurrency is how many recipient records ScanGroupRecords reads
+// at once. Records are read in chunks of this size, so at most this many are
+// held in memory by a scan at any time.
+const groupReadConcurrency = 8
 
 // keyRe matches the NATS KV key character set accepted by nats.go keyValid.
 var keyRe = regexp.MustCompile(`^[-/_=.a-zA-Z0-9]+$`)
@@ -115,7 +121,10 @@ func (s *Store) WriteRecord(_ context.Context, emailID string, r api.EmailRecipi
 // AppendToGroup appends emailID to the group's index entry using optimistic
 // concurrency. It retries once on write conflict. If the group entry does not
 // yet exist it is created. A failed read on an existing key aborts without
-// writing so a transient Get error does not clobber the existing index.
+// writing so a transient Get error does not clobber the existing index. A group
+// that already holds api.MaxGroupEmails entries is not written and
+// domain.ErrGroupFull is returned, so the index value stays far below the
+// bucket's maxValueSize.
 func (s *Store) AppendToGroup(ctx context.Context, groupID, emailID string) error {
 	if err := checkKey(groupID); err != nil {
 		return err
@@ -143,6 +152,9 @@ func (s *Store) AppendToGroup(ctx context.Context, groupID, emailID string) erro
 			return fmt.Errorf("kv get group index: %w", err)
 		}
 
+		if len(ids) >= api.MaxGroupEmails {
+			return fmt.Errorf("append to group index (%d entries): %w", len(ids), domain.ErrGroupFull)
+		}
 		ids = append(ids, emailID)
 		b, _ := json.Marshal(ids)
 
@@ -165,16 +177,24 @@ func (s *Store) AppendToGroup(ctx context.Context, groupID, emailID string) erro
 	return fmt.Errorf("kv update group index after retry: %w", writeErr)
 }
 
-// GroupExists reports whether the group index holds an entry for groupID.
+// GroupExists reports whether the group index holds an entry for groupID. It
+// returns (true, domain.ErrGroupFull) when the entry already lists
+// api.MaxGroupEmails email IDs. An index value that cannot be decoded is
+// reported as existing and not full; AppendToGroup resets it on the next write.
 func (s *Store) GroupExists(_ context.Context, groupID string) (bool, error) {
 	if err := checkKey(groupID); err != nil {
 		return false, err
 	}
-	if _, err := s.groupIndexKV.Get(groupID); err != nil {
+	entry, err := s.groupIndexKV.Get(groupID)
+	if err != nil {
 		if errors.Is(err, natsgo.ErrKeyNotFound) {
 			return false, nil
 		}
 		return false, fmt.Errorf("kv get group index: %w", err)
+	}
+	var ids []string
+	if json.Unmarshal(entry.Value(), &ids) == nil && len(ids) >= api.MaxGroupEmails {
+		return true, domain.ErrGroupFull
 	}
 	return true, nil
 }
@@ -199,55 +219,109 @@ func (s *Store) GetRecord(_ context.Context, emailID string) (api.EmailRecipient
 	return r, nil
 }
 
-// GetGroupRecords returns all EmailRecipientRecord values belonging to groupID
-// and the total number of email IDs recorded in the group index.
+// ScanGroupRecords resolves the group index entries at positions
+// [offset, offset+limit) and calls fn, in index order, for each readable
+// EmailRecipientRecord that belongs to groupID; fn returning false stops the
+// scan. It returns the total number of email IDs recorded in the group index.
 // Returns domain.ErrNotFound when the group index key does not exist.
-// Individual recipient records that are absent or unreadable are silently
-// skipped; the returned totalIDs reflects the raw index count regardless.
-// Records whose GroupID does not match groupID are skipped.
-// Index entries that are not UUIDs are skipped without any bucket call: the
-// index value is stored data writable by any principal with publish rights on
-// the bucket subject, so its entries are re-validated before use as KV keys.
-func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.EmailRecipientRecord, int, error) {
+//
+// The work is bounded: limit is capped at api.MaxGroupEmails, records are read
+// groupReadConcurrency at a time and handed to fn chunk by chunk (so at most
+// one chunk of records is held here), and ctx is checked before every chunk,
+// so a done context stops the scan with a wrapped ctx.Err().
+//
+// Individual recipient records that are absent or unreadable are skipped.
+// Records whose GroupID does not match groupID are skipped. Index entries that
+// are not UUIDs are skipped without any bucket call: the index value is stored
+// data writable by any principal with publish rights on the bucket subject, so
+// its entries are re-validated before use as KV keys.
+func (s *Store) ScanGroupRecords(ctx context.Context, groupID string, offset, limit int, fn func(api.EmailRecipientRecord) bool) (int, error) {
 	if err := checkKey(groupID); err != nil {
-		return nil, 0, err
+		return 0, err
+	}
+	if offset < 0 || limit <= 0 {
+		return 0, fmt.Errorf("invalid group scan range (offset %d, limit %d)", offset, limit)
+	}
+	limit = min(limit, api.MaxGroupEmails)
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("scan group records: %w", err)
 	}
 	entry, err := s.groupIndexKV.Get(groupID)
 	if err != nil {
 		if errors.Is(err, natsgo.ErrKeyNotFound) {
-			return nil, 0, domain.ErrNotFound
+			return 0, domain.ErrNotFound
 		}
-		return nil, 0, fmt.Errorf("kv get group index: %w", err)
+		return 0, fmt.Errorf("kv get group index: %w", err)
 	}
 
 	var emailIDs []string
 	if err := json.Unmarshal(entry.Value(), &emailIDs); err != nil {
-		return nil, 0, fmt.Errorf("unmarshal group index: %w", err)
+		return 0, fmt.Errorf("unmarshal group index: %w", err)
 	}
 
 	totalIDs := len(emailIDs)
-	records := make([]api.EmailRecipientRecord, 0, totalIDs)
-	invalidIDs, maxInvalidLen, foreignIDs := 0, 0, 0
-	for _, emailID := range emailIDs {
-		if !emailIDRe.MatchString(emailID) {
-			invalidIDs++
-			maxInvalidLen = max(maxInvalidLen, len(emailID))
-			continue
+	if offset >= totalIDs {
+		return totalIDs, nil
+	}
+	window := emailIDs[offset:min(totalIDs, offset+limit)]
+
+	var (
+		records                   [groupReadConcurrency]api.EmailRecipientRecord
+		readErrs                  [groupReadConcurrency]error
+		valid                     [groupReadConcurrency]bool
+		invalidIDs, maxInvalidLen int
+		foreignIDs, unreadableIDs int
+		lastReadErr               error
+		stopped                   bool
+	)
+	for start := 0; start < len(window) && !stopped; start += groupReadConcurrency {
+		if err := ctx.Err(); err != nil {
+			return totalIDs, fmt.Errorf("scan group records: %w", err)
 		}
-		r, err := s.GetRecord(ctx, emailID)
-		if err != nil {
-			slog.WarnContext(ctx, "skipping unreadable recipient record during group lookup",
-				"email_id", emailID, "group_id", redaction.RedactGroupHandle(groupID), logging.ErrKey, err)
-			continue
+		chunk := window[start:min(start+groupReadConcurrency, len(window))]
+		var wg sync.WaitGroup
+		for i, emailID := range chunk {
+			valid[i] = emailIDRe.MatchString(emailID)
+			if !valid[i] {
+				invalidIDs++
+				maxInvalidLen = max(maxInvalidLen, len(emailID))
+				continue
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				records[i], readErrs[i] = s.GetRecord(ctx, emailID)
+			}()
 		}
-		// A record is returned only if it was sent under this group, mirroring the
-		// single-email check in GetEmailStatusHandler, so a stale or altered index
-		// entry cannot pull another group's record into this group's results.
-		if subtle.ConstantTimeCompare([]byte(r.GroupID), []byte(groupID)) != 1 {
-			foreignIDs++
-			continue
+		wg.Wait()
+
+		for i := range chunk {
+			if !valid[i] {
+				continue
+			}
+			if readErrs[i] != nil {
+				unreadableIDs++
+				lastReadErr = readErrs[i]
+				continue
+			}
+			// A record is returned only if it was sent under this group, mirroring the
+			// single-email check in GetEmailStatusHandler, so a stale or altered index
+			// entry cannot pull another group's record into this group's results.
+			if subtle.ConstantTimeCompare([]byte(records[i].GroupID), []byte(groupID)) != 1 {
+				foreignIDs++
+				continue
+			}
+			if !fn(records[i]) {
+				stopped = true
+				break
+			}
 		}
-		records = append(records, r)
+	}
+	if unreadableIDs > 0 {
+		// One aggregated line per scan, so a large group of missing records
+		// cannot turn a single request into thousands of log lines.
+		slog.WarnContext(ctx, "skipping unreadable recipient records during group lookup",
+			"group_id", redaction.RedactGroupHandle(groupID), "unreadable_count", unreadableIDs, logging.ErrKey, lastReadErr)
 	}
 	if foreignIDs > 0 {
 		slog.WarnContext(ctx, "skipping group index entries whose record belongs to another group",
@@ -258,7 +332,7 @@ func (s *Store) GetGroupRecords(ctx context.Context, groupID string) ([]api.Emai
 		slog.WarnContext(ctx, "skipping non-UUID email_ids in group index",
 			"group_id", redaction.RedactGroupHandle(groupID), "invalid_count", invalidIDs, "max_invalid_len", maxInvalidLen)
 	}
-	return records, totalIDs, nil
+	return totalIDs, nil
 }
 
 // UpdateRecord fetches the record for emailID, applies fn, and writes it back

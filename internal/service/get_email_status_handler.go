@@ -4,12 +4,14 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	natsgo "github.com/nats-io/nats.go"
 
@@ -19,14 +21,35 @@ import (
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
+// groupReadTimeout bounds the time one status or analytics request may spend
+// resolving a group's records. The NATS subscription callbacks carry no
+// deadline of their own, so the handlers apply this one.
+const groupReadTimeout = 5 * time.Second
+
+// defaultMaxPayload is the NATS server's default max_payload, used when the
+// handler is not told the connection's actual limit.
+const defaultMaxPayload int64 = 1 << 20
+
 // GetEmailStatusHandler handles NATS requests on the get_email_status subject.
 type GetEmailStatusHandler struct {
-	store domain.TrackingStore
+	store      domain.TrackingStore
+	maxPayload int64
 }
 
 // NewGetEmailStatusHandler creates a handler backed by store.
 func NewGetEmailStatusHandler(store domain.TrackingStore) *GetEmailStatusHandler {
-	return &GetEmailStatusHandler{store: store}
+	return &GetEmailStatusHandler{store: store, maxPayload: defaultMaxPayload}
+}
+
+// WithMaxPayload sets the largest reply, in bytes, the handler will send
+// (the connection's max payload). A group page that would exceed it is
+// answered with "response too large" instead of a reply NATS would reject.
+// Values <= 0 are ignored.
+func (h *GetEmailStatusHandler) WithMaxPayload(n int64) *GetEmailStatusHandler {
+	if n > 0 {
+		h.maxPayload = n
+	}
+	return h
 }
 
 // Handle processes a single NATS message.
@@ -57,8 +80,16 @@ func (h *GetEmailStatusHandler) HandleData(ctx context.Context, data []byte, res
 			return
 		}
 		h.handleByEmailID(ctx, respond, strings.ToLower(req.EmailID), req.GroupID)
+	case req.Offset < 0:
+		replyError(ctx, respond, "invalid offset")
+	case req.Limit < 0 || req.Limit > api.MaxGroupStatusLimit:
+		replyError(ctx, respond, "invalid limit")
 	default:
-		h.handleByGroupID(ctx, respond, req.GroupID)
+		limit := req.Limit
+		if limit == 0 {
+			limit = api.DefaultGroupStatusLimit
+		}
+		h.handleByGroupID(ctx, respond, req.GroupID, req.Offset, limit)
 	}
 }
 
@@ -95,27 +126,63 @@ func (h *GetEmailStatusHandler) handleByEmailID(ctx context.Context, respond fun
 	}
 }
 
-func (h *GetEmailStatusHandler) handleByGroupID(ctx context.Context, respond func([]byte) error, groupID string) {
+func (h *GetEmailStatusHandler) handleByGroupID(ctx context.Context, respond func([]byte) error, groupID string, offset, limit int) {
 	ctx = logging.AppendCtx(ctx, slog.String("group_id", redaction.RedactGroupHandle(groupID)))
-	records, _, err := h.store.GetGroupRecords(ctx, groupID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			slog.DebugContext(ctx, "group index not found")
-			replyError(ctx, respond, "not found")
-		} else {
-			slog.ErrorContext(ctx, "failed to read group records", logging.ErrKey, err)
-			replyError(ctx, respond, "internal error")
-		}
-		return
-	}
+	ctx, cancel := context.WithTimeout(ctx, groupReadTimeout)
+	defer cancel()
 
-	b, err := json.Marshal(records)
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to marshal group status response", logging.ErrKey, err)
+	// The reply is built incrementally so its size is known before it is sent:
+	// a page that would exceed the connection's max payload stops the scan and
+	// gets an explicit error reply rather than a reply NATS would refuse.
+	buf := bytes.NewBufferString("[")
+	tooLarge := false
+	var marshalErr error
+	_, err := h.store.ScanGroupRecords(ctx, groupID, offset, limit, func(r api.EmailRecipientRecord) bool {
+		b, err := json.Marshal(r)
+		if err != nil {
+			marshalErr = err
+			return false
+		}
+		sep := 0
+		if buf.Len() > 1 {
+			sep = 1 // ',' before every record but the first
+		}
+		// +1 for the closing bracket.
+		if int64(buf.Len()+sep+len(b)+1) > h.maxPayload {
+			tooLarge = true
+			return false
+		}
+		if sep == 1 {
+			buf.WriteByte(',')
+		}
+		buf.Write(b)
+		return true
+	})
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		slog.DebugContext(ctx, "group index not found")
+		replyError(ctx, respond, "not found")
+		return
+	case errors.Is(err, context.DeadlineExceeded):
+		slog.WarnContext(ctx, "group status lookup timed out", "offset", offset, "limit", limit)
+		replyError(ctx, respond, "timeout")
+		return
+	case err != nil:
+		slog.ErrorContext(ctx, "failed to read group records", logging.ErrKey, err)
 		replyError(ctx, respond, "internal error")
 		return
+	case marshalErr != nil:
+		slog.ErrorContext(ctx, "failed to marshal group status response", logging.ErrKey, marshalErr)
+		replyError(ctx, respond, "internal error")
+		return
+	case tooLarge:
+		slog.WarnContext(ctx, "group status page exceeds max payload", "offset", offset, "limit", limit, "max_payload", h.maxPayload)
+		replyError(ctx, respond, "response too large")
+		return
 	}
-	if err := respond(b); err != nil {
+	buf.WriteByte(']')
+
+	if err := respond(buf.Bytes()); err != nil {
 		slog.WarnContext(ctx, "failed to respond to get_email_status (group) request", logging.ErrKey, err)
 	}
 }

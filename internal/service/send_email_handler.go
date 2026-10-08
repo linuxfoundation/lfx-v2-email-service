@@ -121,6 +121,12 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	// a holder of an issued handle can append further sends to that group.
 	if req.GroupID != "" {
 		exists, err := h.store.GroupExists(ctx, req.GroupID)
+		if errors.Is(err, domain.ErrGroupFull) {
+			// Rejected before sending: the email could not be tracked in this group.
+			slog.WarnContext(ctx, "send email request group_id is full", "group_id", redaction.RedactGroupHandle(req.GroupID))
+			replyError(ctx, respond, "group is full")
+			return
+		}
 		if err != nil {
 			slog.ErrorContext(ctx, "failed to check group index", logging.ErrKey, err)
 			replyError(ctx, respond, "internal error")
@@ -144,8 +150,10 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	}
 
 	if emailID != "" && !h.writeTrackingRecords(ctx, emailID, groupID, req.GroupID == "", req) {
-		// The newly issued group was never recorded, so its handle would be
-		// rejected by later sends and lookups. Do not hand out an unusable handle.
+		// The email was not recorded in the group: either a newly issued group
+		// was never recorded (its handle would be rejected by later sends and
+		// lookups), or the group filled up between the check above and the
+		// append. Do not return a handle the email is not tracked under.
 		groupID = ""
 	}
 
@@ -159,13 +167,19 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 // recipient record. Both writes are best-effort. The group index is written
 // first: for a newly issued group it is what records the handle, and if it
 // fails the handle is not returned, so no record is written that only that
-// handle could reach. It reports false only when a new group was not recorded.
+// handle could reach. It reports false when a new group was not recorded, or
+// when the group was already full (domain.ErrGroupFull); no record is written
+// in either case.
 func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, groupID string, newGroup bool, req api.SendEmailRequest) bool {
 	if groupID != "" {
 		if err := h.store.AppendToGroup(ctx, groupID, emailID); err != nil {
-			if errors.Is(err, domain.ErrTrackingUnavailable) {
+			switch {
+			case errors.Is(err, domain.ErrTrackingUnavailable):
 				slog.DebugContext(ctx, "tracking unavailable, email not added to a group")
-			} else {
+			case errors.Is(err, domain.ErrGroupFull):
+				slog.WarnContext(ctx, "group is full, email not added to the group", "email_id", emailID, "group_id", redaction.RedactGroupHandle(groupID))
+				return false
+			default:
 				slog.WarnContext(ctx, "failed to append email to group index", logging.ErrKey, err, "email_id", emailID, "group_id", redaction.RedactGroupHandle(groupID))
 			}
 			if newGroup {

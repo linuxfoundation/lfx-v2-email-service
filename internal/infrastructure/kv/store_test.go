@@ -5,7 +5,9 @@ package kv_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -115,12 +117,36 @@ func (b *fakeBucket) Create(key string, value []byte) (uint64, error) {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// Group-index entries must be UUIDs; GetGroupRecords skips anything else.
+// Group-index entries must be UUIDs; ScanGroupRecords skips anything else.
 const (
 	uuid1 = "11111111-1111-4111-8111-111111111111"
 	uuid2 = "22222222-2222-4222-8222-222222222222"
 	uuid3 = "33333333-3333-4333-8333-333333333333"
 )
+
+// scanAll collects every record ScanGroupRecords yields for groupID.
+func scanAll(ctx context.Context, store *kvinfra.Store, groupID string) ([]api.EmailRecipientRecord, int, error) {
+	var got []api.EmailRecipientRecord
+	total, err := store.ScanGroupRecords(ctx, groupID, 0, api.MaxGroupEmails, func(r api.EmailRecipientRecord) bool {
+		got = append(got, r)
+		return true
+	})
+	return got, total, err
+}
+
+// seedFullGroup writes a group index holding n distinct UUID email_ids.
+func seedFullGroup(t *testing.T, groupIndexKV *fakeBucket, groupID string, n int) []string {
+	t.Helper()
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
+	}
+	b, err := json.Marshal(ids)
+	require.NoError(t, err)
+	_, err = groupIndexKV.Put(groupID, b)
+	require.NoError(t, err)
+	return ids
+}
 
 func newStore(t *testing.T) (*kvinfra.Store, *fakeBucket, *fakeBucket) {
 	t.Helper()
@@ -174,7 +200,7 @@ func TestStore_AppendToGroup(t *testing.T) {
 		require.NoError(t, store.AppendToGroup(context.Background(), "g2", uuid2))
 
 		// Assert the raw group-index value contains both IDs so we verify e2 was
-		// actually appended and not silently lost by GetGroupRecords skipping absent records.
+		// actually appended and not silently lost by ScanGroupRecords skipping absent records.
 		entry, err := groupIndexKV.Get("g2")
 		require.NoError(t, err)
 		raw := string(entry.Value())
@@ -217,7 +243,7 @@ func TestStore_GroupExists(t *testing.T) {
 	assert.True(t, ok)
 }
 
-func TestStore_GetGroupRecords(t *testing.T) {
+func TestStore_ScanGroupRecords(t *testing.T) {
 	t.Parallel()
 
 	t.Run("happy path returns records in index order", func(t *testing.T) {
@@ -231,7 +257,7 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		require.NoError(t, store.AppendToGroup(context.Background(), "g1", uuid1))
 		require.NoError(t, store.AppendToGroup(context.Background(), "g1", uuid2))
 
-		got, totalIDs, err := store.GetGroupRecords(context.Background(), "g1")
+		got, totalIDs, err := scanAll(context.Background(), store, "g1")
 		require.NoError(t, err)
 		assert.Equal(t, 2, totalIDs)
 		require.Len(t, got, 2)
@@ -252,7 +278,7 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		_, err := groupIndexKV.Put("g3", []byte(`["`+uuid1+`","`+uuid2+`"]`))
 		require.NoError(t, err)
 
-		got, totalIDs, err := store.GetGroupRecords(context.Background(), "g3")
+		got, totalIDs, err := scanAll(context.Background(), store, "g3")
 		require.NoError(t, err)
 		assert.Equal(t, 2, totalIDs)
 		require.Len(t, got, 1)
@@ -262,7 +288,7 @@ func TestStore_GetGroupRecords(t *testing.T) {
 	t.Run("returns ErrNotFound for unknown group", func(t *testing.T) {
 		t.Parallel()
 		store, _, _ := newStore(t)
-		_, _, err := store.GetGroupRecords(context.Background(), "unknown")
+		_, _, err := scanAll(context.Background(), store, "unknown")
 		assert.ErrorIs(t, err, domain.ErrNotFound)
 	})
 
@@ -278,7 +304,7 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		_, err := groupIndexKV.Put("g2", b)
 		require.NoError(t, err)
 
-		got, totalIDs, err := store.GetGroupRecords(context.Background(), "g2")
+		got, totalIDs, err := scanAll(context.Background(), store, "g2")
 		require.NoError(t, err)
 		assert.Equal(t, 2, totalIDs, "totalIDs must reflect raw index count, not fetched record count")
 		require.Len(t, got, 1)
@@ -301,7 +327,7 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		_, err := groupIndexKV.Put("g3", b)
 		require.NoError(t, err)
 
-		got, totalIDs, err := store.GetGroupRecords(context.Background(), "g3")
+		got, totalIDs, err := scanAll(context.Background(), store, "g3")
 		require.NoError(t, err)
 		assert.Equal(t, 4, totalIDs, "totalIDs must reflect raw index count")
 		require.Len(t, got, 2)
@@ -311,6 +337,132 @@ func TestStore_GetGroupRecords(t *testing.T) {
 		for _, k := range recipientsKV.calledKeys() {
 			assert.NotEqual(t, oversized, k, "oversized id must never reach the bucket")
 			assert.NotEqual(t, "not-a-uuid", k, "non-UUID id must never reach the bucket")
+		}
+	})
+}
+
+func TestStore_GroupCap(t *testing.T) {
+	t.Parallel()
+
+	t.Run("AppendToGroup rejects a full group without writing", func(t *testing.T) {
+		t.Parallel()
+		store, _, groupIndexKV := newStore(t)
+		seedFullGroup(t, groupIndexKV, "gfull", api.MaxGroupEmails)
+		before, err := groupIndexKV.Get("gfull")
+		require.NoError(t, err)
+
+		err = store.AppendToGroup(context.Background(), "gfull", uuid1)
+		require.ErrorIs(t, err, domain.ErrGroupFull)
+
+		after, err := groupIndexKV.Get("gfull")
+		require.NoError(t, err)
+		assert.Equal(t, before.Revision(), after.Revision(), "full group index must not be rewritten")
+		assert.Less(t, len(after.Value()), 1<<20/2, "a full group index stays far below the 1 MiB maxValueSize")
+	})
+
+	t.Run("AppendToGroup accepts the last free slot", func(t *testing.T) {
+		t.Parallel()
+		store, _, groupIndexKV := newStore(t)
+		seedFullGroup(t, groupIndexKV, "galmost", api.MaxGroupEmails-1)
+		require.NoError(t, store.AppendToGroup(context.Background(), "galmost", uuid1))
+		require.ErrorIs(t, store.AppendToGroup(context.Background(), "galmost", uuid2), domain.ErrGroupFull)
+	})
+
+	t.Run("GroupExists reports a full group", func(t *testing.T) {
+		t.Parallel()
+		store, _, groupIndexKV := newStore(t)
+		seedFullGroup(t, groupIndexKV, "gfull", api.MaxGroupEmails)
+		ok, err := store.GroupExists(context.Background(), "gfull")
+		assert.True(t, ok)
+		assert.ErrorIs(t, err, domain.ErrGroupFull)
+	})
+}
+
+func TestStore_ScanGroupRecords_Bounds(t *testing.T) {
+	t.Parallel()
+
+	seed := func(t *testing.T, n int) (*kvinfra.Store, *fakeBucket, []string) {
+		t.Helper()
+		store, recipientsKV, groupIndexKV := newStore(t)
+		ids := seedFullGroup(t, groupIndexKV, "g", n)
+		for _, id := range ids {
+			require.NoError(t, store.WriteRecord(context.Background(), id, api.EmailRecipientRecord{EmailID: id, GroupID: "g"}))
+		}
+		return store, recipientsKV, ids
+	}
+
+	t.Run("returns only the requested page, in index order", func(t *testing.T) {
+		t.Parallel()
+		store, _, ids := seed(t, 25)
+		var got []string
+		total, err := store.ScanGroupRecords(context.Background(), "g", 10, 7, func(r api.EmailRecipientRecord) bool {
+			got = append(got, r.EmailID)
+			return true
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 25, total)
+		assert.Equal(t, ids[10:17], got)
+	})
+
+	t.Run("offset past the end yields nothing", func(t *testing.T) {
+		t.Parallel()
+		store, _, _ := seed(t, 3)
+		called := false
+		total, err := store.ScanGroupRecords(context.Background(), "g", 3, 10, func(api.EmailRecipientRecord) bool {
+			called = true
+			return true
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 3, total)
+		assert.False(t, called)
+	})
+
+	t.Run("limit is capped at MaxGroupEmails", func(t *testing.T) {
+		t.Parallel()
+		store, recipientsKV, groupIndexKV := newStore(t)
+		ids := seedFullGroup(t, groupIndexKV, "g", api.MaxGroupEmails+50)
+		count := 0
+		total, err := store.ScanGroupRecords(context.Background(), "g", 0, api.MaxGroupEmails*5, func(api.EmailRecipientRecord) bool {
+			count++
+			return true
+		})
+		require.NoError(t, err)
+		assert.Equal(t, len(ids), total)
+		assert.Equal(t, 0, count, "records are absent, nothing is yielded")
+		assert.Len(t, recipientsKV.calledKeys(), api.MaxGroupEmails, "no more than MaxGroupEmails records are read")
+	})
+
+	t.Run("fn returning false stops the scan", func(t *testing.T) {
+		t.Parallel()
+		store, recipientsKV, _ := seed(t, 100)
+		reads := len(recipientsKV.calledKeys())
+		count := 0
+		_, err := store.ScanGroupRecords(context.Background(), "g", 0, 100, func(api.EmailRecipientRecord) bool {
+			count++
+			return count < 3
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 3, count)
+		assert.LessOrEqual(t, len(recipientsKV.calledKeys())-reads, 8, "only the first chunk is read")
+	})
+
+	t.Run("a done context stops the scan", func(t *testing.T) {
+		t.Parallel()
+		store, recipientsKV, _ := seed(t, 100)
+		reads := len(recipientsKV.calledKeys())
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		_, err := store.ScanGroupRecords(ctx, "g", 0, 100, func(api.EmailRecipientRecord) bool { return true })
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Equal(t, reads, len(recipientsKV.calledKeys()), "no record is read once the deadline has passed")
+	})
+
+	t.Run("rejects an invalid range", func(t *testing.T) {
+		t.Parallel()
+		store, _, _ := seed(t, 1)
+		for _, r := range [][2]int{{-1, 10}, {0, 0}, {0, -5}} {
+			_, err := store.ScanGroupRecords(context.Background(), "g", r[0], r[1], func(api.EmailRecipientRecord) bool { return true })
+			assert.Error(t, err, "offset %d limit %d", r[0], r[1])
 		}
 	})
 }
@@ -344,8 +496,8 @@ func TestStore_RejectsInvalidKeysWithoutBucketCall(t *testing.T) {
 			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "UpdateRecord")
 			assert.False(t, called)
 
-			_, _, err = store.GetGroupRecords(ctx, key)
-			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "GetGroupRecords")
+			_, _, err = scanAll(ctx, store, key)
+			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "ScanGroupRecords")
 
 			_, err = store.GroupExists(ctx, key)
 			assert.ErrorIs(t, err, kvinfra.ErrInvalidKey, "GroupExists")

@@ -76,6 +76,7 @@ that other parties can read. Keep your own mapping if you need a human-readable 
 | `invalid reply_to address` | `reply_to` field is not a valid email address, has a local part that requires RFC 5322 quoting, or contains non-ASCII characters |
 | `reply_to address domain not allowed` | `reply_to` domain is not in the service's allowed list |
 | `invalid group_id` | `group_id` is not a group handle issued by this service |
+| `group is full` | The group already holds 10,000 emails (`api.MaxGroupEmails`); nothing was sent. Start a new group by omitting `group_id` |
 | `internal error` | The group handle could not be checked against the tracking store |
 | `email delivery failed` | Service accepted the request but SMTP delivery failed |
 
@@ -118,12 +119,16 @@ is configured (JetStream enabled and both KV buckets exist).
 to fetch a single email in that group; an `email_id` that was not sent under the given
 `group_id` returns `not found`.
 
+A `group_id`-only request returns one page of the group: optional `offset` (default 0)
+and `limit` (default 500, max 1,000). To read a whole group, request pages with
+`offset += limit` until `offset` reaches `total_sent` from the analytics subject.
+
 **Request:**
 ```json
 { "group_id": "<group handle>", "email_id": "<uuid returned by send>" }
 ```
 ```json
-{ "group_id": "<group handle>" }
+{ "group_id": "<group handle>", "offset": 0, "limit": 500 }
 ```
 
 **Success response — by `email_id`** — an `EmailRecipientRecord`:
@@ -181,7 +186,11 @@ arrives.
 | `group_id is required` | `group_id` was not set |
 | `invalid email_id` | `email_id` is not a valid UUID (8-4-4-4-12 hex, case-insensitive) |
 | `invalid group_id` | `group_id` is not a group handle issued by this service |
+| `invalid offset` / `invalid limit` | `offset` is negative, or `limit` is negative or above 1,000 |
 | `not found` | No group exists for `group_id`, or no record for `email_id` was sent under `group_id` |
+| `response too large` | The page would exceed the NATS max payload; request a smaller `limit` |
+| `timeout` | The lookup exceeded the 5-second per-request deadline |
+| `service busy` | The replica is at its limit of concurrent status/analytics requests; retry later |
 
 **Examples (NATS CLI):**
 ```bash
@@ -226,6 +235,8 @@ NATS KV is configured.
 | `invalid request payload` | Request body is not valid JSON or `group_id` is missing |
 | `invalid group_id` | `group_id` is not a group handle issued by this service |
 | `not found` | No emails have been sent under the given `group_id` |
+| `timeout` | The lookup exceeded the 5-second per-request deadline |
+| `service busy` | The replica is at its limit of concurrent status/analytics requests; retry later |
 
 **Example (NATS CLI):**
 ```bash

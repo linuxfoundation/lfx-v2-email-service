@@ -53,23 +53,13 @@ func (h *GetEmailEngagementAnalyticsHandler) HandleData(ctx context.Context, dat
 
 	ctx = logging.AppendCtx(ctx, slog.String("group_id", redaction.RedactGroupHandle(req.GroupID)))
 
-	records, totalIDs, err := h.store.GetGroupRecords(ctx, req.GroupID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			slog.DebugContext(ctx, "group index not found")
-			replyError(ctx, respond, "not found")
-		} else {
-			slog.ErrorContext(ctx, "failed to read group records", logging.ErrKey, err)
-			replyError(ctx, respond, "internal error")
-		}
-		return
-	}
+	ctx, cancel := context.WithTimeout(ctx, groupReadTimeout)
+	defer cancel()
 
-	resp := api.GetEmailEngagementAnalyticsResponse{
-		GroupID:   req.GroupID,
-		TotalSent: totalIDs,
-	}
-	for _, record := range records {
+	// Aggregate while scanning so no more than one chunk of records is held in
+	// memory; the scan resolves at most api.MaxGroupEmails entries.
+	resp := api.GetEmailEngagementAnalyticsResponse{GroupID: req.GroupID}
+	totalIDs, err := h.store.ScanGroupRecords(ctx, req.GroupID, 0, api.MaxGroupEmails, func(record api.EmailRecipientRecord) bool {
 		if record.Delivered {
 			resp.Delivered++
 		}
@@ -80,7 +70,23 @@ func (h *GetEmailEngagementAnalyticsHandler) HandleData(ctx context.Context, dat
 		if record.Failed {
 			resp.Failed++
 		}
+		return true
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
+			slog.DebugContext(ctx, "group index not found")
+			replyError(ctx, respond, "not found")
+		case errors.Is(err, context.DeadlineExceeded):
+			slog.WarnContext(ctx, "group analytics lookup timed out")
+			replyError(ctx, respond, "timeout")
+		default:
+			slog.ErrorContext(ctx, "failed to read group records", logging.ErrKey, err)
+			replyError(ctx, respond, "internal error")
+		}
+		return
 	}
+	resp.TotalSent = totalIDs
 
 	b, _ := json.Marshal(resp)
 	if err := respond(b); err != nil {

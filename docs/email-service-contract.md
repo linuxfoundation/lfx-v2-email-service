@@ -79,6 +79,7 @@ Error reply: `api.SendEmailErrorResponse`
 | `invalid reply_to address` | `reply_to` is set but is not a parseable email address, contains non-ASCII characters, or its local part would require RFC 5322 quoting (only ASCII dot-atom local parts are accepted). |
 | `reply_to address domain not allowed` | `reply_to` domain is not in `SMTP_ALLOWED_REPLY_TO_DOMAINS`. |
 | `invalid group_id` | `group_id` is not a group handle issued by this service: wrong format, or no group index entry exists for it. |
+| `group is full` | The group already holds `api.MaxGroupEmails` (10,000) emails. No mail is sent; start a new group by omitting `group_id`. |
 | `internal error` | The group index could not be read to verify `group_id`. No mail is sent. |
 | `email delivery failed` | SMTP delivery failed after the service accepted the request. |
 
@@ -101,13 +102,18 @@ Request: `api.GetEmailStatusRequest`
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `group_id` | yes | Group handle returned by `send_email`. Alone, fetches all `EmailRecipientRecord` entries in the group. |
+| `group_id` | yes | Group handle returned by `send_email`. Alone, fetches one page of the group's `EmailRecipientRecord` entries. |
 | `email_id` | no | With `group_id`, fetches one `EmailRecipientRecord`. The record is returned only if it was sent under `group_id`; otherwise the reply is `not found`. |
+| `offset` | no | Group lookups only: index position of the first entry in the page. Default `0`; must not be negative. |
+| `limit` | no | Group lookups only: number of index entries in the page. Default `api.DefaultGroupStatusLimit` (500); at most `api.MaxGroupStatusLimit` (1,000). |
 
 Reply:
 
 - `group_id` + `email_id` lookup returns one `api.EmailRecipientRecord`.
-- `group_id` lookup returns a JSON array of `api.EmailRecipientRecord`.
+- `group_id` lookup returns a JSON array of `api.EmailRecipientRecord` for the group index
+  entries at positions `[offset, offset+limit)`, in index order. To read a whole group, request
+  successive pages (`offset += limit`) until `offset` reaches `total_sent` from
+  `get_email_engagement_analytics`; an `offset` at or past the end returns `[]`.
   The array may contain **fewer** entries than the group index lists: any per-recipient
   error (missing record, unmarshal failure, or transient KV read error) is silently
   omitted from the array rather than erroring (as is any record whose `group_id` does not match the requested group), so the returned count can be less than
@@ -125,7 +131,12 @@ Error values:
 | `group_id is required` | `group_id` was not set (including an `email_id`-only request). |
 | `invalid email_id` | `email_id` is not a valid UUID (8-4-4-4-12 hex, case-insensitive; normalized to lowercase before lookup). |
 | `invalid group_id` | `group_id` is not in the group handle format issued by this service. |
+| `invalid offset` | `offset` is negative. |
+| `invalid limit` | `limit` is negative or greater than `api.MaxGroupStatusLimit`. |
 | `not found` | No group index exists for `group_id`, or the `email_id` record does not exist or was not sent under `group_id`. |
+| `response too large` | The requested page would exceed the NATS connection's max payload. Request a smaller `limit`. |
+| `timeout` | Resolving the page took longer than the per-request deadline (5 seconds). |
+| `service busy` | The replica is already handling its maximum number of concurrent status and analytics requests (8). Retry later. |
 | `internal error` | KV read, decode, or response serialization failed. |
 
 ## Engagement Analytics
@@ -157,6 +168,8 @@ Error values:
 | `group_id is required` | The request omitted `group_id`. |
 | `invalid group_id` | `group_id` is not in the group handle format issued by this service. |
 | `not found` | No group index exists for `group_id`. |
+| `timeout` | Resolving the group took longer than the per-request deadline (5 seconds). |
+| `service busy` | The replica is already handling its maximum number of concurrent status and analytics requests (8). Retry later. |
 | `internal error` | Reading or decoding the group index failed. |
 
 Only failures reading or decoding the **group index** return `internal error`. Per-recipient
@@ -166,7 +179,8 @@ aggregate counts, as is any record whose `group_id` does not match the requested
 Group-index entries that are not valid UUIDs are skipped the same way, without any recipient
 KV read. `total_sent` reflects the number of `email_id`s in the group index, so the
 sum of `delivered` / `failed` / `unique_opened` may be less than `total_sent` when records are
-missing or unreadable.
+missing or unreadable. At most the first `api.MaxGroupEmails` index entries are resolved; only
+an index written before the cap existed can hold more.
 
 ## Engagement Push Events
 
@@ -234,6 +248,25 @@ Published at most once per email (BOUNCE and COMPLAINT are single-fire; subseque
 | `failed`, `failed_at` | Bounce or complaint status and timestamp. |
 
 `email-group-index` stores a JSON `[]string` of `email_id` values, keyed by `group_id`.
+
+## Group Size and Read Bounds
+
+Group reads are bounded so that one small request cannot cause work, memory, or a reply
+proportional to an arbitrarily large group:
+
+- A group holds at most `api.MaxGroupEmails` (10,000) emails, which keeps a group index value
+  (about 39 bytes per entry) far below the bucket's 1 MiB `maxValueSize`. `send_email` to a full
+  group is rejected with `group is full` before any mail is sent. If concurrent sends fill the
+  group after that check, the email is still sent, but the reply carries an empty `group_id` and
+  no recipient record is written, as for a new group that could not be recorded.
+- Group status replies are paged (`offset` / `limit`), and a page that would exceed the
+  connection's max payload is answered with `response too large` instead of being dropped.
+- Status and analytics requests resolve recipient records a few at a time with a 5-second
+  deadline per request (`timeout` when exceeded). Analytics aggregates while reading and never
+  holds the whole group in memory.
+- Each replica runs at most 8 status and analytics requests at once, off the NATS subscription
+  goroutine, so a slow lookup does not delay other requests. Requests beyond that are answered
+  immediately with `service busy`.
 
 ## Group Handles
 

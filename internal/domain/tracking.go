@@ -52,24 +52,36 @@ func IsGroupHandle(s string) bool {
 // failure is deterministic for that record, so callers must not retry it.
 var ErrRecordTooLarge = errors.New("record exceeds maximum value size")
 
+// ErrGroupFull is returned by TrackingStore.GroupExists and AppendToGroup when
+// the group already holds api.MaxGroupEmails emails. No further emails can be
+// added to that group; the caller must start a new group.
+var ErrGroupFull = errors.New("group is full")
+
 // TrackingStore is the interface for reading and writing email tracking records.
 // All implementations must be safe for concurrent use.
 //
 // WriteRecord stores a new recipient record keyed by emailID.
 //
 // AppendToGroup appends emailID to the group's list (creating the list if absent)
-// using optimistic concurrency — retries once on write conflict.
+// using optimistic concurrency — retries once on write conflict. It returns
+// ErrGroupFull, without writing, when the group already holds
+// api.MaxGroupEmails entries.
 //
 // GroupExists reports whether a group index entry exists for groupID. The send
 // handler uses it to accept a caller-supplied group_id only when it names a
-// group this service issued and recorded.
+// group this service issued and recorded. It returns (true, ErrGroupFull) when
+// the group exists but already holds api.MaxGroupEmails entries.
 //
 // GetRecord retrieves a recipient record by emailID; returns ErrNotFound when absent.
 //
-// GetGroupRecords returns all readable recipient records for a group_id and the
-// total number of email IDs in the group index. Returns ErrNotFound when the
-// group itself is absent. Individual records that are absent or unreadable are
-// silently skipped; totalIDs always reflects the raw index count.
+// ScanGroupRecords resolves the group index entries at positions
+// [offset, offset+limit) (limit is capped at api.MaxGroupEmails) and calls fn,
+// in index order, for each readable record that belongs to groupID; fn
+// returning false stops the scan. It returns the total number of email IDs in
+// the group index. Returns ErrNotFound when the group itself is absent.
+// Individual records that are absent or unreadable are silently skipped. It
+// stops and returns ctx.Err() (wrapped) once ctx is done, so callers bound the
+// work of one request with a context deadline.
 //
 // UpdateRecord fetches the record for emailID, applies fn in place, and writes it
 // back with optimistic concurrency (one retry on conflict). If the record does not
@@ -80,7 +92,7 @@ type TrackingStore interface {
 	AppendToGroup(ctx context.Context, groupID, emailID string) error
 	GroupExists(ctx context.Context, groupID string) (bool, error)
 	GetRecord(ctx context.Context, emailID string) (api.EmailRecipientRecord, error)
-	GetGroupRecords(ctx context.Context, groupID string) (records []api.EmailRecipientRecord, totalIDs int, err error)
+	ScanGroupRecords(ctx context.Context, groupID string, offset, limit int, fn func(api.EmailRecipientRecord) bool) (totalIDs int, err error)
 	UpdateRecord(ctx context.Context, emailID string, fn func(*api.EmailRecipientRecord)) error
 }
 
@@ -109,8 +121,8 @@ func (NullTrackingStore) GetRecord(_ context.Context, _ string) (api.EmailRecipi
 	return api.EmailRecipientRecord{}, ErrNotFound
 }
 
-func (NullTrackingStore) GetGroupRecords(_ context.Context, _ string) ([]api.EmailRecipientRecord, int, error) {
-	return nil, 0, ErrNotFound
+func (NullTrackingStore) ScanGroupRecords(_ context.Context, _ string, _, _ int, _ func(api.EmailRecipientRecord) bool) (int, error) {
+	return 0, ErrNotFound
 }
 
 func (NullTrackingStore) UpdateRecord(_ context.Context, _ string, _ func(*api.EmailRecipientRecord)) error {
