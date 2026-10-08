@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -152,6 +153,10 @@ func (s *Store) AppendToGroup(ctx context.Context, groupID, emailID string) erro
 			return fmt.Errorf("kv get group index: %w", err)
 		}
 
+		// A failed write may still have been applied; do not append twice.
+		if attempt > 0 && slices.Contains(ids, emailID) {
+			return nil
+		}
 		if len(ids) >= api.MaxGroupEmails {
 			return fmt.Errorf("append to group index (%d entries): %w", len(ids), domain.ErrGroupFull)
 		}
@@ -172,6 +177,21 @@ func (s *Store) AppendToGroup(ctx context.Context, groupID, emailID string) erro
 		}
 		if attempt == 0 {
 			slog.DebugContext(ctx, "group index write conflict, retrying", "group_id", redaction.RedactGroupHandle(groupID))
+		}
+	}
+	// The retry lost its write too. Re-read once so a group that concurrent
+	// writers filled is reported as domain.ErrGroupFull (the send must not be
+	// tracked under it), and a write that was applied despite its error is
+	// reported as success.
+	if entry, err := s.groupIndexKV.Get(groupID); err == nil {
+		var ids []string
+		if json.Unmarshal(entry.Value(), &ids) == nil {
+			if slices.Contains(ids, emailID) {
+				return nil
+			}
+			if len(ids) >= api.MaxGroupEmails {
+				return fmt.Errorf("append to group index (%d entries): %w", len(ids), domain.ErrGroupFull)
+			}
 		}
 	}
 	return fmt.Errorf("kv update group index after retry: %w", writeErr)

@@ -127,6 +127,35 @@ func (b *cancelOnGet) Get(key string) (natsgo.KeyValueEntry, error) {
 	return b.fakeBucket.Get(key)
 }
 
+// racingIndex is a group-index bucket where every Update loses to a concurrent
+// writer: before failing, it appends one entry of its own (or, with
+// applyThenFail, applies the caller's value) to the stored index.
+type racingIndex struct {
+	*fakeBucket
+	applyThenFail bool
+	n             int
+}
+
+func (b *racingIndex) Update(key string, value []byte, last uint64) (uint64, error) {
+	b.n++
+	if b.applyThenFail {
+		_, _ = b.Put(key, value)
+		return 0, errWrongRevision
+	}
+	e, err := b.Get(key)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	if err := json.Unmarshal(e.Value(), &ids); err != nil {
+		return 0, err
+	}
+	ids = append(ids, fmt.Sprintf("ffffffff-ffff-4fff-8fff-%012d", b.n))
+	v, _ := json.Marshal(ids)
+	_, _ = b.Put(key, v)
+	return 0, errWrongRevision
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // Group-index entries must be UUIDs; ScanGroupRecords skips anything else.
@@ -378,6 +407,32 @@ func TestStore_GroupCap(t *testing.T) {
 		seedFullGroup(t, groupIndexKV, "galmost", api.MaxGroupEmails-1)
 		require.NoError(t, store.AppendToGroup(context.Background(), "galmost", uuid1))
 		require.ErrorIs(t, store.AppendToGroup(context.Background(), "galmost", uuid2), domain.ErrGroupFull)
+	})
+
+	t.Run("losing both writes as concurrent writers fill the group reports ErrGroupFull", func(t *testing.T) {
+		t.Parallel()
+		groupIndexKV := &racingIndex{fakeBucket: newFakeBucket()}
+		store := kvinfra.New(newFakeBucket(), groupIndexKV)
+		// 9,998 entries: each of the two attempts loses to a writer that adds
+		// one, so the group is full only after the retry has failed.
+		seedFullGroup(t, groupIndexKV.fakeBucket, "g", api.MaxGroupEmails-2)
+
+		err := store.AppendToGroup(context.Background(), "g", uuid1)
+		require.ErrorIs(t, err, domain.ErrGroupFull)
+		assert.Equal(t, 2, groupIndexKV.n)
+	})
+
+	t.Run("a write applied despite its error is reported as success, not appended twice", func(t *testing.T) {
+		t.Parallel()
+		groupIndexKV := &racingIndex{fakeBucket: newFakeBucket(), applyThenFail: true}
+		store := kvinfra.New(newFakeBucket(), groupIndexKV)
+		seedFullGroup(t, groupIndexKV.fakeBucket, "g", 3)
+
+		require.NoError(t, store.AppendToGroup(context.Background(), "g", uuid1))
+		assert.Equal(t, 1, groupIndexKV.n, "the retry sees the applied write and does not write again")
+		e, err := groupIndexKV.Get("g")
+		require.NoError(t, err)
+		assert.Equal(t, 1, strings.Count(string(e.Value()), uuid1))
 	})
 
 	t.Run("GroupExists reports a full group", func(t *testing.T) {
