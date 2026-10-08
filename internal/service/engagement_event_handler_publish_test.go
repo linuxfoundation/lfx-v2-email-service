@@ -1140,3 +1140,84 @@ func TestEngagementEventHandler_Open_CountNotBelowListLength(t *testing.T) {
 	assert.Equal(t, 3, record.OpenCount)
 	assert.Len(t, record.OpenedAtList, 3)
 }
+
+// seedLegacyOpens stores a record holding opens entries in OpenedAtList, with
+// the subject padded so the serialised record is targetBytes long.
+func seedLegacyOpens(t *testing.T, store *mocks.TrackingStore, opens, targetBytes int) []api.OpenEvent {
+	t.Helper()
+	base := mustParseTime(t, testTimestamp)
+	list := make([]api.OpenEvent, opens)
+	for i := range list {
+		list[i] = api.OpenEvent{EventID: fmt.Sprintf("%08x-0000-4000-8000-%012x", i, i), OpenedAt: base.Add(time.Duration(i) * time.Second)}
+	}
+	last := list[opens-1].OpenedAt
+	r := api.EmailRecipientRecord{
+		EmailID:      testEmailID,
+		GroupID:      testGroupID,
+		To:           "recipient@example.com",
+		Opened:       true,
+		OpenCount:    opens,
+		OpenedAtList: list,
+		LastOpenedAt: &last,
+	}
+	b, err := json.Marshal(r)
+	require.NoError(t, err)
+	require.Less(t, len(b), targetBytes)
+	r.Subject = strings.Repeat("s", targetBytes-len(b))
+	b, err = json.Marshal(r)
+	require.NoError(t, err)
+	require.Equal(t, targetBytes, len(b))
+	store.PutRecord(testEmailID, r)
+	return list
+}
+
+// TestEngagementEventHandler_Open_LegacyNearLimitRecordCompacted verifies that
+// a record inflated before OpenedAtList was bounded, but holding no more than
+// maxOpenEvents entries, is still trimmed when it is near the KV bucket hard
+// limit, so a later status event is written rather than rejected for size.
+func TestEngagementEventHandler_Open_LegacyNearLimitRecordCompacted(t *testing.T) {
+	t.Parallel()
+
+	const legacyOpens = 450
+	store := mocks.NewTrackingStore()
+	list := seedLegacyOpens(t, store, legacyOpens, 64_000)
+
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+	require.NoError(t, h.Handle(context.Background(), sqsMsg(t, "BOUNCE", testEmailID, testGroupID, testTimestamp)))
+
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+	assert.True(t, record.Failed, "BOUNCE must apply to a compacted legacy record")
+	assert.Equal(t, legacyOpens, record.OpenCount, "compaction must not lower OpenCount")
+	require.NotEmpty(t, record.OpenedAtList)
+	assert.Less(t, len(record.OpenedAtList), legacyOpens, "OpenedAtList must be trimmed")
+	assert.Equal(t, list[legacyOpens-1].EventID, record.OpenedAtList[len(record.OpenedAtList)-1].EventID,
+		"newest open entries must be retained")
+	b, err := json.Marshal(record)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(b), 50_000, "compacted record must be within the soft ceiling")
+	require.Len(t, pub.calls, 1)
+	assert.Equal(t, api.EmailFailedSubject, pub.calls[0].subject)
+}
+
+// TestEngagementEventHandler_Open_RecordNearSoftCeilingNotCompacted verifies
+// that a record slightly above the 50 KB soft ceiling (as fixed-size fields
+// can leave a current record) keeps its open history, so compaction does not
+// repeatedly trim records written by the bounded code path.
+func TestEngagementEventHandler_Open_RecordNearSoftCeilingNotCompacted(t *testing.T) {
+	t.Parallel()
+
+	const opens = 300
+	store := mocks.NewTrackingStore()
+	seedLegacyOpens(t, store, opens, 52_000)
+
+	h := service.NewEngagementEventHandler(store)
+	require.NoError(t, h.Handle(context.Background(), sqsMsg(t, "DELIVERY", testEmailID, testGroupID, testTimestamp)))
+
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+	assert.True(t, record.Delivered)
+	assert.Len(t, record.OpenedAtList, opens, "records under the compaction threshold must not be trimmed")
+	assert.Equal(t, opens, record.OpenCount)
+}

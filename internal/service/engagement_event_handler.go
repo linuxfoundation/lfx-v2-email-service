@@ -27,6 +27,13 @@ import (
 // would exceed this threshold, and neither is OpenedAtList.
 const maxKVRecordBytes = 50_000
 
+// compactAboveBytes is the serialised size above which compactOpenedAtList
+// trims OpenedAtList. Records written since OPEN appends were bounded stay
+// within maxKVRecordBytes plus a few fixed-size timestamp fields, so only
+// records inflated before then exceed it. The gap above maxKVRecordBytes
+// prevents trimming churn on records near the soft ceiling.
+const compactAboveBytes = 55_000
+
 // maxOpenEvents caps OpenedAtList, which doubles as the OPEN dedup list. Each
 // entry is ~90 bytes serialised; 500 entries ≈ 45 KB. SES emits one OPEN per
 // load of the tracking pixel, so without a cap a recipient could grow the
@@ -398,19 +405,24 @@ func applyEngagementEvent(record *api.EmailRecipientRecord, eventType, snsMessag
 }
 
 // compactOpenedAtList repairs records written before OpenedAtList was bounded.
-// A list longer than maxOpenEvents is trimmed to its newest entries, then
-// further while the record exceeds maxKVRecordBytes, so that any event can
-// still be written to a record that was inflated earlier. OpenCount is first
-// raised to at least the stored list length so trimming never loses count.
-// It is a no-op for records within the bound.
+// It applies when the list is longer than maxOpenEvents (trimmed to its newest
+// entries first) or the serialised record exceeds compactAboveBytes. The list
+// is then trimmed from the oldest end until the record fits maxKVRecordBytes,
+// so that any event can still be written to a record that was inflated
+// earlier. OpenCount is first raised to at least the stored list length so
+// trimming never loses count. It is a no-op for records within both bounds.
 func compactOpenedAtList(record *api.EmailRecipientRecord) {
 	if record.OpenCount < len(record.OpenedAtList) {
 		record.OpenCount = len(record.OpenedAtList)
 	}
-	if len(record.OpenedAtList) <= maxOpenEvents {
+	if len(record.OpenedAtList) == 0 {
 		return
 	}
-	record.OpenedAtList = record.OpenedAtList[len(record.OpenedAtList)-maxOpenEvents:]
+	if len(record.OpenedAtList) > maxOpenEvents {
+		record.OpenedAtList = record.OpenedAtList[len(record.OpenedAtList)-maxOpenEvents:]
+	} else if b, err := json.Marshal(record); err != nil || len(b) <= compactAboveBytes {
+		return
+	}
 	for len(record.OpenedAtList) > 0 {
 		if b, err := json.Marshal(record); err == nil && len(b) <= maxKVRecordBytes {
 			return
