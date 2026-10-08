@@ -41,7 +41,7 @@ jobs:
             echo "::error::Unexpected pull request number"
             exit 1
           fi
-          branch_tag=$(echo "$HEAD_REF" | sed 's/[^_0-9a-zA-Z]/-/g')
+          branch_tag="${HEAD_REF//[!_0-9a-zA-Z]/-}"
           container_tag=$(echo "pr-${PR_NUMBER}-${branch_tag}" | cut -c -128)
           if [[ ! "$container_tag" =~ ^pr-[0-9]+-[-_0-9a-zA-Z]*$ ]]; then
             echo "::error::Computed PR container tag is outside the pr-<number>- namespace"
