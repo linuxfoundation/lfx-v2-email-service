@@ -336,6 +336,13 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	// An error reply ({"error": "..."}) also decodes into the analytics struct,
+	// leaving TotalSent at 0, so check for it first.
+	var analyticsErr emailapi.SendEmailErrorResponse
+	if err := json.Unmarshal(analyticsReply.Data, &analyticsErr); err == nil && analyticsErr.Error != "" {
+		fmt.Println("analytics failed:", analyticsErr.Error) // e.g. "service busy" or "timeout": retry later
+		return
+	}
 	var analytics emailapi.GetEmailEngagementAnalyticsResponse
 	if err := json.Unmarshal(analyticsReply.Data, &analytics); err != nil {
 		panic(err)
