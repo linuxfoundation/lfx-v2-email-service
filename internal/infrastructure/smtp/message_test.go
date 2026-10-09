@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
 func TestBuildEmailMessage_Headers(t *testing.T) {
@@ -339,6 +341,13 @@ func TestRedactAddressesInError(t *testing.T) {
 	err = redactAddressesInError(errors.New("550 <\u212Aate@example.com> unknown"), "kate@example.com")
 	assert.Equal(t, "550 <k****@example.com> unknown", err.Error())
 
+	// A shorter address that is longer in bytes (U+017F LONG S folds to "s")
+	// must not win over the longer address it is a fold-prefix of.
+	// "\u017F"x6 + "@x.io" is 11 runes but 17 bytes; the 13-rune address it
+	// fold-prefixes is only 13 bytes, so a byte-length order would leave ".z".
+	err = redactAddressesInError(errors.New("550 <ssssss@x.io.z> unknown"), strings.Repeat("\u017F", 6)+"@x.io", "ssssss@x.io.z")
+	assert.Equal(t, "550 <"+redaction.RedactEmail("ssssss@x.io.z")+"> unknown", err.Error())
+
 	// A message with only a partial prefix of an address is left unchanged.
 	orig = errors.New("550 <jane@example.co")
 	assert.Same(t, orig, redactAddressesInError(orig, "jane@example.com"))
@@ -367,12 +376,15 @@ func TestSendMessage_RejectsOversizedEnvelopeAddresses(t *testing.T) {
 	// address was rejected before any SMTP exchange.
 	cfg := Config{Host: "127.0.0.1", Port: 1}
 	longLocal := strings.Repeat("a", 300) + "@example.com"
+	local65 := strings.Repeat("a", 65) + "@example.com"
 	hugeRaw := strings.Repeat("a", 1<<20) + "@example.com"
 
 	assert.ErrorIs(t, sendMessage(context.Background(), longLocal, "noreply@example.org", "msg", cfg), errInvalidRecipientAddress)
 	assert.ErrorIs(t, sendMessage(context.Background(), hugeRaw, "noreply@example.org", "msg", cfg), errInvalidRecipientAddress)
 	assert.ErrorIs(t, sendMessage(context.Background(), "jane@example.com", longLocal, "msg", cfg), errInvalidFromAddress)
 	assert.ErrorIs(t, sendMessage(context.Background(), "jane@example.com", hugeRaw, "msg", cfg), errInvalidFromAddress)
+	assert.ErrorIs(t, sendMessage(context.Background(), local65, "noreply@example.org", "msg", cfg), errInvalidRecipientAddress)
+	assert.ErrorIs(t, sendMessage(context.Background(), "jane@example.com", local65, "msg", cfg), errInvalidFromAddress)
 }
 
 func TestGenerateBoundary_Unique(t *testing.T) {

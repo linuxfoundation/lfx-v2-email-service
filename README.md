@@ -72,6 +72,11 @@ that other parties can read. Keep your own mapping if you need a human-readable 
 |---|---|
 | `invalid request payload` | Request body is not valid JSON |
 | `to, subject, html, and text are required` | One or more required fields are missing |
+| `to address too long` | `to` exceeds 512 bytes, or its address exceeds 254 bytes or its local part 64 bytes (RFC 5321); nothing was sent |
+| `from address too long` | `from` exceeds the same limits as `to`; nothing was sent |
+| `reply_to address too long` | `reply_to` exceeds the same limits as `to`; nothing was sent |
+| `subject too long` | `subject` exceeds 998 bytes (`api.MaxSubjectLength`); nothing was sent |
+| `from_display_name too long` | `from_display_name` exceeds 256 bytes (`api.MaxFromDisplayNameLength`); nothing was sent |
 | `invalid from address` | `from` field is not a valid email address, has a local part that requires RFC 5322 quoting, or contains non-ASCII characters |
 | `from address domain not allowed` | `from` domain is not in the service's allowed list |
 | `invalid reply_to address` | `reply_to` field is not a valid email address, has a local part that requires RFC 5322 quoting, or contains non-ASCII characters |

@@ -89,7 +89,8 @@ const (
 	// MaxAddressLocalPartLength is the RFC 5321 limit on an address local part.
 	MaxAddressLocalPartLength = 64
 
-	// MaxSubjectLength bounds the subject field (the RFC 5322 line limit).
+	// MaxSubjectLength bounds the raw subject field. It is a size bound only:
+	// the encoded Subject header line can be longer than this.
 	MaxSubjectLength = 998
 
 	// MaxFromDisplayNameLength bounds the from_display_name field.

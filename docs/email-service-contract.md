@@ -61,8 +61,8 @@ Request: `api.SendEmailRequest`
 | `reply_to` | no | Sets the SMTP `Reply-To` header. The domain must be in `SMTP_ALLOWED_REPLY_TO_DOMAINS` (default: `linuxfoundation.org`); subdomain suffix matching applies, so the default also permits `lfx.linuxfoundation.org`. |
 | `group_id` | no | Group handle for a batch or campaign. Omit it to start a new group: the service issues a handle and returns it in `SendEmailResponse.group_id`. To add a send to an existing group, pass a handle previously returned by `send_email`. Any other value (wrong format, or a well-formed handle with no group index entry) is rejected before sending, except in degraded mode (see [Group Handles](#group-handles)). |
 
-Field lengths are checked, in bytes, before any address is parsed or any field reaches a header
-or the SMTP envelope: `to`, `from`, and `reply_to` are limited to `api.MaxAddressFieldLength`
+Field lengths are checked, in bytes, right after the required-field check and before any other
+validation, parsing, or sending (an address field's raw length is checked before it is parsed): `to`, `from`, and `reply_to` are limited to `api.MaxAddressFieldLength`
 (512) including any display name, with the address itself limited to `api.MaxAddressLength`
 (254) and its local part to `api.MaxAddressLocalPartLength` (64), per RFC 5321; `subject` to
 `api.MaxSubjectLength` (998); `from_display_name` to `api.MaxFromDisplayNameLength` (256).

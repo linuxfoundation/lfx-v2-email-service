@@ -17,7 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
@@ -135,18 +135,18 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 	// recipient after a comma), so return sentinels instead of wrapping them.
 	// Envelope addresses longer than RFC 5321 allows are rejected before they
 	// reach the server, so they never enter the SMTP exchange or its error path.
-	if len(from) > api.MaxAddressFieldLength {
+	if domain.CheckAddressLength(from) != nil {
 		return errInvalidFromAddress
 	}
 	fromAddr, err := mail.ParseAddress(from)
-	if err != nil || len(fromAddr.Address) > api.MaxAddressLength {
+	if err != nil {
 		return errInvalidFromAddress
 	}
-	if len(to) > api.MaxAddressFieldLength {
+	if domain.CheckAddressLength(to) != nil {
 		return errInvalidRecipientAddress
 	}
 	toAddr, err := mail.ParseAddress(to)
-	if err != nil || len(toAddr.Address) > api.MaxAddressLength {
+	if err != nil {
 		return errInvalidRecipientAddress
 	}
 
@@ -171,7 +171,7 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 // redacted error deliberately does not wrap err, so the unredacted text stays
 // unreachable.
 //
-// All addresses are matched in a single pass, longest first, so an address
+// All addresses are matched in a single pass, longest (in runes) first, so an address
 // that is a substring of another (e.g. a@x.com inside ba@x.com) cannot break
 // up the longer one before it is redacted. Matching is a direct Unicode
 // case-folding comparison: nothing is compiled from the addresses, so the
@@ -202,7 +202,11 @@ func redactAddressesInError(err error, addrs ...string) error {
 	if len(uniq) == 0 {
 		return err
 	}
-	sort.SliceStable(uniq, func(i, j int) bool { return len(uniq[i]) > len(uniq[j]) })
+	// Order by rune count, not bytes: case folding can change a rune's UTF-8
+	// width, so a fold-prefix of an address can be longer in bytes than it.
+	sort.SliceStable(uniq, func(i, j int) bool {
+		return utf8.RuneCountInString(uniq[i]) > utf8.RuneCountInString(uniq[j])
+	})
 
 	var b strings.Builder
 	matched := false
