@@ -11,11 +11,13 @@ import (
 	"mime"
 	"net/mail"
 	"net/smtp"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
@@ -131,9 +133,17 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 
 	// mail.ParseAddress errors can quote the unparsed input (e.g. a second
 	// recipient after a comma), so return sentinels instead of wrapping them.
+	// Envelope addresses longer than RFC 5321 allows are rejected before they
+	// reach the server, so they never enter the SMTP exchange or its error path.
+	if domain.CheckAddressLength(from) != nil {
+		return errInvalidFromAddress
+	}
 	fromAddr, err := mail.ParseAddress(from)
 	if err != nil {
 		return errInvalidFromAddress
+	}
+	if domain.CheckAddressLength(to) != nil {
+		return errInvalidRecipientAddress
 	}
 	toAddr, err := mail.ParseAddress(to)
 	if err != nil {
@@ -161,42 +171,105 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 // redacted error deliberately does not wrap err, so the unredacted text stays
 // unreachable.
 //
-// All addresses are matched in a single pass, longest first, so an address
+// All addresses are matched in a single pass, longest (in runes) first, so an address
 // that is a substring of another (e.g. a@x.com inside ba@x.com) cannot break
-// up the longer one before it is redacted.
+// up the longer one before it is redacted. Matching is a direct Unicode
+// case-folding comparison: nothing is compiled from the addresses, so the
+// work allocates nothing beyond the redacted message itself.
 func redactAddressesInError(err error, addrs ...string) error {
 	if err == nil {
 		return err
 	}
-	byLower := make(map[string]string, len(addrs))
-	var patterns []string
-	for _, addr := range addrs {
-		if addr == "" {
-			continue
-		}
-		if _, dup := byLower[strings.ToLower(addr)]; dup {
-			continue
-		}
-		byLower[strings.ToLower(addr)] = addr
-		patterns = append(patterns, regexp.QuoteMeta(addr))
-	}
-	if len(patterns) == 0 {
-		return err
-	}
-	// Go regexp alternation is leftmost-first, so list longer addresses first.
-	sort.Slice(patterns, func(i, j int) bool { return len(patterns[i]) > len(patterns[j]) })
-	re, reErr := regexp.Compile("(?i)(?:" + strings.Join(patterns, "|") + ")")
-	if reErr != nil {
-		return errors.New("smtp server rejected message")
-	}
 	msg := err.Error()
-	if !re.MatchString(msg) {
+	var uniq []string
+	for _, addr := range addrs {
+		// Every rune of addr matches at least one byte of msg, so an address
+		// with more runes than msg has bytes cannot occur in it.
+		if addr == "" || utf8.RuneCountInString(addr) > len(msg) {
+			continue
+		}
+		dup := false
+		for _, u := range uniq {
+			if strings.EqualFold(u, addr) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			uniq = append(uniq, addr)
+		}
+	}
+	if len(uniq) == 0 {
 		return err
 	}
-	return errors.New(re.ReplaceAllStringFunc(msg, func(m string) string {
-		if addr, ok := byLower[strings.ToLower(m)]; ok {
-			return redaction.RedactEmail(addr)
+	// Order by rune count, not bytes: case folding can change a rune's UTF-8
+	// width, so a fold-prefix of an address can be longer in bytes than it.
+	sort.SliceStable(uniq, func(i, j int) bool {
+		return utf8.RuneCountInString(uniq[i]) > utf8.RuneCountInString(uniq[j])
+	})
+
+	var b strings.Builder
+	matched := false
+	last := 0 // msg[last:i] has not been copied to b yet
+	for i := 0; i < len(msg); {
+		if addr, n := matchAddressAt(msg[i:], uniq); n > 0 {
+			b.WriteString(msg[last:i])
+			b.WriteString(redaction.RedactEmail(addr))
+			matched = true
+			i += n
+			last = i
+			continue
 		}
-		return redaction.Redact(m)
-	}))
+		_, size := utf8.DecodeRuneInString(msg[i:])
+		i += size
+	}
+	if !matched {
+		return err
+	}
+	b.WriteString(msg[last:])
+	return errors.New(b.String())
+}
+
+// matchAddressAt returns the first of addrs that is a case-insensitive prefix
+// of s, and the number of bytes of s it spans; n is 0 when none matches.
+func matchAddressAt(s string, addrs []string) (addr string, n int) {
+	for _, a := range addrs {
+		if n := foldPrefixLen(s, a); n > 0 {
+			return a, n
+		}
+	}
+	return "", 0
+}
+
+// foldPrefixLen reports the length in bytes of the prefix of s that equals
+// prefix under Unicode simple case folding (as strings.EqualFold), or 0 when s
+// does not start with prefix. The matched length can differ from len(prefix)
+// because case-folded runes may have different UTF-8 widths.
+func foldPrefixLen(s, prefix string) int {
+	i := 0
+	for _, pr := range prefix {
+		if i >= len(s) {
+			return 0
+		}
+		sr, size := utf8.DecodeRuneInString(s[i:])
+		if !equalFoldRune(sr, pr) {
+			return 0
+		}
+		i += size
+	}
+	return i
+}
+
+// equalFoldRune reports whether a and b are equal under Unicode simple case
+// folding.
+func equalFoldRune(a, b rune) bool {
+	if a == b {
+		return true
+	}
+	for r := unicode.SimpleFold(a); r != a; r = unicode.SimpleFold(r) {
+		if r == b {
+			return true
+		}
+	}
+	return false
 }
