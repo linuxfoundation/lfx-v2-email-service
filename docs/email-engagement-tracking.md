@@ -78,7 +78,7 @@ SQS acknowledgement. See `docs/email-service-contract.md` for payload schemas.
 
 Unknown event types, malformed SNS/SES payloads, missing tracking headers, and a non-UUID extracted `email_id` are treated as non-retryable skips (handler returns `nil`, SQS message is deleted).
 
-The engagement handler distinguishes three classes of `email-recipients` KV errors:
+The engagement handler distinguishes four classes of `email-recipients` KV errors:
 
 - **`ErrKeyNotFound`** — genuine miss (late-arriving SES event for an unknown email ID, or record already expired). Non-retryable: handler returns `nil`, SQS message is deleted.
 - **`domain.ErrRecordTooLarge`** — the server (or client) rejected the updated record for exceeding the bucket's maximum value size. Deterministic for that record, so `kv.Store.UpdateRecord` does not retry it and the handler returns `nil` (SQS message is deleted) instead of leaving a poison message on the queue.
