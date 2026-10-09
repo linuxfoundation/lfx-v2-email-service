@@ -56,7 +56,8 @@ func NewAddressPolicy(fromDomains, replyToDomains, recipientDomains []string) Ad
 // IsRecipientAllowed reports whether to is a permitted recipient.
 // Returns (true, nil) when AllowedRecipientDomains is empty (permit all) or when
 // the address domain matches an allowed entry.
-// Returns (false, ErrAddressMalformed) when to cannot be parsed as an address.
+// Returns (false, ErrAddressMalformed) when to cannot be parsed as an address or
+// the address (not the display name) contains non-ASCII characters.
 // Returns (false, nil) when the domain is absent from the allowlist.
 func (p AddressPolicy) IsRecipientAllowed(to string) (bool, error) {
 	if len(p.AllowedRecipientDomains) == 0 {
@@ -65,6 +66,14 @@ func (p AddressPolicy) IsRecipientAllowed(to string) (bool, error) {
 	addr, err := mail.ParseAddress(to)
 	if err != nil {
 		return false, ErrAddressMalformed
+	}
+	// strings.ToLower folds some non-ASCII runes to ASCII (e.g. U+0130 to "i"),
+	// so a non-ASCII domain could match the allowlist while the unfolded domain
+	// is used as the SMTP envelope recipient. Reject them, as strictAddressDomain does.
+	for i := 0; i < len(addr.Address); i++ {
+		if addr.Address[i] >= utf8.RuneSelf {
+			return false, ErrAddressMalformed
+		}
 	}
 	// Use LastIndex so RFC-valid quoted local parts containing "@" don't
 	// cause mis-classification; the domain is always after the final "@".
