@@ -65,6 +65,39 @@ func TestAddressPolicy_IsRecipientAllowed(t *testing.T) {
 			to:               "user@linuxfoundation.org",
 			wantAllowed:      true,
 		},
+		{
+			name:             "non-ASCII domain that case-folds onto an allowed domain is rejected",
+			recipientDomains: []string{"linuxfoundation.org"},
+			to:               "x@lİnuxfoundation.org",
+			wantAllowed:      false,
+			wantErr:          domain.ErrAddressMalformed,
+		},
+		{
+			name:             "Kelvin sign in subdomain that case-folds onto an allowed domain is rejected",
+			recipientDomains: []string{"linuxfoundation.org"},
+			to:               "x@Kube.linuxfoundation.org",
+			wantAllowed:      false,
+			wantErr:          domain.ErrAddressMalformed,
+		},
+		{
+			name:             "non-ASCII local part is rejected",
+			recipientDomains: []string{"linuxfoundation.org"},
+			to:               "jörg@linuxfoundation.org",
+			wantAllowed:      false,
+			wantErr:          domain.ErrAddressMalformed,
+		},
+		{
+			name:             "non-ASCII display name with ASCII address is allowed",
+			recipientDomains: []string{"linuxfoundation.org"},
+			to:               "Jörg <user@linuxfoundation.org>",
+			wantAllowed:      true,
+		},
+		{
+			name:             "non-ASCII domain is permitted when the allowlist is empty",
+			recipientDomains: nil,
+			to:               "x@lİnuxfoundation.org",
+			wantAllowed:      true,
+		},
 	}
 
 	for _, tc := range tests {

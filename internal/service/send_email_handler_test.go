@@ -644,6 +644,20 @@ func TestSendEmailHandler_RecipientDomainAllowlist(t *testing.T) {
 		assert.Empty(t, r.EmailID)
 	})
 
+	t.Run("non-ASCII domain that case-folds onto an allowed domain is skipped", func(t *testing.T) {
+		t.Parallel()
+		h, s := makeHandler([]string{"linuxfoundation.org"})
+		req := validReqLFX
+		req.To = "x@lİnuxfoundation.org"
+		var resp []byte
+		data, _ := json.Marshal(req)
+		h.HandleData(context.Background(), data, respond(&resp))
+		assert.False(t, s.called, "sender must not be called for a non-ASCII recipient address")
+		var r api.SendEmailResponse
+		require.NoError(t, json.Unmarshal(resp, &r))
+		assert.Empty(t, r.EmailID)
+	})
+
 	t.Run("multiple allowed domains — match on second entry", func(t *testing.T) {
 		t.Parallel()
 		h, s := makeHandler([]string{"example.org", "linuxfoundation.org"})

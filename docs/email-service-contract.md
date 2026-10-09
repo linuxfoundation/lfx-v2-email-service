@@ -91,8 +91,9 @@ When `SMTP_ALLOWED_RECIPIENT_DOMAINS` is non-empty (non-prod environments), a re
 domain is not in the list (subdomain suffix matching applies) is **not** an error: the service
 skips the send and replies with an empty `SendEmailResponse` (`email_id` and `group_id` both
 empty), so callers do not treat expected non-prod filtering as a delivery failure. No tracking
-records are written for skipped sends. When the variable is empty (production default), all
-recipient domains are permitted.
+records are written for skipped sends. While the allowlist is active, a recipient that cannot be
+parsed, or whose address (not display name) contains non-ASCII characters, is skipped the same
+way. When the variable is empty (production default), all recipient domains are permitted.
 
 ## Get Email Status
 
