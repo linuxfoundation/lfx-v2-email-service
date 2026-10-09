@@ -61,6 +61,13 @@ Request: `api.SendEmailRequest`
 | `reply_to` | no | Sets the SMTP `Reply-To` header. The domain must be in `SMTP_ALLOWED_REPLY_TO_DOMAINS` (default: `linuxfoundation.org`); subdomain suffix matching applies, so the default also permits `lfx.linuxfoundation.org`. |
 | `group_id` | no | Group handle for a batch or campaign. Omit it to start a new group: the service issues a handle and returns it in `SendEmailResponse.group_id`. To add a send to an existing group, pass a handle previously returned by `send_email`. Any other value (wrong format, or a well-formed handle with no group index entry) is rejected before sending, except in degraded mode (see [Group Handles](#group-handles)). |
 
+Field lengths are checked, in bytes, before any address is parsed or any field reaches a header
+or the SMTP envelope: `to`, `from`, and `reply_to` are limited to `api.MaxAddressFieldLength`
+(512) including any display name, with the address itself limited to `api.MaxAddressLength`
+(254) and its local part to `api.MaxAddressLocalPartLength` (64), per RFC 5321; `subject` to
+`api.MaxSubjectLength` (998); `from_display_name` to `api.MaxFromDisplayNameLength` (256).
+An oversized field is rejected with the matching `... too long` error below.
+
 Success reply: `api.SendEmailResponse`
 
 | Field | Description |
@@ -74,6 +81,11 @@ Error reply: `api.SendEmailErrorResponse`
 | --- | --- |
 | `invalid request payload` | Request body is not valid JSON. |
 | `to, subject, html, and text are required` | One or more required fields are empty. |
+| `to address too long` | `to` exceeds `api.MaxAddressFieldLength` (512) bytes, or its address exceeds `api.MaxAddressLength` (254) bytes or its local part `api.MaxAddressLocalPartLength` (64) bytes (RFC 5321). No mail is sent. |
+| `from address too long` | `from` exceeds the same limits as `to`. No mail is sent. |
+| `reply_to address too long` | `reply_to` exceeds the same limits as `to`. No mail is sent. |
+| `subject too long` | `subject` exceeds `api.MaxSubjectLength` (998) bytes. No mail is sent. |
+| `from_display_name too long` | `from_display_name` exceeds `api.MaxFromDisplayNameLength` (256) bytes. No mail is sent. |
 | `invalid from address` | `from` is set but is not a parseable email address, contains non-ASCII characters, or its local part would require RFC 5322 quoting (only ASCII dot-atom local parts are accepted). |
 | `from address domain not allowed` | `from` domain is not in `SMTP_ALLOWED_FROM_DOMAINS`. |
 | `invalid reply_to address` | `reply_to` is set but is not a parseable email address, contains non-ASCII characters, or its local part would require RFC 5322 quoting (only ASCII dot-atom local parts are accepted). |

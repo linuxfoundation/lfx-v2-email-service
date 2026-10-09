@@ -76,6 +76,26 @@ const (
 	MaxGroupStatusLimit = 1000
 )
 
+// Length limits enforced by send_email before any address is parsed or any
+// field is written into a header or the SMTP envelope. Lengths are in bytes.
+const (
+	// MaxAddressFieldLength bounds the raw to, from, and reply_to fields,
+	// including any display name (e.g. "Jane Doe <jane@example.com>").
+	MaxAddressFieldLength = 512
+
+	// MaxAddressLength is the RFC 5321 limit on a mailbox (path) address.
+	MaxAddressLength = 254
+
+	// MaxAddressLocalPartLength is the RFC 5321 limit on an address local part.
+	MaxAddressLocalPartLength = 64
+
+	// MaxSubjectLength bounds the subject field (the RFC 5322 line limit).
+	MaxSubjectLength = 998
+
+	// MaxFromDisplayNameLength bounds the from_display_name field.
+	MaxFromDisplayNameLength = 256
+)
+
 // SendEmailRequest is the JSON payload published to SendEmailSubject.
 // Callers render the HTML and plain-text bodies before publishing.
 //

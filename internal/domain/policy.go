@@ -8,6 +8,8 @@ import (
 	"net/mail"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
 )
 
 // Sentinel errors returned by AddressPolicy validation methods.
@@ -22,7 +24,35 @@ var (
 	// ErrReplyToDomainNotAllowed is returned when the Reply-To domain is not in
 	// AddressPolicy.AllowedReplyToDomains.
 	ErrReplyToDomainNotAllowed = errors.New("reply_to domain not allowed")
+
+	// ErrAddressTooLong is returned by CheckAddressLength when an address field
+	// exceeds the limits in pkg/api.
+	ErrAddressTooLong = errors.New("address too long")
 )
+
+// CheckAddressLength bounds an address field before it is parsed further or
+// used in a header or the SMTP envelope. It returns ErrAddressTooLong when raw
+// exceeds api.MaxAddressFieldLength bytes (checked before parsing), or when raw
+// parses as an address whose mailbox exceeds api.MaxAddressLength bytes or whose
+// local part exceeds api.MaxAddressLocalPartLength bytes. A raw value within the
+// field bound that does not parse returns nil, leaving malformed-address
+// handling to the existing validation.
+func CheckAddressLength(raw string) error {
+	if len(raw) > api.MaxAddressFieldLength {
+		return ErrAddressTooLong
+	}
+	addr, err := mail.ParseAddress(raw)
+	if err != nil {
+		return nil
+	}
+	if len(addr.Address) > api.MaxAddressLength {
+		return ErrAddressTooLong
+	}
+	if at := strings.LastIndex(addr.Address, "@"); at > api.MaxAddressLocalPartLength {
+		return ErrAddressTooLong
+	}
+	return nil
+}
 
 // AddressPolicy holds the three address allowlists for a send-email request.
 // Construct it with NewAddressPolicy; do not build the struct literal directly

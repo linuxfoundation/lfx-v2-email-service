@@ -333,6 +333,46 @@ func TestRedactAddressesInError(t *testing.T) {
 	assert.Equal(t, "554 <sen****@example.com> not verified", err.Error())
 	err = redactAddressesInError(errors.New("554 <SensitiveA@example.com> and <a@example.com>"), "sensitivea@example.com", "a@example.com")
 	assert.Equal(t, "554 <sen****@example.com> and <**@example.com>", err.Error())
+
+	// Matching uses Unicode case folding, including runes whose folded form has
+	// a different UTF-8 width (U+212A KELVIN SIGN folds to "k").
+	err = redactAddressesInError(errors.New("550 <\u212Aate@example.com> unknown"), "kate@example.com")
+	assert.Equal(t, "550 <k****@example.com> unknown", err.Error())
+
+	// A message with only a partial prefix of an address is left unchanged.
+	orig = errors.New("550 <jane@example.co")
+	assert.Same(t, orig, redactAddressesInError(orig, "jane@example.com"))
+}
+
+func TestRedactAddressesInError_LargeAddressDoesNotAllocate(t *testing.T) {
+	huge := strings.Repeat("a", 1<<20) + "@example.com"
+	orig := errors.New("421 service not available")
+
+	allocs := testing.AllocsPerRun(5, func() {
+		_ = redactAddressesInError(orig, huge, "noreply@example.org")
+	})
+	assert.LessOrEqual(t, allocs, 2.0, "redaction must not allocate in proportion to the address")
+	assert.Same(t, orig, redactAddressesInError(orig, huge))
+
+	// Even when the error echoes the address, only the redacted output is built.
+	echoed := errors.New("501 <" + huge + "> too long")
+	err := redactAddressesInError(echoed, huge)
+	assert.Equal(t, "501 <aaa****@example.com> too long", err.Error())
+}
+
+func TestSendMessage_RejectsOversizedEnvelopeAddresses(t *testing.T) {
+	t.Parallel()
+
+	// Port 1 on loopback: a dial would fail, so the sentinel proves the
+	// address was rejected before any SMTP exchange.
+	cfg := Config{Host: "127.0.0.1", Port: 1}
+	longLocal := strings.Repeat("a", 300) + "@example.com"
+	hugeRaw := strings.Repeat("a", 1<<20) + "@example.com"
+
+	assert.ErrorIs(t, sendMessage(context.Background(), longLocal, "noreply@example.org", "msg", cfg), errInvalidRecipientAddress)
+	assert.ErrorIs(t, sendMessage(context.Background(), hugeRaw, "noreply@example.org", "msg", cfg), errInvalidRecipientAddress)
+	assert.ErrorIs(t, sendMessage(context.Background(), "jane@example.com", longLocal, "msg", cfg), errInvalidFromAddress)
+	assert.ErrorIs(t, sendMessage(context.Background(), "jane@example.com", hugeRaw, "msg", cfg), errInvalidFromAddress)
 }
 
 func TestGenerateBoundary_Unique(t *testing.T) {
