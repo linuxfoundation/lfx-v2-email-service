@@ -82,6 +82,7 @@ The engagement handler distinguishes three classes of `email-recipients` KV erro
 
 - **`ErrKeyNotFound`** — genuine miss (late-arriving SES event for an unknown email ID, or record already expired). Non-retryable: handler returns `nil`, SQS message is deleted.
 - **`domain.ErrRecordTooLarge`** — the server (or client) rejected the updated record for exceeding the bucket's maximum value size. Deterministic for that record, so `kv.Store.UpdateRecord` does not retry it and the handler returns `nil` (SQS message is deleted) instead of leaving a poison message on the queue.
+- **`domain.ErrRecordUnencodable`** — the updated record could not be serialised to JSON, so nothing was written. Deterministic for that event, so the handler returns `nil` (SQS message is deleted). SES timestamps whose UTC year falls outside 0..9999 (possible with a numeric zone offset) are replaced with the processing time before they reach the record, so they do not trigger this path.
 - **Any other KV error** — transient read or network failure. Retryable: handler returns the error, SQS message is left on the queue and redelivered. This ensures engagement events are not silently dropped during a KV outage.
 
 ## SQS Poller

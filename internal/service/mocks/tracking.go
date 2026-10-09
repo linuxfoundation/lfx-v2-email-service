@@ -5,6 +5,7 @@ package mocks
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -188,6 +189,10 @@ func (m *TrackingStore) UpdateRecord(_ context.Context, emailID string, fn func(
 		return nil // no record — drop silently, same as kv.Store
 	}
 	fn(&r)
+	// Like kv.Store, a record that cannot be serialised is not stored.
+	if _, err := json.Marshal(r); err != nil {
+		return fmt.Errorf("marshal updated recipient record: %w: %w", domain.ErrRecordUnencodable, err)
+	}
 	m.records[emailID] = r
 	return nil
 }

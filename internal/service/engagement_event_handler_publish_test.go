@@ -1069,6 +1069,7 @@ func TestEngagementEventHandler_Handle_RecordTooLarge_NotRetried(t *testing.T) {
 		wantError bool
 	}{
 		{"record too large", fmt.Errorf("kv update: %w", domain.ErrRecordTooLarge), false},
+		{"record unencodable", fmt.Errorf("marshal: %w", domain.ErrRecordUnencodable), false},
 		{"transient error", errors.New("kv unavailable"), true},
 	}
 
@@ -1091,6 +1092,71 @@ func TestEngagementEventHandler_Handle_RecordTooLarge_NotRetried(t *testing.T) {
 			assert.Empty(t, pub.calls, "must not publish when the KV write failed")
 		})
 	}
+}
+
+// TestEngagementEventHandler_Handle_OutOfRangeTimestamp verifies that an SES
+// timestamp whose numeric zone offset moves the UTC instant outside years
+// 0..9999 does not make the record unserialisable: the event is recorded with
+// the processing-time fallback and acknowledged, so it is not redelivered.
+func TestEngagementEventHandler_Handle_OutOfRangeTimestamp(t *testing.T) {
+	t.Parallel()
+
+	for _, ts := range []string{"9999-12-31T23:00:00-05:00", "0000-01-01T00:00:00+01:00"} {
+		for _, eventType := range []string{"Open", "Click", "DELIVERY", "BOUNCE", "COMPLAINT"} {
+			t.Run(eventType+"_"+ts, func(t *testing.T) {
+				t.Parallel()
+
+				store := mocks.NewTrackingStore()
+				seedRecord(store)
+				pub := &mockPublisher{}
+				h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+				before := time.Now().UTC()
+				require.NoError(t, h.Handle(context.Background(), sqsMsg(t, eventType, testEmailID, "", ts)))
+				after := time.Now().UTC()
+
+				record, ok := store.GetStoredRecord(testEmailID)
+				require.True(t, ok)
+				_, err := json.Marshal(record)
+				require.NoError(t, err, "stored record must be serialisable")
+
+				var at *time.Time
+				switch eventType {
+				case "Open":
+					at = record.LastOpenedAt
+				case "Click":
+					at = record.LastClickedAt
+				case "DELIVERY":
+					at = record.DeliveredAt
+				default:
+					at = record.FailedAt
+				}
+				require.NotNil(t, at, "event must be recorded")
+				assert.False(t, at.Before(before) || at.After(after), "want time.Now() fallback, got %s", at)
+				require.Len(t, pub.calls, 1)
+			})
+		}
+	}
+}
+
+// TestEngagementEventHandler_Handle_UnencodableRecord_Acknowledged verifies that
+// an update the store cannot serialise is acknowledged rather than retried: the
+// record seeded with an out-of-range time cannot be marshalled whatever the
+// event, so redelivery would fail identically.
+func TestEngagementEventHandler_Handle_UnencodableRecord_Acknowledged(t *testing.T) {
+	t.Parallel()
+
+	bad := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	store := mocks.NewTrackingStore()
+	store.PutRecord(testEmailID, api.EmailRecipientRecord{EmailID: testEmailID, GroupID: testGroupID, SentAt: bad})
+	pub := &mockPublisher{}
+	h := service.NewEngagementEventHandler(store).WithEngagementPublisher(pub)
+
+	require.NoError(t, h.Handle(context.Background(), sqsMsg(t, "BOUNCE", testEmailID, "", testTimestamp)))
+	assert.Empty(t, pub.calls, "must not publish when the KV write failed")
+	record, ok := store.GetStoredRecord(testEmailID)
+	require.True(t, ok)
+	assert.False(t, record.Failed, "unserialisable record must not be stored")
 }
 
 // TestEngagementEventHandler_Open_LegacyOversizedRecordCompacted verifies that a

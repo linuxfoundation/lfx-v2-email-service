@@ -320,7 +320,7 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
 
 **Publish-after-KV:** after a successful KV write, the handler publishes the corresponding push event (best-effort — a NATS failure is logged but does not roll back the KV write or block SQS acknowledgement). DELIVERY, BOUNCE, and COMPLAINT are single-fire: the boolean guard (`Delivered`/`Failed`) prevents duplicate publishes on replays.
 
-**KV write conflict retry:** the handler retries the `KeyValue.Update` once on any update error before giving up and returning an error (which keeps the SQS message in-flight for redelivery). The exception is a value rejected for exceeding the bucket's size limit: `kv.Store.UpdateRecord` returns `domain.ErrRecordTooLarge` without retrying, and the handler acknowledges the message (returns `nil`) because redelivery cannot succeed.
+**KV write conflict retry:** the handler retries the `KeyValue.Update` once on any update error before giving up and returning an error (which keeps the SQS message in-flight for redelivery). The exception is a value rejected for exceeding the bucket's size limit: `kv.Store.UpdateRecord` returns `domain.ErrRecordTooLarge` without retrying, and the handler acknowledges the message (returns `nil`) because redelivery cannot succeed. Likewise, an updated record that cannot be serialised is not written: `UpdateRecord` returns `domain.ErrRecordUnencodable` and the handler acknowledges the message. `parseTimestamp` replaces an SES timestamp whose UTC year falls outside 0..9999 (reachable with a numeric zone offset) with `time.Now().UTC()`, so such an event is still recorded.
 
 ## Environment Variables
 
@@ -365,7 +365,8 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
   (`PutGroup` is also what makes `GroupExists` report an issued group).
   `WriteErr`, `AppendErr`, `GetErrFor`, and `GroupErrFor` inject errors for specific
   conditions. Like `kv.Store`, it enforces `api.MaxGroupEmails` with `domain.ErrGroupFull`
-  and its `ScanGroupRecords` honours `offset`/`limit` and a done `ctx`. Use this for all handler tests that touch KV tracking — do not write a
+  and its `ScanGroupRecords` honours `offset`/`limit` and a done `ctx`; its `UpdateRecord`
+  returns `domain.ErrRecordUnencodable`, without storing, for a record that cannot be marshalled. Use this for all handler tests that touch KV tracking — do not write a
   new tracking mock.
 - **`HandleData`** on `SendEmailHandler` and `GetEmailStatusHandler` — testable entry
   point that takes raw bytes and a respond callback; `Handle` wraps it for real NATS
