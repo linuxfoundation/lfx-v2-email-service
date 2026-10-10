@@ -1057,10 +1057,10 @@ func TestEngagementEventHandler_Open_EntryRolledBackAtSizeLimit(t *testing.T) {
 	assert.Equal(t, 1, evt.OpenCount)
 }
 
-// TestEngagementEventHandler_Handle_RecordTooLarge_NotRetried verifies that a
-// deterministic size rejection from the store is acknowledged (Handle returns
-// nil, no publish) while any other store error remains retryable.
-func TestEngagementEventHandler_Handle_RecordTooLarge_NotRetried(t *testing.T) {
+// TestEngagementEventHandler_Handle_DeterministicStoreError_NotRetried verifies
+// that a deterministic size or encoding rejection from the store is acknowledged
+// (Handle returns nil, no publish) while any other store error remains retryable.
+func TestEngagementEventHandler_Handle_DeterministicStoreError_NotRetried(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {

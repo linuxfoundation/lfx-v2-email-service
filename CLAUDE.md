@@ -366,7 +366,7 @@ SES delivers engagement events via SNS → SQS. The SQS poller (`internal/infras
   `WriteErr`, `AppendErr`, `GetErrFor`, and `GroupErrFor` inject errors for specific
   conditions. Like `kv.Store`, it enforces `api.MaxGroupEmails` with `domain.ErrGroupFull`
   and its `ScanGroupRecords` honours `offset`/`limit` and a done `ctx`; its `UpdateRecord`
-  returns `domain.ErrRecordUnencodable`, without storing, for a record that cannot be marshalled. Use this for all handler tests that touch KV tracking — do not write a
+  applies `fn` to a deep copy and returns `domain.ErrRecordUnencodable`, leaving the stored record unchanged, for a record that cannot be marshalled. Use this for all handler tests that touch KV tracking — do not write a
   new tracking mock.
 - **`HandleData`** on `SendEmailHandler` and `GetEmailStatusHandler` — testable entry
   point that takes raw bytes and a respond callback; `Handle` wraps it for real NATS
