@@ -201,10 +201,10 @@ func (h *EngagementEventHandler) Handle(ctx context.Context, msg types.Message) 
 			capturedClickEventID = env.MessageID
 		}
 	})
-	if errors.Is(err, domain.ErrRecordTooLarge) {
+	if errors.Is(err, domain.ErrRecordTooLarge) || errors.Is(err, domain.ErrRecordUnencodable) {
 		// Deterministic for this record: redelivery would fail the same way,
 		// so acknowledge the message instead of leaving it as a poison message.
-		slog.WarnContext(ctx, "recipient record too large to update, dropping event",
+		slog.WarnContext(ctx, "recipient record cannot be stored, dropping event",
 			logging.ErrKey, err, "event_type", strings.ToLower(eventType))
 		return nil
 	}
@@ -438,6 +438,9 @@ func compactOpenedAtList(record *api.EmailRecipientRecord) {
 }
 
 // parseTimestamp parses an RFC3339 timestamp string, falling back to time.Now().UTC().
+// A timestamp whose UTC instant falls outside years 0..9999 (possible with a
+// numeric zone offset, e.g. 9999-12-31T23:00:00-05:00) also falls back, because
+// time.Time.MarshalJSON rejects such a year and the record could never be stored.
 func parseTimestamp(s string) time.Time {
 	if s == "" {
 		return time.Now().UTC()
@@ -446,7 +449,11 @@ func parseTimestamp(s string) time.Time {
 	if err != nil || t.IsZero() {
 		return time.Now().UTC()
 	}
-	return t.UTC()
+	t = t.UTC()
+	if y := t.Year(); y < 0 || y > 9999 {
+		return time.Now().UTC()
+	}
+	return t
 }
 
 // redactLink strips userinfo (credentials/tokens), the query string, and the
