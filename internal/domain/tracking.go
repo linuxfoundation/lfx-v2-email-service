@@ -52,6 +52,12 @@ func IsGroupHandle(s string) bool {
 // failure is deterministic for that record, so callers must not retry it.
 var ErrRecordTooLarge = errors.New("record exceeds maximum value size")
 
+// ErrRecordUnencodable is returned by TrackingStore.UpdateRecord when the
+// updated record cannot be serialised (for example, a time.Time outside the
+// JSON-representable years 0..9999). The failure is deterministic for that
+// update, so callers must not retry it.
+var ErrRecordUnencodable = errors.New("record cannot be encoded")
+
 // ErrGroupFull is returned by TrackingStore.GroupExists and AppendToGroup when
 // the group already holds api.MaxGroupEmails emails. No further emails can be
 // added to that group; the caller must start a new group.
@@ -86,7 +92,8 @@ var ErrGroupFull = errors.New("group is full")
 // UpdateRecord fetches the record for emailID, applies fn in place, and writes it
 // back with optimistic concurrency (one retry on conflict). If the record does not
 // exist it returns nil without calling fn — expected for late-arriving SES events.
-// If the updated record is too large to store it returns ErrRecordTooLarge.
+// If the updated record is too large to store it returns ErrRecordTooLarge; if it
+// cannot be serialised it returns ErrRecordUnencodable.
 type TrackingStore interface {
 	WriteRecord(ctx context.Context, emailID string, r api.EmailRecipientRecord) error
 	AppendToGroup(ctx context.Context, groupID, emailID string) error

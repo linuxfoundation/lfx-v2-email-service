@@ -821,6 +821,25 @@ func TestStore_UpdateRecord(t *testing.T) {
 		})
 	}
 
+	// A record fn leaves unserialisable fails the same way on every attempt, so
+	// it must be reported as domain.ErrRecordUnencodable without a write.
+	t.Run("unserialisable record is not written", func(t *testing.T) {
+		t.Parallel()
+		store, recipientsKV, _ := newStore(t)
+
+		r := api.EmailRecipientRecord{EmailID: "e-bad", GroupID: "g1", SentAt: time.Now().UTC()}
+		require.NoError(t, store.WriteRecord(context.Background(), "e-bad", r))
+
+		err := store.UpdateRecord(context.Background(), "e-bad", func(rec *api.EmailRecipientRecord) {
+			bad := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+			rec.FailedAt = &bad
+		})
+		require.ErrorIs(t, err, domain.ErrRecordUnencodable)
+		assert.NotErrorIs(t, err, domain.ErrRecordTooLarge)
+		// Put, then a single Get: no Update.
+		assert.Len(t, recipientsKV.calledKeys(), 2)
+	})
+
 	t.Run("other update errors are retried and not classified as too large", func(t *testing.T) {
 		t.Parallel()
 		store, recipientsKV, _ := newStore(t)
