@@ -5,8 +5,11 @@ package mocks
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
+	"time"
 
 	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/api"
@@ -183,11 +186,32 @@ func (m *TrackingStore) UpdateRecord(_ context.Context, emailID string, fn func(
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	r, ok := m.records[emailID]
+	stored, ok := m.records[emailID]
 	if !ok {
 		return nil // no record — drop silently, same as kv.Store
 	}
+	// Like kv.Store, fn works on a private copy, so a failed update leaves the
+	// stored record unchanged.
+	r := cloneRecord(stored)
 	fn(&r)
+	// Like kv.Store, a record that cannot be serialised is not stored.
+	if _, err := json.Marshal(r); err != nil {
+		return fmt.Errorf("marshal updated recipient record: %w: %w", domain.ErrRecordUnencodable, err)
+	}
 	m.records[emailID] = r
 	return nil
+}
+
+// cloneRecord returns a copy of r that shares no slices or pointers with it.
+func cloneRecord(r api.EmailRecipientRecord) api.EmailRecipientRecord {
+	r.OpenedAtList = slices.Clone(r.OpenedAtList)
+	r.ClickEventIDs = slices.Clone(r.ClickEventIDs)
+	r.ClickList = slices.Clone(r.ClickList)
+	for _, p := range []**time.Time{&r.DeliveredAt, &r.LastOpenedAt, &r.LastClickedAt, &r.FailedAt} {
+		if *p != nil {
+			t := **p
+			*p = &t
+		}
+	}
+	return r
 }

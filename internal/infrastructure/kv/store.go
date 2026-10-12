@@ -380,7 +380,8 @@ func (s *Store) ScanGroupRecords(ctx context.Context, groupID string, offset, li
 // does not exist, fn is not called and nil is returned (late-arriving SES events
 // for unknown email IDs are expected and non-retryable). A write rejected because
 // the value exceeds the bucket's size limit is not retried and is returned
-// wrapping domain.ErrRecordTooLarge.
+// wrapping domain.ErrRecordTooLarge; a record fn leaves unserialisable is not
+// written and is returned wrapping domain.ErrRecordUnencodable.
 func (s *Store) UpdateRecord(ctx context.Context, emailID string, fn func(*api.EmailRecipientRecord)) error {
 	if err := checkKey(emailID); err != nil {
 		return err
@@ -404,7 +405,7 @@ func (s *Store) UpdateRecord(ctx context.Context, emailID string, fn func(*api.E
 
 		updated, err := json.Marshal(record)
 		if err != nil {
-			return fmt.Errorf("marshal updated recipient record: %w", err)
+			return fmt.Errorf("marshal updated recipient record: %w: %w", domain.ErrRecordUnencodable, err)
 		}
 
 		_, lastUpdateErr = s.recipientsKV.Update(emailID, updated, entry.Revision())

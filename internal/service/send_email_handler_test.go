@@ -59,6 +59,52 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 		wantReplyTo         string // assert sender received this ReplyTo value
 	}{
 		{
+			name:        "oversized to — rejected before sending",
+			payload:     api.SendEmailRequest{To: strings.Repeat("a", 1<<20) + "@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"},
+			wantErrResp: true,
+			wantErrMsg:  "to address too long",
+		},
+		{
+			name:        "to local part over 64 octets — rejected before sending",
+			payload:     api.SendEmailRequest{To: strings.Repeat("a", 65) + "@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"},
+			wantErrResp: true,
+			wantErrMsg:  "to address too long",
+		},
+		{
+			name:        "oversized from at allowed domain — rejected before sending",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", From: strings.Repeat("a", 1<<20) + "@lfx.linuxfoundation.org"},
+			wantErrResp: true,
+			wantErrMsg:  "from address too long",
+		},
+		{
+			name:        "oversized reply_to — rejected before sending",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", ReplyTo: strings.Repeat("a", 65) + "@linuxfoundation.org"},
+			wantErrResp: true,
+			wantErrMsg:  "reply_to address too long",
+		},
+		{
+			name:        "oversized subject — rejected before sending",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: strings.Repeat("s", api.MaxSubjectLength+1), HTML: "<p>Hi</p>", Text: "Hi"},
+			wantErrResp: true,
+			wantErrMsg:  "subject too long",
+		},
+		{
+			name:        "oversized from_display_name — rejected before sending",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi", FromDisplayName: strings.Repeat("n", api.MaxFromDisplayNameLength+1)},
+			wantErrResp: true,
+			wantErrMsg:  "from_display_name too long",
+		},
+		{
+			name:                "fields at their limits — sent",
+			payload:             api.SendEmailRequest{To: strings.Repeat("a", 64) + "@example.com", Subject: strings.Repeat("s", api.MaxSubjectLength), HTML: "<p>Hi</p>", Text: "Hi", FromDisplayName: strings.Repeat("n", api.MaxFromDisplayNameLength)},
+			emailID:             "email-uuid-limits",
+			groupID:             "group-uuid-limits",
+			wantSent:            true,
+			wantEmailID:         "email-uuid-limits",
+			wantGroupID:         "group-uuid-limits",
+			wantFromDisplayName: strings.Repeat("n", api.MaxFromDisplayNameLength),
+		},
+		{
 			name:        "happy path — ids returned",
 			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"},
 			emailID:     "email-uuid-1",
