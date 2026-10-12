@@ -60,6 +60,13 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 		return
 	}
 
+	// Bound header and envelope fields before any of them is parsed or sent.
+	if reason := oversizedFieldReason(req); reason != "" {
+		slog.WarnContext(ctx, "send email request field exceeds length limit", "reason", reason)
+		replyError(ctx, respond, reason)
+		return
+	}
+
 	if req.GroupID != "" && !isValidGroupID(req.GroupID) {
 		slog.WarnContext(ctx, "send email request has invalid group_id format")
 		replyError(ctx, respond, "invalid group_id")
@@ -198,6 +205,25 @@ func (h *SendEmailHandler) writeTrackingRecords(ctx context.Context, emailID, gr
 		slog.WarnContext(ctx, "failed to write recipient record to store", logging.ErrKey, err, "email_id", emailID)
 	}
 	return true
+}
+
+// oversizedFieldReason returns the error reply for the first header or envelope
+// field of req that exceeds its length limit in pkg/api, or "" when all are
+// within bounds.
+func oversizedFieldReason(req api.SendEmailRequest) string {
+	switch {
+	case domain.CheckAddressLength(req.To) != nil:
+		return "to address too long"
+	case domain.CheckAddressLength(req.From) != nil:
+		return "from address too long"
+	case domain.CheckAddressLength(req.ReplyTo) != nil:
+		return "reply_to address too long"
+	case len(req.Subject) > api.MaxSubjectLength:
+		return "subject too long"
+	case len(req.FromDisplayName) > api.MaxFromDisplayNameLength:
+		return "from_display_name too long"
+	}
+	return ""
 }
 
 // domainFromAddress extracts the host part of an RFC 5322 address for logging.

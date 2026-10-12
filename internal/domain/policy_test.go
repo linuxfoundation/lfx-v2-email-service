@@ -5,6 +5,7 @@ package domain_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -272,6 +273,37 @@ func TestAddressPolicy_ValidateReplyTo(t *testing.T) {
 				assert.True(t, errors.Is(err, tc.wantErr), "want err %v, got %v", tc.wantErr, err)
 			} else {
 				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestCheckAddressLength(t *testing.T) {
+	t.Parallel()
+
+	local64 := strings.Repeat("a", 64)
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr error
+	}{
+		{name: "empty", raw: ""},
+		{name: "ordinary address", raw: "jane@example.com"},
+		{name: "display name form", raw: "Jane Doe <jane@example.com>"},
+		{name: "local part at limit", raw: local64 + "@example.com"},
+		{name: "local part over limit", raw: local64 + "a@example.com", wantErr: domain.ErrAddressTooLong},
+		{name: "address at limit", raw: "a@" + strings.Repeat("b", 252)},
+		{name: "address over limit", raw: "a@" + strings.Repeat("b", 253), wantErr: domain.ErrAddressTooLong},
+		{name: "raw field over limit, checked before parsing", raw: strings.Repeat("x", 513), wantErr: domain.ErrAddressTooLong},
+		{name: "1 MiB local part", raw: strings.Repeat("a", 1<<20) + "@example.com", wantErr: domain.ErrAddressTooLong},
+		{name: "unparseable within bound is left to other validation", raw: "not an address"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.ErrorIs(t, domain.CheckAddressLength(tt.raw), tt.wantErr)
+			if tt.wantErr == nil {
+				assert.NoError(t, domain.CheckAddressLength(tt.raw))
 			}
 		})
 	}
