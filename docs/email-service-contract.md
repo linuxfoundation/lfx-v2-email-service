@@ -104,8 +104,11 @@ domain is not in the list (subdomain suffix matching applies) is **not** an erro
 skips the send and replies with an empty `SendEmailResponse` (`email_id` and `group_id` both
 empty), so callers do not treat expected non-prod filtering as a delivery failure. No tracking
 records are written for skipped sends. While the allowlist is active, a recipient that cannot be
-parsed, or whose address (not display name) contains non-ASCII characters, is skipped the same
-way. When the variable is empty (production default), all recipient domains are permitted.
+parsed, whose address (not display name) contains non-ASCII characters, or whose local part would
+require RFC 5322 quoting (only dot-atom local parts are accepted), is skipped the same way. When
+the variable is empty (production default), all recipient domains are permitted. Independently of
+the allowlist, a recipient whose local part would require quoting is never written into the SMTP
+envelope: delivery fails with `email delivery failed`.
 
 ## Get Email Status
 

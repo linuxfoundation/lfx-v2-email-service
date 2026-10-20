@@ -704,6 +704,26 @@ func TestSendEmailHandler_RecipientDomainAllowlist(t *testing.T) {
 		assert.Empty(t, r.EmailID)
 	})
 
+	for _, to := range []string{
+		`"victim@gmail.com>"@linuxfoundation.org`,
+		`"victim@gmail.com> ORCPT=rfc822;x"@linuxfoundation.org`,
+		`"x@evil.com"@linuxfoundation.org`,
+	} {
+		t.Run("quoted local part on an allowed domain is skipped: "+to, func(t *testing.T) {
+			t.Parallel()
+			h, s := makeHandler([]string{"linuxfoundation.org"})
+			req := validReqLFX
+			req.To = to
+			var resp []byte
+			data, _ := json.Marshal(req)
+			h.HandleData(context.Background(), data, respond(&resp))
+			assert.False(t, s.called, "sender must not be called for a quoted recipient local part")
+			var r api.SendEmailResponse
+			require.NoError(t, json.Unmarshal(resp, &r))
+			assert.Empty(t, r.EmailID)
+		})
+	}
+
 	t.Run("multiple allowed domains — match on second entry", func(t *testing.T) {
 		t.Parallel()
 		h, s := makeHandler([]string{"example.org", "linuxfoundation.org"})

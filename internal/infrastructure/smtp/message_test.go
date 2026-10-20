@@ -247,6 +247,10 @@ func TestSendMessage_MalformedAddressDoesNotEchoInput(t *testing.T) {
 		{"trailing text", "a@x.com trailing-secret", "noreply@example.org", errInvalidRecipientAddress, "trailing-secret"},
 		{"invalid utf-8", "\"a\xffsecret\"@x.com", "noreply@example.org", errInvalidRecipientAddress, "secret"},
 		{"malformed from", "a@x.com", "noreply@example.org, c@z.com", errInvalidFromAddress, "c@z.com"},
+		{"quoted recipient ending in >", `"victim@gmail.com>"@allowed.example`, "noreply@example.org", errInvalidRecipientAddress, "victim"},
+		{"quoted recipient with DSN parameter", `"victim@gmail.com> ORCPT=rfc822;x"@allowed.example`, "noreply@example.org", errInvalidRecipientAddress, "victim"},
+		{"quoted recipient containing @", `"x@evil.com"@allowed.example`, "noreply@example.org", errInvalidRecipientAddress, "evil.com"},
+		{"quoted from containing @", "a@x.com", `"x@evil.com"@example.org`, errInvalidFromAddress, "evil.com"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
