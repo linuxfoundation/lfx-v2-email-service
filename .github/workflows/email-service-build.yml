@@ -32,6 +32,9 @@ jobs:
       - name: Test
         run: go test ./... -v
 
+      - name: Test CI scripts
+        run: python3 -m unittest discover -v -s .github/scripts -p 'test_*.py'
+
       - name: Lint
         # golangci-lint-action downloads a pre-built binary which is compiled
         # against an older Go and cannot read Go 1.26 export data. Install
