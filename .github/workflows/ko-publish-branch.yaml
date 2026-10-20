@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
+      contents: read
       packages: write
     env:
       IMAGE: ghcr.io/linuxfoundation/lfx-v2-email-service/email-service
@@ -81,97 +82,16 @@ jobs:
           path: ${{ runner.temp }}/oci-layout
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
+      # Check out this workflow's own (default-branch) commit for the
+      # validator; nothing from the pull request is checked out.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        if: ${{ steps.container_tag.outputs.sha_tag != '' }}
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
       - name: Validate image layout
         if: ${{ steps.container_tag.outputs.sha_tag != '' }}
-        run: |
-          set -euo pipefail
-          python3 -I - "$RUNNER_TEMP/oci-layout" <<'PY'
-          # Accept only ko's shape: one multi-arch index of plain image
-          # manifests. A manifest with a subject would make the push also
-          # write a sha256-<digest> referrers tag outside pr-<number>-.
-          # crane decodes these documents with Go's encoding/json, which
-          # matches field names case-insensitively (with Unicode folding)
-          # and lets the last duplicate win, so only unambiguous JSON with
-          # ASCII, canonically spelled, non-duplicate keys is accepted.
-          import hashlib, json, os, re, sys
-
-          layout = sys.argv[1]
-          INDEX_TYPES = {
-              "application/vnd.oci.image.index.v1+json",
-              "application/vnd.docker.distribution.manifest.list.v2+json",
-          }
-          IMAGE_TYPES = {
-              "application/vnd.oci.image.manifest.v1+json",
-              "application/vnd.docker.distribution.manifest.v2+json",
-          }
-          CANONICAL = {k.lower(): k for k in (
-              "schemaVersion", "mediaType", "artifactType", "config", "layers",
-              "manifests", "subject", "annotations", "digest", "size", "urls",
-              "data", "platform", "architecture", "os", "os.version",
-              "os.features", "variant", "features",
-          )}
-
-          def fail(msg):
-              print(f"::error::{msg}")
-              sys.exit(1)
-
-          def unambiguous(items):
-              seen = set()
-              for key, _ in items:
-                  if not key.isascii():
-                      fail("Image layout JSON has a non-ASCII key")
-                  folded = key.lower()
-                  if folded in seen:
-                      fail("Image layout JSON has duplicate keys")
-                  seen.add(folded)
-                  if CANONICAL.get(folded, key) != key:
-                      fail("Image layout JSON has a noncanonical key")
-              return dict(items)
-
-          def load(path):
-              with open(path, "rb") as f:
-                  data = f.read()
-              try:
-                  doc = json.loads(data.decode("utf-8"), object_pairs_hook=unambiguous)
-              except ValueError:
-                  fail("Image layout JSON is not valid")
-              if not isinstance(doc, dict):
-                  fail("Image layout JSON is not an object")
-              return data, doc
-
-          def blob(desc):
-              digest = desc.get("digest") if isinstance(desc, dict) else None
-              if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-                  fail("Unexpected digest in image layout")
-              path = os.path.join(layout, "blobs", "sha256", digest[len("sha256:"):])
-              if os.path.islink(path) or not os.path.isfile(path):
-                  fail("Image layout blob is missing")
-              data, doc = load(path)
-              if hashlib.sha256(data).hexdigest() != digest[len("sha256:"):]:
-                  fail("Image layout blob does not match its digest")
-              return doc
-
-          def plain(doc, types):
-              return ("subject" not in doc and "artifactType" not in doc
-                      and doc.get("mediaType") in types)
-
-          _, top = load(os.path.join(layout, "index.json"))
-          entries = top.get("manifests")
-          if (not isinstance(entries, list) or len(entries) != 1
-                  or not isinstance(entries[0], dict)
-                  or entries[0].get("mediaType") not in INDEX_TYPES):
-              fail("Image layout must hold exactly one image index")
-          index = blob(entries[0])
-          children = index.get("manifests")
-          if (not plain(index, INDEX_TYPES) or not isinstance(children, list)
-                  or not children):
-              fail("Image index has an unexpected shape")
-          for child in children:
-              if not isinstance(child, dict) or child.get("mediaType") not in IMAGE_TYPES:
-                  fail("Image index has an unexpected shape")
-              if not plain(blob(child), IMAGE_TYPES):
-                  fail("Image manifest has an unexpected shape")
-          PY
+        run: python3 -I .github/scripts/validate_oci_layout.py "$RUNNER_TEMP/oci-layout"
       - uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
         if: ${{ steps.container_tag.outputs.sha_tag != '' }}
         with:
