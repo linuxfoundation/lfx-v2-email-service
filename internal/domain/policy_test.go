@@ -94,6 +94,33 @@ func TestAddressPolicy_IsRecipientAllowed(t *testing.T) {
 			wantAllowed:      true,
 		},
 		{
+			name:             "quoted local part ending in > on an allowed domain is rejected",
+			recipientDomains: []string{"allowed.example"},
+			to:               `"victim@gmail.com>"@allowed.example`,
+			wantAllowed:      false,
+			wantErr:          domain.ErrAddressMalformed,
+		},
+		{
+			name:             "quoted local part carrying a DSN parameter on an allowed domain is rejected",
+			recipientDomains: []string{"allowed.example"},
+			to:               `"victim@gmail.com> ORCPT=rfc822;x"@allowed.example`,
+			wantAllowed:      false,
+			wantErr:          domain.ErrAddressMalformed,
+		},
+		{
+			name:             "quoted local part containing @ on an allowed domain is rejected",
+			recipientDomains: []string{"allowed.example"},
+			to:               `"x@evil.com"@allowed.example`,
+			wantAllowed:      false,
+			wantErr:          domain.ErrAddressMalformed,
+		},
+		{
+			name:             "redundant quotes around a dot-atom local part are accepted",
+			recipientDomains: []string{"allowed.example"},
+			to:               `"alice"@allowed.example`,
+			wantAllowed:      true,
+		},
+		{
 			name:             "non-ASCII domain is permitted when the allowlist is empty",
 			recipientDomains: nil,
 			to:               "x@lİnuxfoundation.org",

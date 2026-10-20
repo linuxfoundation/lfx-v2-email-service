@@ -139,14 +139,14 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 		return errInvalidFromAddress
 	}
 	fromAddr, err := mail.ParseAddress(from)
-	if err != nil {
+	if err != nil || needsQuoting(fromAddr.Address) {
 		return errInvalidFromAddress
 	}
 	if domain.CheckAddressLength(to) != nil {
 		return errInvalidRecipientAddress
 	}
 	toAddr, err := mail.ParseAddress(to)
-	if err != nil {
+	if err != nil || needsQuoting(toAddr.Address) {
 		return errInvalidRecipientAddress
 	}
 
@@ -162,6 +162,16 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 	case r := <-ch:
 		return redactAddressesInError(r.err, toAddr.Address, fromAddr.Address)
 	}
+}
+
+// needsQuoting reports whether addr's local part is not a plain dot-atom.
+// mail.ParseAddress unquotes local parts, and net/smtp writes the unquoted
+// mailbox into MAIL FROM / RCPT TO, so a quoted local part containing "@",
+// ">", "<", "," or whitespace would change the path the server interprets.
+// mail.Address.String re-quotes such a local part, so a mismatch with the
+// bare "<addr>" form means the address cannot be used in the envelope.
+func needsQuoting(addr string) bool {
+	return (&mail.Address{Address: addr}).String() != "<"+addr+">"
 }
 
 // redactAddressesInError replaces case-insensitive occurrences of each addr in

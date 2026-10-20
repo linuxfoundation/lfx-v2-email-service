@@ -86,32 +86,21 @@ func NewAddressPolicy(fromDomains, replyToDomains, recipientDomains []string) Ad
 // IsRecipientAllowed reports whether to is a permitted recipient.
 // Returns (true, nil) when AllowedRecipientDomains is empty (permit all) or when
 // the address domain matches an allowed entry.
-// Returns (false, ErrAddressMalformed) when to cannot be parsed as an address or
-// the address (not the display name) contains non-ASCII characters.
+// Returns (false, ErrAddressMalformed) when to cannot be parsed as an address,
+// the address (not the display name) contains non-ASCII characters, or its local
+// part would require quoting (see strictAddressDomain).
 // Returns (false, nil) when the domain is absent from the allowlist.
 func (p AddressPolicy) IsRecipientAllowed(to string) (bool, error) {
 	if len(p.AllowedRecipientDomains) == 0 {
 		return true, nil
 	}
-	addr, err := mail.ParseAddress(to)
+	// A quoted local part such as `"victim@gmail.com>"@allowed.example` would
+	// otherwise be checked against allowed.example while the unquoted mailbox
+	// written into RCPT TO names a different forward-path.
+	domain, err := strictAddressDomain(to)
 	if err != nil {
-		return false, ErrAddressMalformed
+		return false, err
 	}
-	// strings.ToLower folds some non-ASCII runes to ASCII (e.g. U+0130 to "i"),
-	// so a non-ASCII domain could match the allowlist while the unfolded domain
-	// is used as the SMTP envelope recipient. Reject them, as strictAddressDomain does.
-	for i := 0; i < len(addr.Address); i++ {
-		if addr.Address[i] >= utf8.RuneSelf {
-			return false, ErrAddressMalformed
-		}
-	}
-	// Use LastIndex so RFC-valid quoted local parts containing "@" don't
-	// cause mis-classification; the domain is always after the final "@".
-	at := strings.LastIndex(addr.Address, "@")
-	if at < 0 {
-		return false, ErrAddressMalformed
-	}
-	domain := strings.ToLower(addr.Address[at+1:])
 	for _, d := range p.AllowedRecipientDomains {
 		if domain == d || strings.HasSuffix(domain, "."+d) {
 			return true, nil
