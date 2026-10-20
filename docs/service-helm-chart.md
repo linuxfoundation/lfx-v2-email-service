@@ -34,7 +34,7 @@ Image tags in `ghcr.io/linuxfoundation/lfx-v2-email-service/email-service`:
 | --- | --- |
 | `vX.Y.Z`, `X.Y.Z`, `latest` | `ko-build-tag.yaml` on a release tag push. |
 | `development`, `<commit sha>` | `ko-build-main.yaml` on a push to `main` (a manual dispatch publishes only when run on `main`). |
-| `pr-<number>-<branch>`, `pr-<number>-<head sha>` | `ko-publish-branch.yaml` after `ko-build-branch.yaml` succeeds on a same-repo pull request. The PR build runs without registry write access and hands an OCI layout to `ko-publish-branch.yaml`, a `workflow_run` workflow that always runs the default-branch definition and computes the `pr-<number>-` tags from the event, so editing the PR build workflow cannot change which tags the image is pushed to. PR images carry no SBOM attestation. |
+| `pr-<number>-<branch>`, `pr-<number>-<head sha>` | `ko-publish-branch.yaml` after `ko-build-branch.yaml` succeeds on a same-repo pull request. The PR build runs without registry write access and hands an OCI layout to `ko-publish-branch.yaml`, a `workflow_run` workflow that always runs the default-branch definition and computes the `pr-<number>-` tags from the event, so editing the PR build workflow cannot change which tags the image is pushed to. PR images carry no SBOM attestation, and a failed publish shows in the `Publish Container Branch Image` workflow runs rather than as a PR check. |
 
 ## Runtime Values
 

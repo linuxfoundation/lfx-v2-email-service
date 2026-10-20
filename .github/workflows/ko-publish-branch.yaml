@@ -81,6 +81,53 @@ jobs:
           path: ${{ runner.temp }}/oci-layout
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
+      - name: Validate image layout
+        if: ${{ steps.container_tag.outputs.sha_tag != '' }}
+        run: |
+          set -euo pipefail
+          # Accept only ko's shape: one multi-arch index of plain image
+          # manifests. A manifest with a subject would make the push also
+          # write a sha256-<digest> referrers tag outside pr-<number>-.
+          layout="$RUNNER_TEMP/oci-layout"
+          blob() {
+            local digest=$1 path
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Unexpected digest in image layout" >&2
+              return 1
+            fi
+            path="$layout/blobs/sha256/${digest#sha256:}"
+            if [[ ! -f "$path" || -L "$path" ]] \
+              || [[ "$(sha256sum < "$path" | cut -d' ' -f1)" != "${digest#sha256:}" ]]; then
+              echo "::error::Image layout blob is missing or does not match its digest" >&2
+              return 1
+            fi
+            printf '%s' "$path"
+          }
+          index_types='["application/vnd.oci.image.index.v1+json","application/vnd.docker.distribution.manifest.list.v2+json"]'
+          image_types='["application/vnd.oci.image.manifest.v1+json","application/vnd.docker.distribution.manifest.v2+json"]'
+          if ! jq -e --argjson t "$index_types" \
+            '(.manifests | length) == 1 and (.manifests[0].mediaType as $m | $t | index($m))' \
+            "$layout/index.json" > /dev/null; then
+            echo "::error::Image layout must hold exactly one image index"
+            exit 1
+          fi
+          index=$(blob "$(jq -r '.manifests[0].digest' "$layout/index.json")")
+          if ! jq -e --argjson t "$image_types" \
+            '(has("subject") | not) and (has("artifactType") | not)
+             and (.manifests | length) > 0
+             and all(.manifests[]; .mediaType as $m | $t | index($m))' \
+            "$index" > /dev/null; then
+            echo "::error::Image index has an unexpected shape"
+            exit 1
+          fi
+          while IFS= read -r digest; do
+            manifest=$(blob "$digest")
+            if ! jq -e '(has("subject") | not) and (has("artifactType") | not)' \
+              "$manifest" > /dev/null; then
+              echo "::error::Image manifest has an unexpected shape"
+              exit 1
+            fi
+          done < <(jq -r '.manifests[].digest' "$index")
       - uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
         if: ${{ steps.container_tag.outputs.sha_tag != '' }}
         with:

@@ -25,6 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5
         with:
+          # Build the PR head so the pr-<number>-<head sha> tag names the
+          # commit the image was built from.
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -35,7 +38,7 @@ jobs:
       - name: Build email-service for PR
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          GIT_COMMIT: ${{ github.sha }}
+          GIT_COMMIT: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           VERSION="pr-${PR_NUMBER}"
