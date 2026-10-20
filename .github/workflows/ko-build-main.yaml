@@ -15,6 +15,9 @@ permissions:
 jobs:
   publish:
     name: Publish Main
+    # workflow_dispatch can be run on any branch; only reviewed main commits
+    # may publish the development and <sha> tags.
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -31,6 +34,7 @@ jobs:
         env:
           VERSION: development
           GIT_COMMIT: ${{ github.sha }}
+          SHA_TAG: ${{ github.sha }}
         run: |
           BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
           export BUILD_TIME
@@ -39,6 +43,6 @@ jobs:
           ko build github.com/linuxfoundation/lfx-v2-email-service/cmd/email-service \
             -B \
             --platform linux/amd64,linux/arm64 \
-            -t ${{ github.sha }} \
+            -t "$SHA_TAG" \
             -t development \
             --sbom spdx

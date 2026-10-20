@@ -1,0 +1,96 @@
+# Copyright The Linux Foundation and each contributor to LFX.
+# SPDX-License-Identifier: MIT
+---
+name: Publish Container Branch Image
+
+# workflow_run always executes this file as it exists on the default branch,
+# so a pull request cannot change the tags pushed here. The image layout is
+# built by ko-build-branch.yaml from unreviewed code and is treated as data
+# only: it is pushed, never executed, and only under pr-<number>- tags.
+"on":
+  workflow_run:
+    workflows:
+      - Publish Container Branch
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish PR Container
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/linuxfoundation/lfx-v2-email-service/email-service
+    steps:
+      - name: Prepare container tag
+        id: container_tag
+        run: |
+          set -euo pipefail
+          # PR images share the image repository with the main and release
+          # pipelines, so the tag is namespaced under pr-<number>- and can
+          # never equal a tag those pipelines own (latest, development, semver).
+          # The PR number and head SHA come from the workflow_run event, which
+          # GitHub populates; nothing here is read from the build run's output.
+          head_sha=$(jq -r '.workflow_run.head_sha' "$GITHUB_EVENT_PATH")
+          if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Unexpected workflow_run head SHA"
+            exit 1
+          fi
+          prs=$(jq -c --arg sha "$head_sha" '[.workflow_run.pull_requests[]
+            | select(.base.ref == "main" and .head.sha == $sha
+                     and .head.repo.id == .base.repo.id)]' "$GITHUB_EVENT_PATH")
+          if [[ "$(jq 'length' <<<"$prs")" -ne 1 ]]; then
+            echo "::warning::No open same-repo pull request into main at ${head_sha}; skipping publish"
+            exit 0
+          fi
+          PR_NUMBER=$(jq -r '.[0].number' <<<"$prs")
+          HEAD_REF=$(jq -r '.[0].head.ref' <<<"$prs")
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Unexpected pull request number"
+            exit 1
+          fi
+          branch_tag=$(printf '%s' "${HEAD_REF//[!_0-9a-zA-Z]/-}" | cut -c -$((124 - ${#PR_NUMBER})))
+          container_tag="pr-${PR_NUMBER}-${branch_tag}"
+          if [[ ! "$container_tag" =~ ^pr-[0-9]+-[-_0-9a-zA-Z]*$ ]]; then
+            echo "::error::Computed PR container tag is outside the pr-<number>- namespace"
+            exit 1
+          fi
+          sha_tag="pr-${PR_NUMBER}-${head_sha}"
+          if [[ ! "$sha_tag" =~ ^pr-[0-9]+-[0-9a-f]{40}$ ]]; then
+            echo "::error::Computed PR SHA tag is outside the pr-<number>- namespace"
+            exit 1
+          fi
+          {
+            echo "tag=$container_tag"
+            echo "sha_tag=$sha_tag"
+          } >> "$GITHUB_OUTPUT"
+      - name: Download image layout
+        if: ${{ steps.container_tag.outputs.sha_tag != '' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: oci-layout
+          path: ${{ runner.temp }}/oci-layout
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
+        if: ${{ steps.container_tag.outputs.sha_tag != '' }}
+        with:
+          version: v0.22.1
+      - name: Publish email-service for PR
+        if: ${{ steps.container_tag.outputs.sha_tag != '' }}
+        env:
+          CONTAINER_TAG: ${{ steps.container_tag.outputs.tag }}
+          SHA_TAG: ${{ steps.container_tag.outputs.sha_tag }}
+        run: |
+          set -euo pipefail
+          crane push "$RUNNER_TEMP/oci-layout" "${IMAGE}:${SHA_TAG}"
+          crane tag "${IMAGE}:${SHA_TAG}" "$CONTAINER_TAG"
