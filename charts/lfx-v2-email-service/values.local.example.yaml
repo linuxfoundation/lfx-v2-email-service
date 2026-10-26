@@ -76,8 +76,8 @@ app:
     smtpFrom: "noreply@lfx.linuxfoundation.org"
     # smtpSecretName is the name of the Kubernetes Secret containing SMTP credentials.
     # The Secret must have keys: smtp-username, smtp-password.
-    # When externalSecretsOperator.enabled=true the ESO creates this secret automatically
-    # as {{ .Chart.Name }}. Override only if managing the secret out-of-band.
+    # The Secret is provisioned by an ExternalSecret declared in lfx-v2-argocd
+    # (custom-resources/lfx-v2-email-service). Override only if managing the secret out-of-band.
     smtpSecretName: ""
 
   # extraEnv allows injecting additional environment variables into the container.
@@ -140,32 +140,3 @@ serviceAccount:
   # Use this to attach an EKS IRSA role ARN, e.g.:
   #   eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<role-name>
   annotations: {}
-
-# global is the configuration shared across chart dependencies
-global:
-  # awsRegion is the AWS region used by the External Secrets Operator SecretStore.
-  # Must be set when externalSecretsOperator.enabled=true.
-  awsRegion: ""
-
-# externalSecretsOperator is the configuration for the External Secrets Operator integration.
-# When enabled, an ExternalSecret and SecretStore are created to pull SMTP credentials
-# from AWS Secrets Manager into the Kubernetes Secret referenced by app.smtpSecretName.
-# Requires global.awsRegion to be set and an IRSA-annotated ServiceAccount.
-externalSecretsOperator:
-  # enabled determines whether ESO resources (ExternalSecret + SecretStore) are created
-  enabled: false
-  externalSecret:
-    # refreshInterval is how often the ExternalSecret polls AWS Secrets Manager for updates
-    refreshInterval: "10m"
-    # data is the list of secret key mappings from AWS Secrets Manager to the Kubernetes Secret
-    data:
-      - secretKey: smtp-username
-        remoteRef:
-          # key is the AWS Secrets Manager secret path
-          key: /cloudops/ses-managed/email-service
-          # property is the JSON key within the secret value
-          property: smtp_username
-      - secretKey: smtp-password
-        remoteRef:
-          key: /cloudops/ses-managed/email-service
-          property: smtp_password

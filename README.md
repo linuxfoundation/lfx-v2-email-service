@@ -602,7 +602,6 @@ lfx-v2-email-service/
     ├── values.yaml
     └── templates/
         ├── deployment.yaml
-        ├── externalsecret.yaml   # ESO secret for SES config set + SQS queue URL
         ├── nats-kv-buckets.yaml  # Declares email-recipients and email-group-index KV buckets
         └── service.yaml
 ```
