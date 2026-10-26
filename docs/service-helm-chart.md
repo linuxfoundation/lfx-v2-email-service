@@ -70,7 +70,7 @@ If the operator CRDs are not installed or the buckets are absent, the service st
 
 The chart does not create Secrets. Two ExternalSecrets declared in `lfx-v2-argocd` (`custom-resources/lfx-v2-email-service/`) provision them:
 
-- The SMTP credential Secret named by `app.smtpSecretName`.
+- The SMTP credential Secret named by `app.email.smtpSecretName`.
 - The SES engagement config Secret named by `app.ses.engagementSecretName`.
 
 Secret values and AWS source resources are not owned here. This chart owns only the Kubernetes references and target key names.
