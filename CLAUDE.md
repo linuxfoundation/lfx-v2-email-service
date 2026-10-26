@@ -443,11 +443,15 @@ The full Go conventions for this repo live in `.claude/skills/email-service-dev/
 `charts/lfx-v2-email-service/` ships with the Go code in the same PR.
 
 SMTP credentials are **not** in the chart. They come from a Kubernetes Secret
-created out-of-band (terraform / sealed-secrets), referenced in the Deployment
+provisioned by an ExternalSecret declared in `lfx-v2-argocd`
+(`custom-resources/lfx-v2-email-service/`), referenced in the Deployment
 via `valueFrom.secretKeyRef`. The Secret name is configurable via
 `values.yaml` → `app.email.smtpSecretName` (default: `lfx-v2-email-service`; set to `""` to skip credential injection for local dev).
 
 The Secret must have keys `smtp-username` and `smtp-password`.
+
+The SES engagement config Secret (`app.ses.engagementSecretName`, keys
+`ses_configuration_set_name` and `sqs_queue_url`) is provisioned the same way.
 
 ## License
 

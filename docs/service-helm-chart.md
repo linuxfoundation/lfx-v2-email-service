@@ -18,8 +18,6 @@ Important templates:
 | `deployment.yaml` | Container image, env vars, probes, resources. |
 | `service.yaml` | ClusterIP service for health probes. |
 | `nats-kv-buckets.yaml` | JetStream KV buckets for tracking records and group indexes. |
-| `externalsecret.yaml` | Optional ExternalSecret resources for SMTP and SES engagement config. |
-| `secretstore.yaml` | SecretStore used by External Secrets Operator. |
 | `serviceaccount.yaml` | ServiceAccount, including optional IRSA annotations. |
 
 This service does not expose a public HTTP API through Gateway/Heimdall. Its business surface is NATS request/reply. The HTTP server only serves `/livez` and `/readyz`.
@@ -70,10 +68,10 @@ If the operator CRDs are not installed or the buckets are absent, the service st
 
 ## Secrets
 
-When `externalSecretsOperator.enabled=true` and `global.awsRegion` is set:
+The chart does not create Secrets. Two ExternalSecrets declared in `lfx-v2-argocd` (`custom-resources/lfx-v2-email-service/`) provision them:
 
-- One ExternalSecret may create the SMTP credential secret named after the chart.
-- A second ExternalSecret creates `app.ses.engagementSecretName` for SES engagement config.
+- The SMTP credential Secret named by `app.email.smtpSecretName`.
+- The SES engagement config Secret named by `app.ses.engagementSecretName`.
 
 Secret values and AWS source resources are not owned here. This chart owns only the Kubernetes references and target key names.
 
