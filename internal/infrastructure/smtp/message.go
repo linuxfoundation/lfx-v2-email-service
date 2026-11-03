@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"sort"
 	"strings"
 	"time"
@@ -160,8 +161,26 @@ func sendMessage(ctx context.Context, to, from, message string, cfg Config) erro
 	case <-ctx.Done():
 		return ctx.Err()
 	case r := <-ch:
-		return redactAddressesInError(r.err, toAddr.Address, fromAddr.Address)
+		err := redactAddressesInError(r.err, toAddr.Address, fromAddr.Address)
+		if isThrottled(r.err) {
+			return fmt.Errorf("%w: %v", domain.ErrSendThrottled, err)
+		}
+		return err
 	}
+}
+
+// Amazon SES replies "454 Throttling failure: Maximum sending rate exceeded."
+// or "454 Throttling failure: Daily message quota exceeded." when it throttles
+// a send. Other 454 replies (e.g. "Temporary service failure") are not throttling.
+const (
+	throttleReplyCode   = 454
+	throttleReplyPrefix = "Throttling failure"
+)
+
+// isThrottled reports whether err is the mail server's throttling reply.
+func isThrottled(err error) bool {
+	var reply *textproto.Error
+	return errors.As(err, &reply) && reply.Code == throttleReplyCode && strings.HasPrefix(reply.Msg, throttleReplyPrefix)
 }
 
 // needsQuoting reports whether addr's local part is not a plain dot-atom.

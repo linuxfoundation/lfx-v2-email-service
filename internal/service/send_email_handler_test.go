@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -163,6 +164,15 @@ func TestSendEmailHandler_HandleData(t *testing.T) {
 			senderErr:   errors.New("smtp down"),
 			wantSent:    true,
 			wantErrResp: true,
+			wantErrMsg:  "email delivery failed",
+		},
+		{
+			name:        "sender throttled",
+			payload:     api.SendEmailRequest{To: "alice@example.com", Subject: "Hello", HTML: "<p>Hi</p>", Text: "Hi"},
+			senderErr:   fmt.Errorf("smtp send: %w", domain.ErrSendThrottled),
+			wantSent:    true,
+			wantErrResp: true,
+			wantErrMsg:  "sending throttled",
 		},
 		{
 			name:        "missing html and text",

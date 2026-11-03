@@ -84,6 +84,7 @@ that other parties can read. Keep your own mapping if you need a human-readable 
 | `invalid group_id` | `group_id` is not a group handle issued by this service |
 | `group is full` | The group already holds 10,000 emails (`api.MaxGroupEmails`); nothing was sent. Start a new group by omitting `group_id` |
 | `internal error` | The group handle could not be checked against the tracking store |
+| `sending throttled` | Amazon SES throttled the send (sending rate or daily quota exceeded); nothing was sent. Retry with backoff |
 | `email delivery failed` | Service accepted the request but SMTP delivery failed |
 
 **Examples (NATS CLI):**

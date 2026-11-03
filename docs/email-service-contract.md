@@ -93,6 +93,7 @@ Error reply: `api.SendEmailErrorResponse`
 | `invalid group_id` | `group_id` is not a group handle issued by this service: wrong format, or no group index entry exists for it. |
 | `group is full` | The group already holds `api.MaxGroupEmails` (10,000) emails. No mail is sent; start a new group by omitting `group_id`. |
 | `internal error` | The group index could not be read to verify `group_id`. No mail is sent. |
+| `sending throttled` | Amazon SES throttled the send: the account's maximum sending rate or daily quota was exceeded. No mail was sent. Retry with backoff. |
 | `email delivery failed` | SMTP delivery failed after the service accepted the request. |
 
 When `EMAIL_ENABLED=false`, the service uses `NoOpSender`: the request still succeeds but returns an empty `SendEmailResponse` (`email_id` and `group_id` both empty). No SMTP message is sent and no tracking records are written.

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/linuxfoundation/lfx-v2-email-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-email-service/pkg/redaction"
 )
 
@@ -278,38 +279,9 @@ func TestSendMessage_ServerReplyRedactsEnvelopeAddresses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			ln, err := net.Listen("tcp", "127.0.0.1:0")
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = ln.Close() })
-
 			// Minimal SMTP server that rejects one command with a reply echoing an envelope address.
-			go func() {
-				conn, err := ln.Accept()
-				if err != nil {
-					return
-				}
-				defer func() { _ = conn.Close() }()
-				tp := textproto.NewConn(conn)
-				_ = tp.PrintfLine("220 test ready")
-				for {
-					line, err := tp.ReadLine()
-					if err != nil {
-						return
-					}
-					switch cmd := strings.ToUpper(strings.SplitN(line, " ", 2)[0]); cmd {
-					case tt.rejectAt:
-						_ = tp.PrintfLine("%s", tt.reply)
-					case "EHLO", "HELO", "MAIL", "RCPT":
-						_ = tp.PrintfLine("250 ok")
-					default:
-						_ = tp.PrintfLine("221 bye")
-						return
-					}
-				}
-			}()
-
-			port := ln.Addr().(*net.TCPAddr).Port
-			err = sendMessage(context.Background(), "Jane Doe <jane.doe@example.com>", "events@example.org", "msg", Config{Host: "127.0.0.1", Port: port})
+			port := startRejectingSMTPServer(t, tt.rejectAt, tt.reply)
+			err := sendMessage(context.Background(), "Jane Doe <jane.doe@example.com>", "events@example.org", "msg", Config{Host: "127.0.0.1", Port: port})
 			require.Error(t, err)
 			// textproto.Error formatting differs across Go versions (newer releases quote the text).
 			assert.Contains(t, err.Error(), "554")
@@ -317,6 +289,73 @@ func TestSendMessage_ServerReplyRedactsEnvelopeAddresses(t *testing.T) {
 			assert.NotContains(t, strings.ToLower(err.Error()), tt.leaked)
 		})
 	}
+}
+
+func TestSendMessage_ThrottlingReply(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		rejectAt      string
+		reply         string
+		wantThrottled bool
+	}{
+		{"sending rate exceeded", "MAIL", "454 Throttling failure: Maximum sending rate exceeded.", true},
+		{"daily quota exceeded", "RCPT", "454 Throttling failure: Daily message quota exceeded.", true},
+		{"throttled reply echoes recipient", "RCPT", "454 Throttling failure: Maximum sending rate exceeded for <Jane.Doe@Example.com>", true},
+		{"temporary service failure", "MAIL", "454 Temporary service failure", false},
+		{"message rejected", "MAIL", "554 Message rejected", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			port := startRejectingSMTPServer(t, tt.rejectAt, tt.reply)
+			err := sendMessage(context.Background(), "jane.doe@example.com", "events@example.org", "msg", Config{Host: "127.0.0.1", Port: port})
+			require.Error(t, err)
+			assert.Equal(t, tt.wantThrottled, errors.Is(err, domain.ErrSendThrottled))
+			assert.Contains(t, err.Error(), tt.reply[:3])
+			assert.NotContains(t, strings.ToLower(err.Error()), "jane.doe@example.com")
+		})
+	}
+}
+
+// startRejectingSMTPServer starts a minimal SMTP server that accepts one
+// connection, replies with reply to the rejectAt command and accepts the
+// commands before it. It returns the server's port.
+func startRejectingSMTPServer(t *testing.T, rejectAt, reply string) int {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		tp := textproto.NewConn(conn)
+		_ = tp.PrintfLine("220 test ready")
+		for {
+			line, err := tp.ReadLine()
+			if err != nil {
+				return
+			}
+			switch cmd := strings.ToUpper(strings.SplitN(line, " ", 2)[0]); cmd {
+			case rejectAt:
+				_ = tp.PrintfLine("%s", reply)
+			case "EHLO", "HELO", "MAIL", "RCPT":
+				_ = tp.PrintfLine("250 ok")
+			default:
+				_ = tp.PrintfLine("221 bye")
+				return
+			}
+		}
+	}()
+
+	return ln.Addr().(*net.TCPAddr).Port
 }
 
 func TestRedactAddressesInError(t *testing.T) {
