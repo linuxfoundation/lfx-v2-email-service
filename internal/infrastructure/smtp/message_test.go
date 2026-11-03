@@ -302,6 +302,7 @@ func TestSendMessage_ThrottlingReply(t *testing.T) {
 	}{
 		{"sending rate exceeded", "MAIL", "454 Throttling failure: Maximum sending rate exceeded.", true},
 		{"daily quota exceeded", "RCPT", "454 Throttling failure: Daily message quota exceeded.", true},
+		{"throttled reply echoes recipient", "RCPT", "454 Throttling failure: Maximum sending rate exceeded for <Jane.Doe@Example.com>", true},
 		{"temporary service failure", "MAIL", "454 Temporary service failure", false},
 		{"message rejected", "MAIL", "554 Message rejected", false},
 	}
@@ -314,6 +315,7 @@ func TestSendMessage_ThrottlingReply(t *testing.T) {
 			require.Error(t, err)
 			assert.Equal(t, tt.wantThrottled, errors.Is(err, domain.ErrSendThrottled))
 			assert.Contains(t, err.Error(), tt.reply[:3])
+			assert.NotContains(t, strings.ToLower(err.Error()), "jane.doe@example.com")
 		})
 	}
 }
