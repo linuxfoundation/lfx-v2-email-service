@@ -152,6 +152,10 @@ func (h *SendEmailHandler) HandleData(ctx context.Context, data []byte, respond 
 	emailID, groupID, err := h.sender.Send(ctx, req)
 	if err != nil {
 		slog.ErrorContext(ctx, "email send failed", logging.ErrKey, err)
+		if errors.Is(err, domain.ErrSendThrottled) {
+			replyError(ctx, respond, "sending throttled")
+			return
+		}
 		replyError(ctx, respond, "email delivery failed")
 		return
 	}
