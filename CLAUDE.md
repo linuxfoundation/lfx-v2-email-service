@@ -35,7 +35,7 @@ empty = permit all). Set in non-prod environments to prevent test notifications 
 real users' personal addresses. Subdomain suffix matching applies; a blocked recipient returns an
 empty success response so callers don't log expected non-prod filtering as a delivery failure.
 
-**Technologies:** Go 1.24, NATS (`nats.go`), `net/smtp`, Kubernetes/Helm
+**Technologies:** Go 1.26.11, NATS (`nats.go`), `net/smtp`, Kubernetes/Helm
 
 ## Repo Role
 
@@ -123,7 +123,7 @@ These are injected at link time only. Do not add runtime version-detection logic
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.26.11+
 - `nats` CLI (`brew install nats-io/nats-tools/nats`)
 - Docker (for local NATS + Mailpit)
 

@@ -15,8 +15,3 @@ ignore:
   # go.opentelemetry.io/otel/exporters/otlp/otlptrace* and otel/sdk — Low.
   # Same root cause as GHSA-w34q-cm8f-9c5x above.
   - vulnerability: GHSA-8wmf-6v46-5gfg
-
-  # golang.org/x/crypto — openpgp package marked unmaintained (severity Unknown).
-  # This service does not import or call any openpgp API; the finding is a
-  # transitive false-positive from x/crypto being a dependency of other packages.
-  - vulnerability: GO-2026-5932
