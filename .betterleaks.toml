@@ -1,16 +1,16 @@
 # Copyright The Linux Foundation and each contributor to LFX.
 # SPDX-License-Identifier: MIT
 
-title = "gitleaks config"
+title = "betterleaks config"
 
 [extend]
-# useDefault will extend the base configuration with the default gitleaks config
+# useDefault will extend the base configuration with the default betterleaks config
 useDefault = true
 
 [allowlist]
     description = "Allowlisted files"
     paths = [
-        '''(.*?)gitleaks\.toml$'''
+        '''(.*?)(gitleaks|betterleaks)\.toml$'''
     ]
     # False positive in documentation: the cross-repo contract list in CLAUDE.md
     # (and similar docs) names the `lfx-v2-argocd` repo as the owner of deployed
@@ -18,7 +18,7 @@ useDefault = true
     # `wiring: ` + backticked-token shape trips the default `generic-api-key`
     # rule even though it is plain prose referencing a public repo name, not a
     # credential. Scoped to the literal doc line so secret scanning stays active.
-    # regexTarget = "line" is required because gitleaks matches allowlist regexes
+    # regexTarget = "line" is required because betterleaks matches allowlist regexes
     # against the detected secret by default, not the source line.
     regexTarget = "line"
     regexes = [

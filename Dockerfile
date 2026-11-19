@@ -22,7 +22,8 @@ FROM cgr.dev/chainguard/static:latest
 
 EXPOSE 8080
 
-USER nonroot
+# Numeric UID of the Chainguard nonroot user.
+USER 65532
 
 COPY --from=builder /go/bin/email-service /cmd/email-service
 

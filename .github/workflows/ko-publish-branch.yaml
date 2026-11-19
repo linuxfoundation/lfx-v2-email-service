@@ -7,8 +7,9 @@ name: Publish Container Branch Image
 # so a pull request cannot change the tags pushed here. The image layout is
 # built by ko-build-branch.yaml from unreviewed code and is treated as data
 # only: it is pushed, never executed, and only under pr-<number>- tags.
+# zizmor flags every workflow_run trigger; the guards above make this one safe.
 "on":
-  workflow_run:
+  workflow_run:  # zizmor: ignore[dangerous-triggers]
     workflows:
       - Publish Container Branch
     types:
@@ -84,7 +85,7 @@ jobs:
           github-token: ${{ github.token }}
       # Check out this workflow's own (default-branch) commit for the
       # validator; nothing from the pull request is checked out.
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         if: ${{ steps.container_tag.outputs.sha_tag != '' }}
         with:
           persist-credentials: false
