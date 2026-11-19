@@ -26,8 +26,8 @@ DISABLE_ERRORS_LINTERS:
   - REPOSITORY_CHECKOV
   - REPOSITORY_DEVSKIM
 YAML_YAMLLINT_CONFIG_FILE: .yamllint
-# zizmor's "artipacked" audit needs the GitHub API (to verify
-# SHA-pinned action tags), which requires GITHUB_TOKEN.
+# zizmor's online audits (ref-version-mismatch, impostor-commit,
+# known-vulnerable-actions) call the GitHub API and need GITHUB_TOKEN.
 ACTION_ZIZMOR_UNSECURED_ENV_VARIABLES:
   - GITHUB_TOKEN
 SPELL_CSPELL_ANALYZE_FILE_NAMES: false
