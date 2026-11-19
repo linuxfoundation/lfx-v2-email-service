@@ -514,7 +514,7 @@ func main() {
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.27.4+
 - [NATS Server](https://docs.nats.io/running-a-nats-service/introduction/installation) or Docker
 - Local Kubernetes cluster with [OrbStack](https://orbstack.dev/) or similar
 - Mailpit running in the cluster for local SMTP capture (UI at `http://localhost:8025`)
